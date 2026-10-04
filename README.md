@@ -31,4 +31,4 @@ the CLI wrapper and `SKILL.md`.
 
 ## Status
 
-Private. Distributed only via findsafeskills.com as a teaser — not independently publicized.
+Public. Linked from findsafeskills.com's `/safety` page.
