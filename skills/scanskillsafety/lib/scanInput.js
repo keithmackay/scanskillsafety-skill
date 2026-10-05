@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.prepareScanInput = prepareScanInput;
+exports.normalizedLineAt = normalizedLineAt;
 exports.lineAtOffset = lineAtOffset;
 exports.excerptFor = excerptFor;
 exports.findingAt = findingAt;
@@ -10,21 +11,40 @@ exports.capFindings = capFindings;
 // ABOUTME: a redacted excerpt, and that cap how many findings one category can report.
 const normalizeForScan_1 = require("./normalizeForScan");
 const secretPatterns_1 = require("./secretPatterns");
+function findFencedLines(rawLines) {
+    const fenced = new Set();
+    let inFence = false;
+    rawLines.forEach((line, i) => {
+        if (/^\s*(```|~~~)/.test(line)) {
+            fenced.add(i + 1);
+            inFence = !inFence;
+        }
+        else if (inFence) {
+            fenced.add(i + 1);
+        }
+    });
+    return fenced;
+}
 const INVISIBLE_CHARS = /[\u200B\u200C\u200D\u2060\uFEFF\u202A-\u202E\u2066-\u2069]|[\u{E0000}-\u{E007F}]/gu;
 const EXCERPT_MAX = 160;
 const MAX_FINDINGS_PER_CATEGORY = 20;
 function prepareScanInput(raw) {
-    return { raw, rawLines: raw.split(/\r?\n/), normalized: (0, normalizeForScan_1.normalizeForScan)(raw) };
+    const rawLines = raw.split(/\r?\n/);
+    return { raw, rawLines, normalized: (0, normalizeForScan_1.normalizeForScan)(raw), fencedLines: findFencedLines(rawLines) };
 }
-// Line number for an offset into normalized.text.
-function lineAtOffset(input, offset) {
-    let line = input.normalized.lines[0]?.line ?? 1;
+// The normalized line containing an offset into normalized.text.
+function normalizedLineAt(input, offset) {
+    let found = input.normalized.lines[0];
     for (const l of input.normalized.lines) {
         if (l.start > offset)
             break;
-        line = l.line;
+        found = l;
     }
-    return line;
+    return found;
+}
+// Line number for an offset into normalized.text.
+function lineAtOffset(input, offset) {
+    return normalizedLineAt(input, offset)?.line ?? 1;
 }
 function excerptFor(input, line) {
     const text = (input.rawLines[line - 1] ?? "").replace(INVISIBLE_CHARS, "").trim();

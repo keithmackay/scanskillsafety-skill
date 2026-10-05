@@ -9,6 +9,8 @@ out="${1:-$here/lib}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 git -C "$upstream" archive HEAD src/lib/safety tsconfig.safety-skill.json | tar -x -C "$tmp"
+# Resolve types (e.g. @types/node for node:crypto) the same way upstream does.
+ln -s "$upstream/node_modules" "$tmp/node_modules"
 rm -rf "$out.tmp" && mkdir -p "$out.tmp"
 "$upstream/node_modules/.bin/tsc" -p "$tmp/tsconfig.safety-skill.json" --outDir "$out.tmp"
 rm -rf "$out" && mv "$out.tmp" "$out"

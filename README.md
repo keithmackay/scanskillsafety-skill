@@ -176,11 +176,11 @@ Rating: RED
 
 | Check | Severity |
 |---|---|
-| **Instruction-override / prompt-injection phrasing**: "ignore previous instructions," "you are now an unrestricted assistant," and similar text aimed at the agent reading the skill | critical |
+| **Instruction-override / prompt-injection phrasing**: "ignore previous instructions," "you are now an unrestricted assistant," and similar text aimed at the agent reading the skill. When the phrase is quoted, in code, in a table, or named as an example, it's a warning instead (security tools quote it constantly); inside a hidden HTML comment or invisible text it stays critical | critical / warning |
 | **Exfiltration-looking URLs**: known data-relay/testing domains (webhook.site, requestbin, pipedream, …); a raw IP-literal URL fetched with curl/wget on the same line is a warning | critical / warning |
 | **Obfuscation**: long base64-looking blobs (outside URLs), invisible/zero-width characters, Cyrillic look-alikes inside Latin words, bidirectional-override characters. Text hidden in invisible Unicode Tag characters is decoded and scanned by every other check, and a run of 10 or more is critical | warning / critical |
 | **Hardcoded secrets**: AWS, GitHub (classic, fine-grained, OAuth, app), Slack, Anthropic, OpenAI, and Google key shapes, PEM private-key headers. Shown redacted. Placeholders like `ghp_XXXX…` or `xoxp-your-user-token` are ignored | critical |
-| **Destructive shell command patterns**: `rm -rf` of the whole root or home directory, running a downloaded script straight in a shell (`curl \| sh`, `\| sudo bash`, `bash <(curl …)`, PowerShell `iex`), `chmod 777 /`, a fork bomb. Common in legitimate installers too, so these are prompts to look, not proof of malice. Decoding base64 straight into a shell is critical | warning / critical |
+| **Destructive shell command patterns**: `rm -rf` of the whole root or home directory, running a downloaded script straight in a shell (`curl \| sh`, `\| sudo bash`, `bash <(curl …)`, PowerShell `iex`), `chmod 777 /`, a fork bomb. Common in legitimate installers too, so these are prompts to look, not proof of malice. Official installers for well-known toolchains (uv, Docker, nvm, Bun, Rust, …) aren't flagged. Decoding base64 straight into a shell is critical | warning / critical |
 | **Fake prerequisites and suspicious downloads**: a password-protected archive to download and run, commands staged on a paste site (rentry, pastebin, glot.io, …), or a one-line download + `chmod +x` + run. This is the shape of the ClawHavoc campaign's fake installers | warning |
 | **Reverse shells**: `bash -i >& /dev/tcp/…`, `nc -e`, `mkfifo` + `nc`, `socat exec:`, Python socket + subprocess | critical |
 | **Instructions hidden from the user**: "do not tell the user", "without informing the user", and `<IMPORTANT>`/`<system>`-style blocks used to smuggle instructions into MCP tool descriptions | warning |
@@ -197,7 +197,7 @@ Read this before trusting a green result.
 
 ### Why this repo rates itself red
 
-Run it on its own folder and you get RED: this README's examples quote the exact phrases and domains the scanner looks for. The output points at those lines (`README.md:NN … "ignore previous instructions"`) so you can see they're documentation. That's the intended way to read any finding: check the excerpt in context. The scanner can't tell quoting from instructing, and it doesn't try to, because attackers can quote too.
+Run it on its own folder and you get RED: this README's examples quote the exact phrases and domains the scanner looks for. Quoted phrases drop to warnings, but the example output's unquoted lines and the webhook.site domains still count as critical. The output points at each line (`README.md:NN …`) so you can see they're documentation. That's the intended way to read any finding: check the excerpt in context. The scanner can't tell quoting from instructing, and it doesn't try to, because attackers can quote too.
 
 ## Network and privacy
 

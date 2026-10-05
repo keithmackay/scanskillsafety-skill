@@ -11,4 +11,6 @@ exports.SAFETY_CATEGORY_LABEL = {
     "remote-access": "Reverse shell",
     concealment: "Instructions hidden from the user",
     "github-tos-block": "Blocked by GitHub",
+    "malicious-package": "Published package reported as malicious",
+    "known-vulnerability": "Known vulnerability in the published package",
 };

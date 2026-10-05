@@ -10,13 +10,16 @@ const PASTE_SITES = [
     "termbin.com", "paste.ee", "dpaste.org", "dpaste.com", "controlc.com", "justpaste.it", "privatebin", "paste.rs", "0bin.net",
 ];
 const ARCHIVE = /\b(zip|rar|7z|archive|extract|unzip|unpack)\b|\.(zip|rar|7z)\b/;
-const ARCHIVE_PASSWORD = /\b(password|passphrase|pwd)\s*(:|=|\(|`|'|"|is\b)|\b(with|using|use)\s+(the\s+)?(pass|password|passphrase)\b/;
+// A password with an actual value ("password: infected", "extract with pass `openclaw`"), not a
+// parameter named password in API docs.
+const ARCHIVE_PASSWORD = /\b(password|passphrase|pwd)\s*(:|=|\bis\b)\s*[`'"]?(?!\(|string\b|str\b|optional\b)[^\s`'"]+|\b(with|using|use)\s+(the\s+)?(pass|password|passphrase)\s+[`'"]?[^\s`'"]+/;
 // Downloads a file, makes it executable, and runs that same path, all in one command line.
 const DOWNLOAD_CHMOD_RUN = /\b(curl|wget)\b.*&&\s*chmod\s+(\+x|u\+x|[0-7]?7[0-7]{2})\s+(\S+).*&&\s*(sudo\s+)?\3(\s|$)/;
 function scanSuspiciousDownload(input) {
     const findings = [];
     for (const { line, text } of input.normalized.lines) {
-        const pasteSite = PASTE_SITES.find((domain) => text.includes(domain));
+        // Only as a link (https://rentry.co/…, rentry.co/abc), not a paste site named in a list.
+        const pasteSite = PASTE_SITES.find((domain) => new RegExp(`(//|\\bwww\\.)${domain.replace(/\./g, "\\.")}|\\b${domain.replace(/\./g, "\\.")}/`).test(text));
         if (pasteSite) {
             findings.push((0, scanInput_1.findingAt)(input, line, {
                 severity: "warning",

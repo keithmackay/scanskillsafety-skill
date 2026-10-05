@@ -20,8 +20,16 @@ All notable changes to this project are documented here. The format follows
 - `npm run sync:port` and a test that keep the Codex/Gemini/Antigravity copy under `skills/scanskillsafety/` identical to the root scanner.
 - `CHANGELOG.md`, `CONTRIBUTING.md`, `.gitignore`.
 
+### Changed
+
+- Scanner version `2026-10-05.3`, tuned on 2,048 real manifests and READMEs (8 false reds → 0, yellows 5.7% → 3.6%):
+  - Instruction-override phrasing that is quoted, in code, in a table, or named as an example is a warning instead of critical.
+  - "Developer Mode enabled" only counts in an instruction form ("you are now in developer mode").
+  - Official installers for well-known toolchains (uv, Docker, nvm, Bun, Rust, …) are no longer flagged.
+
 ### Fixed
 
+- Paste sites named in plain text, `password` parameters in API docs, `<secret>` placeholders, wallet addresses and hashes, emoji joiners, and "do not tell the user they are rate-limited" no longer produce findings.
 - Documentation placeholder tokens (`ghp_XXXX…`, `xoxp-your-user-token`, `AKIA…EXAMPLE`) are no longer reported as hardcoded secrets.
 - Base64 blobs inside any `scheme://` URL (such as `cursor://` deeplinks) are no longer reported as obfuscation.
 - README: the Antigravity install and the Compatibility table claimed the root `SKILL.md` works there as-is. It needs `${CLAUDE_SKILL_DIR}`, which Antigravity doesn't set, so Antigravity now installs the `skills/scanskillsafety/` copy.
