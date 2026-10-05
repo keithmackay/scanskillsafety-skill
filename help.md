@@ -15,6 +15,8 @@ WHAT IT DOES
       listed for you to review, never changes the rating)
     - fake prerequisites: password-protected archives,
       paste-site links, download + chmod +x + run           (warning)
+    - persistence (cron, launchd, systemd, startup, shell
+      profile) that fetches from the network              (warning)
     - reverse shells                                        (critical)
     - instructions hidden from the user                     (warning)
   Reports a red/yellow/green rating with the file, line, and quoted line

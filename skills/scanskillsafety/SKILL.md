@@ -63,6 +63,7 @@ Always name the files that were scanned and pass on any `notices` (for example, 
 - **Destructive shell command patterns** (warning; critical when base64 is decoded straight into a shell)
 - **Install scripts run straight from the network**: `curl | sh` and similar, running the target's own script, which this scan doesn't read. Reported with severity `info`, a note that never changes the rating
 - **Fake prerequisites and suspicious downloads**: password-protected archives, paste-site links, download + chmod +x + run (warning)
+- **Persistence that fetches from the network**: cron, launchd, systemd, startup entries or shell-profile lines that fetch code to run (warning)
 - **Reverse shells** (critical)
 - **Instructions hidden from the user**: "do not tell the user", `<IMPORTANT>`-style blocks (warning)
 

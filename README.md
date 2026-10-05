@@ -195,6 +195,7 @@ Rating: RED
 | **Hardcoded secrets**: AWS, GitHub (classic, fine-grained, OAuth, app), Slack, Anthropic, OpenAI, and Google key shapes, PEM private-key headers. Shown redacted. Placeholders like `ghp_XXXX…` or `xoxp-your-user-token` are ignored | critical |
 | **Destructive shell command patterns**: `rm -rf` of the whole root or home directory, `chmod 777 /`, a fork bomb. Setup and uninstall docs mention some of these, so they're prompts to look, not proof of malice. Decoding base64 straight into a shell is critical | warning / critical |
 | **Fake prerequisites and suspicious downloads**: a password-protected archive to download and run, commands staged on a paste site (rentry, pastebin, glot.io, …), or a one-line download + `chmod +x` + run. This is the shape of the ClawHavoc campaign's fake installers | warning |
+| **Persistence that fetches from the network**: a cron job, launchd agent, systemd unit, Windows scheduled task or Run key, or a shell-profile line that fetches something to run. Unlike a one-off install script, it keeps pulling code on its own | warning |
 | **Reverse shells**: `bash -i >& /dev/tcp/…`, `nc -e`, `mkfifo` + `nc`, `socat exec:`, Python socket + subprocess | critical |
 | **Instructions hidden from the user**: "do not tell the user", "without informing the user", and `<IMPORTANT>`/`<system>`-style blocks used to smuggle instructions into MCP tool descriptions | warning |
 

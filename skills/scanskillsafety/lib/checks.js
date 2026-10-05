@@ -94,6 +94,13 @@ exports.SAFETY_SCANNER_CHECKS = [
             "the ClawHavoc campaign's fake \"prerequisite\" installers.",
     },
     {
+        title: "Persistence that fetches from the network",
+        severity: "warning",
+        explanation: "A cron job, launchd agent, systemd unit, Windows scheduled task or Run key, or a shell-profile " +
+            "line that fetches something from the network: unlike a one-off install script, it keeps " +
+            "pulling and running code on its own. Loopback addresses (local health checks) don't count.",
+    },
+    {
         title: "Reverse shells",
         severity: "critical",
         explanation: "Commands that hand control of the machine to a remote host (bash /dev/tcp, nc -e, " +
