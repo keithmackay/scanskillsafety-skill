@@ -129,8 +129,8 @@ These paths are relative to the subpath when there is one. Local targets use a b
 | 8 | 1.5 | 17 | 1.2, 2.5, 3.1 |
 | 9 | 1.1, 1.3, 1.6 | | |
 
-## Open decisions for Keith
+## Decisions (Keith, 2026-10-04)
 
-1. License: MIT? (0.3)
-2. Exit-code scheme `0/1/2/3` (green/yellow/red/couldn't-scan): OK, or should yellow exit 0? (1.5)
-3. Rescanning findsafeskills.com listings after the scanner changes alters live badges. Do it right away in 2.6, or review the before/after diff first?
+1. License: **MIT**.
+2. Exit codes: **0 green / 1 yellow / 2 red / 3 could-not-scan**.
+3. Rescanning live badges is fine (site not launched yet). **Requirement:** the scan must return the full list of problems it found (category, severity, detail, and now file/line/excerpt) so the site can show that list when a yellow or red badge is clicked. Upstream `cb6b4b0` already renders type, severity and source on the badge. Phase 2.2 adds the new optional fields, and the site should show line/excerpt when they're present.
