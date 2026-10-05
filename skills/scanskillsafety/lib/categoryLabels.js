@@ -7,6 +7,7 @@ exports.SAFETY_CATEGORY_LABEL = {
     obfuscation: "Obfuscation",
     secrets: "Hardcoded secret",
     "destructive-commands": "Destructive shell command",
+    "install-script": "Runs an unscanned install script",
     "suspicious-download": "Fake prerequisite / suspicious download",
     "remote-access": "Reverse shell",
     concealment: "Instructions hidden from the user",

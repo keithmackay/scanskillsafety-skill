@@ -11,6 +11,7 @@ const exfiltration_1 = require("./patterns/exfiltration");
 const obfuscation_1 = require("./patterns/obfuscation");
 const secrets_1 = require("./patterns/secrets");
 const destructiveCommands_1 = require("./patterns/destructiveCommands");
+const installScript_1 = require("./patterns/installScript");
 const suspiciousDownload_1 = require("./patterns/suspiciousDownload");
 const remoteAccess_1 = require("./patterns/remoteAccess");
 const concealment_1 = require("./patterns/concealment");
@@ -26,6 +27,7 @@ function scanText(rawText) {
         ...(0, obfuscation_1.scanObfuscation)(input).filter((f) => f.line === undefined || !secretLines.has(f.line)),
         ...secrets,
         ...(0, destructiveCommands_1.scanDestructiveCommands)(input),
+        ...(0, installScript_1.scanInstallScript)(input),
         ...(0, suspiciousDownload_1.scanSuspiciousDownload)(input),
         ...(0, remoteAccess_1.scanRemoteAccess)(input),
         ...(0, concealment_1.scanConcealment)(input),

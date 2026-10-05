@@ -26,6 +26,7 @@ All notable changes to this project are documented here. The format follows
   - Instruction-override phrasing that is quoted, in code, in a table, or named as an example is a warning instead of critical.
   - "Developer Mode enabled" only counts in an instruction form ("you are now in developer mode").
   - Official installers for well-known toolchains (uv, Docker, nvm, Bun, Rust, …) are no longer flagged.
+- Scanner version `2026-10-05.4`: download-and-run installers (`curl | sh`, `| sudo bash`, `bash <(curl …)`, `iex`) are reported under their own **Install scripts run straight from the network** check (`install-script`) instead of destructive commands. Still a warning.
 
 ### Fixed
 

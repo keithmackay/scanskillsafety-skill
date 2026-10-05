@@ -70,12 +70,18 @@ exports.SAFETY_SCANNER_CHECKS = [
     {
         title: "Destructive shell command patterns",
         severity: "warning",
-        explanation: "rm -rf of the whole root or home directory, running a downloaded script straight in a " +
-            "shell (curl | sh, | sudo bash, bash <(curl …), PowerShell iex), chmod 777 /, a classic fork " +
-            "bomb — checked line by line and flagged as warnings, since legitimate install scripts " +
-            "genuinely use some of these. Official installers for widely used toolchains (uv, Docker, " +
-            "nvm, Bun, Rust, …) are not flagged; a skill's own install script is. Decoding base64 " +
-            "straight into a shell is critical: no honest install step needs to hide its commands.",
+        explanation: "rm -rf of the whole root or home directory, chmod 777 /, a classic fork bomb — checked " +
+            "line by line and flagged as warnings, since setup and uninstall docs genuinely mention some " +
+            "of these. Decoding base64 straight into a shell is critical: no honest install step needs " +
+            "to hide its commands.",
+    },
+    {
+        title: "Install scripts run straight from the network",
+        severity: "warning",
+        explanation: "The listing pipes a script from its own repo or host straight into a shell (curl | sh, " +
+            "| sudo bash, bash <(curl …), PowerShell iex). That script is code this scan does not read, " +
+            "so it is worth reviewing before you run it. Official installers for widely used toolchains " +
+            "(uv, Docker, nvm, Bun, Rust, …) are not flagged.",
     },
     {
         title: "Fake prerequisites and suspicious downloads",

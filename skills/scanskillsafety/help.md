@@ -9,8 +9,9 @@ WHAT IT DOES
     - obfuscation: base64 blobs, invisible chars, homoglyphs,
       bidi overrides (warning); hidden Unicode Tag text      (critical)
     - hardcoded secrets, shown redacted; placeholders ignored (critical)
-    - destructive shell commands, e.g. curl | sh            (warning)
+    - destructive shell commands, e.g. rm -rf ~             (warning)
       base64 decoded straight into a shell                  (critical)
+    - install scripts piped from the network, e.g. curl | sh (warning)
     - fake prerequisites: password-protected archives,
       paste-site links, download + chmod +x + run           (warning)
     - reverse shells                                        (critical)
