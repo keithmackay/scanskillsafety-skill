@@ -134,3 +134,21 @@ These paths are relative to the subpath when there is one. Local targets use a b
 1. License: **MIT**.
 2. Exit codes: **0 green / 1 yellow / 2 red / 3 could-not-scan**.
 3. Rescanning live badges is fine (site not launched yet). **Requirement:** the scan must return the full list of problems it found (category, severity, detail, and now file/line/excerpt) so the site can show that list when a yellow or red badge is clicked. Upstream `cb6b4b0` already renders type, severity and source on the badge. Phase 2.2 adds the new optional fields, and the site should show line/excerpt when they're present.
+
+## Completion (2026-10-05)
+
+All phases done. All 17 findings addressed.
+- **scanskillsafety-skill:** `9bacc9e` (CLI), `3a6a2df` (lib rebuild), then the docs/drift commit.
+- **findsafeskills:** `24c796d` (scanner), `81e7cf7` (false-positive fixes from the rescan, `backfill:safety-scan --all`).
+
+Deviations from the plan:
+- The full local rescan surfaced three false-positive groups. Each is now fixed with a regression test built from the real listing text:
+  - kebab-case `sk-…` names matched the OpenAI key pattern
+  - prose naming "curl|sh" matched the pipe-to-shell check
+  - IDs inside URLs were reported as base64 blobs
+- Loopback (127.x) IPs are no longer an exfiltration warning.
+- The lib-sync check (3.1) is a `node:test` in `test/drift.test.js`, not a shell script. It skips when `../findsafeskills` is absent.
+
+Local rescan: 2 red / 6 yellow / 300250 green → 3 / 23 / 300232. Production (Neon) was not rescanned; that happens on deploy.
+
+Not verified: task 5.3, invoking the skill from a fresh Claude Code session. `cli.test.js` covers running from another working directory, and `${CLAUDE_SKILL_DIR}` substitution in skill bodies was confirmed. The skill isn't installed at `~/.claude/skills/scanskillsafety` on this machine, so an end-to-end trigger wasn't run.

@@ -1,66 +1,48 @@
 ---
 name: scanskillsafety
-description: Statically scans a Claude Code skill, plugin, or MCP server's manifest/README text for known prompt-injection, exfiltration, obfuscation, secret, and destructive-command patterns before you install it. Runs fully offline against the target repo — never calls any third-party service. Use when the user is about to install a new skill/plugin/MCP server from an unfamiliar source, or asks to check/vet/scan something before installing it.
+description: Statically scans a Claude Code skill, plugin, or MCP server for known prompt-injection, exfiltration, obfuscation, secret, and destructive-command patterns before it's installed. Reads the target's own files (SKILL.md, plugin manifests, commands, agents, hooks, .mcp.json) from a GitHub/Gitea URL or a local path, fully offline apart from that host, and never runs the target's code. Use when the user is about to install a skill, plugin, or MCP server from an unfamiliar source, or asks to check, vet, audit, or scan one, or asks whether one is safe to install.
 ---
 
 # scanskillsafety
 
-A static, offline safety check for a skill/plugin/MCP server's own manifest and README text,
-before you install it. This runs entirely on your machine, against the target repo's own public
-content — it never contacts any third-party service, including findsafeskills itself (the same
-scanner also powers the safety badge on every findsafeskills listing, but this skill doesn't
-call out to it).
+## Run the scan
 
-## When to use this
+Run this with the user's target: a repo URL (including `…/tree/<branch>/<subdir>` links), a single-file URL, or a local path.
 
-Run it whenever you (or whoever you're helping) are about to install something from a source
-you haven't vetted — a skill, a Claude Code plugin marketplace, or an MCP server.
-
-## Usage
-
-```
-node cli.cjs <local-path-or-repo-url>
+```bash
+node "${CLAUDE_SKILL_DIR}/cli.cjs" --json <target>
 ```
 
-Examples:
+If `${CLAUDE_SKILL_DIR}` didn't resolve to a real path, use `~/.claude/skills/scanskillsafety/cli.cjs`. If neither path exists, tell the user the scanner isn't installed where expected and stop. Don't fall back to reading the target yourself and calling it safe.
 
-```
-node cli.cjs https://github.com/someone/some-skill
-node cli.cjs https://self-hosted-gitea.example.com/someone/some-plugin
-node cli.cjs ./some-local-skill-directory
-```
+The JSON has `rating`, `scannedFiles`, `findings` (each with `file`, `line`, `excerpt`, `severity`, `category`, `detail`), `notices`, `errors`, and `nonGoals`. The exit code matches the rating.
 
-It looks for `SKILL.md`, `README.md`, `.claude-plugin/marketplace.json`, and `plugin.json` —
-locally on disk, or fetched from the target's own host (GitHub's raw content API, or a
-self-hosted Gitea/Forgejo instance's REST API) — and runs the same pattern-matching scanner
-entirely offline from there.
+## Report the result
+
+Always name the files that were scanned and pass on any `notices` (for example, "GitHub API rate-limited; checked only well-known paths"). Then handle the exit code:
+
+**0 (green).** Say the scan found no known patterns in the listed files. Then summarize, in one or two lines, what the scan does not cover (below). Don't call the target "safe", "clean", or "vetted": the scan only rules out a fixed list of patterns.
+
+**1 (yellow).** List each finding as `file:line`, its detail, and the excerpt. Explain what each one means in plain terms (for example, a `curl … | bash` installer runs a remote script with your permissions). Suggest the user read those lines before installing.
+
+**2 (red).** List every finding the same way. For each critical finding, say whether the excerpt reads like an instruction aimed at an agent or like documentation quoting the pattern, such as a security tool listing what it detects. Recommend not installing until the user has read the flagged lines. The decision is theirs, so give your assessment and leave it with them.
+
+**3 (could not scan).** Say the scan did not run, quote the `errors`, and suggest a fix: check the URL, link the specific subdirectory, retry later if rate-limited, or clone the repo and scan the local path. Never present this as a clean result.
 
 ## What it checks
 
-- **Instruction-override / prompt-injection phrasing** ("ignore previous instructions," "you
-  are now an unrestricted assistant," etc.) — critical.
-- **Exfiltration-looking URLs** — known data-relay/testing domains (webhook.site, requestbin,
-  etc.), or a raw IP-literal URL paired with curl/wget — critical or warning respectively.
-- **Obfuscation** — long base64-looking blobs, a high density of invisible/zero-width
-  characters, or homoglyphs substituted into an otherwise-Latin word — warning.
-- **Hardcoded secrets** — AWS/GitHub/Slack token shapes, PEM private key headers — critical.
-- **Destructive shell command patterns** — `rm -rf /` or `~`, piping a downloaded script
-  straight into a shell, `chmod 777 /`, a classic fork bomb — warning (these also appear in some
-  legitimate install scripts, so they're flagged for a closer look, not treated as proof of
-  malice).
+- **Instruction-override / prompt-injection phrasing** (critical)
+- **Exfiltration-looking URLs** (critical for known relay domains; warning for curl/wget to a raw IP)
+- **Obfuscation**: base64-looking blobs, invisible characters, homoglyphs (warning)
+- **Hardcoded secrets**: shown redacted (critical)
+- **Destructive shell command patterns** (warning, because legitimate installers use some of them)
 
-## What it does NOT check — read this before trusting a "green" result
+## What it does NOT check
 
-- **Anything that requires actually running the code.** This never executes a skill's scripts
-  or starts an MCP server. A payload that only triggers at runtime is invisible to it.
-- **Rug pulls** — a tool's description changing after you already approved it. This only ever
-  looks at one snapshot of text, with no memory of what it looked like before.
-- **Contextual or workflow-dependent attacks** — anything that's only dangerous in combination
-  with another tool's output or the broader conversation.
-- **Novel phrasing** not covered by the pattern list above. A sufficiently creative or
-  newly-invented attack simply won't match until the list is updated.
-- **Anything outside the scanned text itself** — the publisher's identity, intent, or track
-  record; code in the repo beyond what the manifest/README contains or links to.
+Pass these limits on whenever the result could be read as reassurance:
 
-A "green" rating means *this specific, limited check found nothing* — not "this is safe."
-Treat it as one input, not a verdict.
+- **Anything that requires actually running the code.** Runtime-only payloads are invisible to it.
+- **Rug pulls (a tool's description changing after you already approved it).** It sees one snapshot.
+- **Contextual or workflow-dependent attacks**, such as text that is dangerous only combined with other tools' output.
+- **Novel phrasing not covered by the pattern list.**
+- **Anything outside the scanned text itself**: the publisher's identity, source code beyond the scanned files, and linked pages (links aren't followed).
