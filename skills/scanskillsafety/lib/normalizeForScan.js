@@ -3,6 +3,8 @@
 // ABOUTME: trick (zero-width characters splitting a phrase, homoglyphs, hard-wrapped line
 // ABOUTME: breaks) doesn't let a malicious phrase slip past a naive substring/regex match.
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.decodeTagChars = decodeTagChars;
+exports.revealTagText = revealTagText;
 exports.normalizeForScan = normalizeForScan;
 // Characters with no visible glyph that attackers insert mid-word/mid-phrase specifically to
 // break up a string a scanner would otherwise match verbatim.
@@ -19,6 +21,31 @@ const HOMOGLYPH_MAP = {
     "х": "x", // х CYRILLIC SMALL LETTER HA
     "і": "i", // і CYRILLIC SMALL LETTER BYELORUSSIAN-UKRAINIAN I
 };
+// Unicode Tag characters (U+E0000–E007F) render as nothing but map one-to-one onto ASCII, so they
+// can carry a whole hidden instruction. Valid emoji tag sequences (the England/Scotland/Wales flags:
+// 🏴 + tag letters + CANCEL TAG) are legitimate and are left out of counting and decoding.
+const FLAG_TAG_SEQUENCE = /\u{1F3F4}[\u{E0020}-\u{E007E}]{1,10}\u{E007F}/gu;
+const TAG_CHARS = /[\u{E0000}-\u{E007F}]+/gu;
+// Bidirectional embedding/override/isolate controls, which make text display in a different order
+// from how it's read. Plain LRM/RLM marks (U+200E/200F) are ordinary in RTL text and aren't included.
+const BIDI_CONTROLS = /[\u202A-\u202E\u2066-\u2069]/g;
+function decodeTagChars(run) {
+    return [...run].map((ch) => {
+        const cp = ch.codePointAt(0);
+        return cp >= 0xe0020 && cp <= 0xe007e ? String.fromCharCode(cp - 0xe0000) : "";
+    }).join("");
+}
+// Replaces each run of Tag characters (outside flag emoji) with its decoded ASCII, padded with
+// spaces so it reads as separate words. Returns the text and how many Tag characters it decoded.
+function revealTagText(input) {
+    let tagCharCount = 0;
+    const flagsMasked = input.replace(FLAG_TAG_SEQUENCE, "\u{1F3F4}");
+    const text = flagsMasked.replace(TAG_CHARS, (run) => {
+        tagCharCount += [...run].length;
+        return ` ${decodeTagChars(run)} `;
+    });
+    return { text, tagCharCount };
+}
 const HOMOGLYPH_CHAR = /[аеорсухі]/;
 const ASCII_LETTER = /[a-zA-Z]/;
 // Only counts/replaces a homoglyph when it appears in the same whitespace-delimited token as an
@@ -38,7 +65,9 @@ function normalizeToken(token) {
 }
 function normalizeForScan(input) {
     const invisibleCharCount = (input.match(INVISIBLE_CHARS) ?? []).length;
-    const stripped = input.replace(INVISIBLE_CHARS, "");
+    const bidiControlCount = (input.match(BIDI_CONTROLS) ?? []).length;
+    const revealed = revealTagText(input);
+    const stripped = revealed.text.replace(INVISIBLE_CHARS, "").replace(BIDI_CONTROLS, "");
     let homoglyphCount = 0;
     const lines = [];
     let offset = 0;
@@ -58,5 +87,5 @@ function normalizeForScan(input) {
         }
     });
     const text = lines.map((l) => l.text).join(" ");
-    return { text, lines, invisibleCharCount, homoglyphCount };
+    return { text, lines, invisibleCharCount, homoglyphCount, tagCharCount: revealed.tagCharCount, bidiControlCount };
 }

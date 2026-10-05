@@ -10,7 +10,7 @@ exports.capFindings = capFindings;
 // ABOUTME: a redacted excerpt, and that cap how many findings one category can report.
 const normalizeForScan_1 = require("./normalizeForScan");
 const secretPatterns_1 = require("./secretPatterns");
-const INVISIBLE_CHARS = /[​‌‍⁠﻿]/g;
+const INVISIBLE_CHARS = /[\u200B\u200C\u200D\u2060\uFEFF\u202A-\u202E\u2066-\u2069]|[\u{E0000}-\u{E007F}]/gu;
 const EXCERPT_MAX = 160;
 const MAX_FINDINGS_PER_CATEGORY = 20;
 function prepareScanInput(raw) {

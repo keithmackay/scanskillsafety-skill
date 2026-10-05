@@ -6,9 +6,15 @@ WHAT IT DOES
   .mcp.json, package.json/server.json) and pattern-matches them for:
     - instruction-override / prompt-injection phrasing      (critical)
     - exfiltration-looking URLs                             (critical/warning)
-    - obfuscation: base64 blobs, invisible chars, homoglyphs (warning)
-    - hardcoded secrets, shown redacted                     (critical)
-    - destructive shell command patterns                    (warning)
+    - obfuscation: base64 blobs, invisible chars, homoglyphs,
+      bidi overrides (warning); hidden Unicode Tag text      (critical)
+    - hardcoded secrets, shown redacted; placeholders ignored (critical)
+    - destructive shell commands, e.g. curl | sh            (warning)
+      base64 decoded straight into a shell                  (critical)
+    - fake prerequisites: password-protected archives,
+      paste-site links, download + chmod +x + run           (warning)
+    - reverse shells                                        (critical)
+    - instructions hidden from the user                     (warning)
   Reports a red/yellow/green rating with the file, line, and quoted line
   for every hit. Never runs the target's code. Contacts only the target's
   own host (for GitHub: api.github.com and raw.githubusercontent.com).

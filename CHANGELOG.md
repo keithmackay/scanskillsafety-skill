@@ -8,12 +8,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- New checks, built upstream in findsafeskills (scanner version `2026-10-05.2`):
+  - **Fake prerequisites and suspicious downloads**: password-protected archives, paste-site links, download + `chmod +x` + run (warning).
+  - **Reverse shells** (critical).
+  - **Instructions hidden from the user**: "do not tell the user" phrasing, `<IMPORTANT>`/`<system>` blocks (warning).
+  - Shell runners: `| sudo bash`, `bash <(curl …)`, PowerShell `iex` (warning); base64 decoded straight into a shell (critical).
+  - Unicode Tag characters are decoded and scanned by every rule; 10 or more is critical. Bidi override characters are a warning.
+- `npm run build:lib` rebuilds `lib/` from the scanner committed at findsafeskills `HEAD`, not its working tree.
+
 - `--help` flag and `help.md` for the skill, on every platform copy.
 - `npm run sync:port` and a test that keep the Codex/Gemini/Antigravity copy under `skills/scanskillsafety/` identical to the root scanner.
 - `CHANGELOG.md`, `CONTRIBUTING.md`, `.gitignore`.
 
 ### Fixed
 
+- Documentation placeholder tokens (`ghp_XXXX…`, `xoxp-your-user-token`, `AKIA…EXAMPLE`) are no longer reported as hardcoded secrets.
+- Base64 blobs inside any `scheme://` URL (such as `cursor://` deeplinks) are no longer reported as obfuscation.
 - README: the Antigravity install and the Compatibility table claimed the root `SKILL.md` works there as-is. It needs `${CLAUDE_SKILL_DIR}`, which Antigravity doesn't set, so Antigravity now installs the `skills/scanskillsafety/` copy.
 
 ## [1.0.0] - 2026-10-05

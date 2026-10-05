@@ -36,7 +36,7 @@ Tests use Node's built-in test runner. They build fixtures in a temp directory, 
 
 | Change | Where |
 |---|---|
-| Detection logic (patterns, normalization, severities) | `src/lib/safety/**` in the findsafeskills repo, with vitest tests there. Then run `npm run build:safety-skill` there, which writes `lib/` here. Don't edit `lib/` by hand. |
+| Detection logic (patterns, normalization, severities) | `src/lib/safety/**` in the findsafeskills repo, with vitest tests there. Commit it there, then run `npm run build:lib` here. Don't edit `lib/` by hand. |
 | CLI, file discovery, fetching, output | `cli.cjs` and `src/` here |
 | Agent instructions | `SKILL.md` (Claude Code) and `skills/scanskillsafety/SKILL.md` (Codex/Gemini/Antigravity). Keep them in step. |
 | Anything in `cli.cjs`, `src/`, `lib/`, `package.json`, `LICENSE`, `help.md` | Run `npm run sync:port` afterwards to copy it into `skills/scanskillsafety/`. A test fails if the copies differ. |

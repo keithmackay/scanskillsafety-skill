@@ -56,9 +56,12 @@ Always name the files that were scanned and pass on any `notices` (for example, 
 
 - **Instruction-override / prompt-injection phrasing** (critical)
 - **Exfiltration-looking URLs** (critical for known relay domains; warning for curl/wget to a raw IP)
-- **Obfuscation**: base64-looking blobs, invisible characters, homoglyphs (warning)
-- **Hardcoded secrets**: shown redacted (critical)
-- **Destructive shell command patterns** (warning, because legitimate installers use some of them)
+- **Obfuscation**: base64-looking blobs, invisible characters, homoglyphs, bidi overrides (warning); text hidden in Unicode Tag characters (critical, and the hidden text is shown in the finding)
+- **Hardcoded secrets**: shown redacted, placeholders ignored (critical)
+- **Destructive shell command patterns** (warning, because legitimate installers use some of them; critical when base64 is decoded straight into a shell)
+- **Fake prerequisites and suspicious downloads**: password-protected archives, paste-site links, download + chmod +x + run (warning)
+- **Reverse shells** (critical)
+- **Instructions hidden from the user**: "do not tell the user", `<IMPORTANT>`-style blocks (warning)
 
 ## What it does NOT check
 

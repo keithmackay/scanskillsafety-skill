@@ -22,7 +22,9 @@ exports.SAFETY_SCANNER_NON_GOALS = [
     {
         title: "Novel phrasing not covered by the pattern list",
         explanation: "Detection here is pattern-matching against known phrasings/signatures (instruction " +
-            "overrides, known exfiltration domains, secret formats, destructive shell patterns). A " +
+            "overrides, known exfiltration domains, secret formats, shell and download patterns, " +
+            "concealment phrasing). Paraphrased jailbreaks, exfiltration to destinations not on the " +
+            "list, and instructions to read sensitive files are not yet covered. A " +
             "sufficiently creative or newly-invented attack simply won't match anything on the list " +
             "until the list is updated.",
     },

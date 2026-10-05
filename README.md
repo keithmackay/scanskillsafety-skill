@@ -178,9 +178,12 @@ Rating: RED
 |---|---|
 | **Instruction-override / prompt-injection phrasing**: "ignore previous instructions," "you are now an unrestricted assistant," and similar text aimed at the agent reading the skill | critical |
 | **Exfiltration-looking URLs**: known data-relay/testing domains (webhook.site, requestbin, pipedream, …); a raw IP-literal URL fetched with curl/wget on the same line is a warning | critical / warning |
-| **Obfuscation**: long base64-looking blobs (outside URLs), many invisible/zero-width characters, or Cyrillic look-alikes inside Latin words | warning |
-| **Hardcoded secrets**: AWS, GitHub (classic, fine-grained, OAuth, app), Slack, Anthropic, OpenAI, and Google key shapes, PEM private-key headers. Shown redacted | critical |
-| **Destructive shell command patterns**: `rm -rf` of the whole root or home directory, piping a downloaded script into a shell, `chmod 777 /`, a fork bomb. Common in legitimate installers too, so these are prompts to look, not proof of malice | warning |
+| **Obfuscation**: long base64-looking blobs (outside URLs), invisible/zero-width characters, Cyrillic look-alikes inside Latin words, bidirectional-override characters. Text hidden in invisible Unicode Tag characters is decoded and scanned by every other check, and a run of 10 or more is critical | warning / critical |
+| **Hardcoded secrets**: AWS, GitHub (classic, fine-grained, OAuth, app), Slack, Anthropic, OpenAI, and Google key shapes, PEM private-key headers. Shown redacted. Placeholders like `ghp_XXXX…` or `xoxp-your-user-token` are ignored | critical |
+| **Destructive shell command patterns**: `rm -rf` of the whole root or home directory, running a downloaded script straight in a shell (`curl \| sh`, `\| sudo bash`, `bash <(curl …)`, PowerShell `iex`), `chmod 777 /`, a fork bomb. Common in legitimate installers too, so these are prompts to look, not proof of malice. Decoding base64 straight into a shell is critical | warning / critical |
+| **Fake prerequisites and suspicious downloads**: a password-protected archive to download and run, commands staged on a paste site (rentry, pastebin, glot.io, …), or a one-line download + `chmod +x` + run. This is the shape of the ClawHavoc campaign's fake installers | warning |
+| **Reverse shells**: `bash -i >& /dev/tcp/…`, `nc -e`, `mkfifo` + `nc`, `socat exec:`, Python socket + subprocess | critical |
+| **Instructions hidden from the user**: "do not tell the user", "without informing the user", and `<IMPORTANT>`/`<system>`-style blocks used to smuggle instructions into MCP tool descriptions | warning |
 
 ## What it does NOT check
 
@@ -248,15 +251,16 @@ Tests create their fixtures in a temp directory, so this repo's own scan never p
 
 ### Regenerating `lib/` (maintainers)
 
-`lib/` is compiled output. The scanner source lives in the findsafeskills repo at `src/lib/safety/**`, with its own tests. Change it there, then run, from findsafeskills:
+`lib/` is compiled output. The scanner source lives in the findsafeskills repo at `src/lib/safety/**`, with its own tests. Change and commit it there, then run, from this repo:
 
 ```bash
-npm run build:safety-skill   # writes ../scanskillsafety-skill/lib
+npm run build:lib    # compiles findsafeskills' committed src/lib/safety into lib/
+npm run sync:port    # copies it into skills/scanskillsafety/
 ```
 
-Then run `npm run sync:port` here to update the ported copy.
+`build:lib` reads upstream's committed `HEAD`, not its working tree, so unfinished upstream edits never leak into a release.
 
-When the sibling `../findsafeskills` checkout exists, `npm test` here also rebuilds the scanner to a temp dir and fails if `lib/` is stale. Don't edit `lib/` by hand.
+When the sibling `../findsafeskills` checkout exists, `npm test` here also rebuilds the scanner from upstream `HEAD` to a temp dir and fails if `lib/` is stale. Don't edit `lib/` by hand.
 
 ## Contributing
 

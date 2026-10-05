@@ -15,12 +15,12 @@ const ROOT = path.join(__dirname, "..");
 const UPSTREAM = path.join(ROOT, "..", "findsafeskills");
 const norm = (s) => s.toLowerCase().replace(/[*_`]/g, "").replace(/\s+/g, " ");
 
-test("lib/ matches a fresh build of findsafeskills/src/lib/safety", { skip: !fs.existsSync(path.join(UPSTREAM, "tsconfig.safety-skill.json")) && "sibling findsafeskills checkout not found" }, () => {
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), "scanskillsafety-lib-"));
-  const build = spawnSync("npx", ["tsc", "-p", "tsconfig.safety-skill.json", "--outDir", out], { cwd: UPSTREAM, encoding: "utf-8" });
+test("lib/ matches a fresh build of findsafeskills' committed src/lib/safety", { skip: !fs.existsSync(path.join(UPSTREAM, "tsconfig.safety-skill.json")) && "sibling findsafeskills checkout not found" }, () => {
+  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "scanskillsafety-lib-")), "lib");
+  const build = spawnSync(path.join(ROOT, "scripts", "build-lib.sh"), [out], { encoding: "utf-8" });
   assert.equal(build.status, 0, build.stdout + build.stderr);
   const diff = spawnSync("diff", ["-r", out, path.join(ROOT, "lib")], { encoding: "utf-8" });
-  assert.equal(diff.status, 0, `lib/ is stale — run \`npm run build:safety-skill\` in findsafeskills.\n${diff.stdout}`);
+  assert.equal(diff.status, 0, `lib/ is stale — run \`npm run build:lib\`.\n${diff.stdout}`);
 });
 
 for (const doc of ["SKILL.md", "README.md", "skills/scanskillsafety/SKILL.md"]) {

@@ -11,6 +11,9 @@ const exfiltration_1 = require("./patterns/exfiltration");
 const obfuscation_1 = require("./patterns/obfuscation");
 const secrets_1 = require("./patterns/secrets");
 const destructiveCommands_1 = require("./patterns/destructiveCommands");
+const suspiciousDownload_1 = require("./patterns/suspiciousDownload");
+const remoteAccess_1 = require("./patterns/remoteAccess");
+const concealment_1 = require("./patterns/concealment");
 const ratingFromFindings_1 = require("./ratingFromFindings");
 function scanText(rawText) {
     const input = (0, scanInput_1.prepareScanInput)(rawText);
@@ -23,6 +26,9 @@ function scanText(rawText) {
         ...(0, obfuscation_1.scanObfuscation)(input).filter((f) => f.line === undefined || !secretLines.has(f.line)),
         ...secrets,
         ...(0, destructiveCommands_1.scanDestructiveCommands)(input),
+        ...(0, suspiciousDownload_1.scanSuspiciousDownload)(input),
+        ...(0, remoteAccess_1.scanRemoteAccess)(input),
+        ...(0, concealment_1.scanConcealment)(input),
     ];
     const findings = scannerFindings.map((f) => ({ ...f, source: "scanner" }));
     return { rating: (0, ratingFromFindings_1.ratingFromFindings)(findings), findings };
