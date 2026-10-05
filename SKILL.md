@@ -7,6 +7,10 @@ description: Statically scans a Claude Code skill, plugin, or MCP server for kno
 
 ## Flags
 
+### `--help`
+
+If the user invokes this skill with a `--help` flag (e.g. `/scanskillsafety --help`), don't run the scan. Instead, read `help.md` (in this skill's folder) and display it verbatim, then stop.
+
 ### `--version`
 
 If the user invokes this skill with a `--version` flag (e.g. `/scanskillsafety --version`), don't run the scan. Instead:

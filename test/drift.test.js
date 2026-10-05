@@ -23,7 +23,7 @@ test("lib/ matches a fresh build of findsafeskills/src/lib/safety", { skip: !fs.
   assert.equal(diff.status, 0, `lib/ is stale — run \`npm run build:safety-skill\` in findsafeskills.\n${diff.stdout}`);
 });
 
-for (const doc of ["SKILL.md", "README.md"]) {
+for (const doc of ["SKILL.md", "README.md", "skills/scanskillsafety/SKILL.md"]) {
   test(`${doc} names every scanner check and every non-goal`, () => {
     const text = norm(fs.readFileSync(path.join(ROOT, doc), "utf-8"));
     for (const { title } of [...SAFETY_SCANNER_CHECKS, ...SAFETY_SCANNER_NON_GOALS]) {

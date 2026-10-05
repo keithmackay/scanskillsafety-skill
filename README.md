@@ -1,8 +1,25 @@
 # scanskillsafety
 
+Works with: Claude Code · Codex · Antigravity · Gemini CLI
+
 Check a Claude Code skill, plugin, or MCP server for prompt-injection phrasing, exfiltration URLs, hidden text, leaked secrets, and destructive shell commands before you install it. Point it at a GitHub link or a local folder and it reads the files Claude Code would load (`SKILL.md`, plugin manifests, commands, agents, hooks, `.mcp.json`), pattern-matches them, and reports a red/yellow/green rating with the file and line of every hit. It never runs the code it's checking and never contacts any service except the target's own host.
 
 It's the same scanner that produces the safety badge on [findsafeskills](https://findsafeskills.com) listings, packaged to run on your machine with no dependency on that site.
+
+## Contents
+
+- [Highlights](#highlights)
+- [Installation](#installation)
+- [Usage](#usage)
+- [What it checks](#what-it-checks)
+- [What it does NOT check](#what-it-does-not-check)
+- [Network and privacy](#network-and-privacy)
+- [Compatibility](#compatibility)
+- [References](#references)
+- [Development](#development)
+- [Contributing](#contributing)
+- [Changelog](#changelog)
+- [License](#license)
 
 ## Highlights
 
@@ -13,6 +30,10 @@ It's the same scanner that produces the safety badge on [findsafeskills](https:/
 - **No dependencies** — one Node.js script plus a compiled, dependency-free scanner library.
 
 ## Installation
+
+### Prerequisites (all platforms)
+
+- Node.js 18 or newer (uses the built-in `fetch`).
 
 ### Claude Code
 
@@ -29,7 +50,13 @@ node ~/.claude/skills/scanskillsafety/cli.cjs https://github.com/someone/some-sk
 
 ### Codex
 
-Place the plugin directory where Codex can find it, then add an entry to your marketplace:
+Clone the repo anywhere, for example:
+
+```bash
+git clone https://github.com/keithmackay/scanskillsafety-skill ~/src/scanskillsafety-skill
+```
+
+Then add an entry pointing at it to your local marketplace:
 
 **`~/.agents/plugins/marketplace.json`** (create if absent):
 ```json
@@ -39,7 +66,7 @@ Place the plugin directory where Codex can find it, then add an entry to your ma
   "plugins": [
     {
       "name": "scanskillsafety",
-      "source": { "source": "local", "path": "/path/to/scanskillsafety-skill/" },
+      "source": { "source": "local", "path": "~/src/scanskillsafety-skill/" },
       "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
       "category": "Security"
     }
@@ -49,17 +76,19 @@ Place the plugin directory where Codex can find it, then add an entry to your ma
 
 ### Antigravity
 
-**Global install** (all workspaces):
+Install the platform-neutral copy in `skills/scanskillsafety/`, not the repo root. The root `SKILL.md` locates the scanner through `${CLAUDE_SKILL_DIR}`, which only Claude Code sets.
+
 ```bash
-cp -r /path/to/scanskillsafety-skill/ ~/.gemini/antigravity/skills/scanskillsafety/
+git clone https://github.com/keithmackay/scanskillsafety-skill /tmp/scanskillsafety-skill
+
+# Global install (all workspaces)
+cp -r /tmp/scanskillsafety-skill/skills/scanskillsafety ~/.gemini/antigravity/skills/scanskillsafety
+
+# Or workspace install (current project only)
+cp -r /tmp/scanskillsafety-skill/skills/scanskillsafety .agents/skills/scanskillsafety
 ```
 
-**Workspace install** (current project only):
-```bash
-cp -r /path/to/scanskillsafety-skill/ .agents/skills/scanskillsafety/
-```
-
-The root `SKILL.md` has no Claude Code-specific frontmatter, so it's used as-is — no separate `antigravity/SKILL.md` is needed. Skills are auto-discovered; you can also mention the skill by name to force activation.
+That folder is self-contained: `SKILL.md`, `cli.cjs`, `src/`, `lib/`, `help.md`, and `references/platform-limitations.md`. Skills are auto-discovered, and you can also mention the skill by name to force activation.
 
 ### Gemini CLI
 
@@ -76,15 +105,13 @@ gemini extensions update scanskillsafety
 
 The skill is auto-discovered from `GEMINI.md` after installation.
 
-### Prerequisites (all platforms)
-
-- Node.js 18 or newer (uses the built-in `fetch`).
-
 ## Usage
 
 ```text
 scanskillsafety [--json] <local-path-or-repo-url>
 ```
+
+Inside an agent, `/scanskillsafety --help` shows usage and `/scanskillsafety --version` shows the installed version and whether a newer release exists.
 
 Targets it understands:
 
@@ -167,7 +194,7 @@ Read this before trusting a green result.
 
 ### Why this repo rates itself red
 
-Run it on its own folder and you get RED: this README and `SKILL.md` quote the exact phrases and domains the scanner looks for. The output points at those lines (`SKILL.md:NN … "ignore previous instructions"`) so you can see they're documentation. That's the intended way to read any finding: check the excerpt in context. The scanner can't tell quoting from instructing, and it doesn't try to, because attackers can quote too.
+Run it on its own folder and you get RED: this README's examples quote the exact phrases and domains the scanner looks for. The output points at those lines (`README.md:NN … "ignore previous instructions"`) so you can see they're documentation. That's the intended way to read any finding: check the excerpt in context. The scanner can't tell quoting from instructing, and it doesn't try to, because attackers can quote too.
 
 ## Network and privacy
 
@@ -181,16 +208,17 @@ Each request times out after 10 seconds. Nothing is sent to findsafeskills or an
 
 ## Compatibility
 
-| Feature | Claude Code | Codex | Antigravity | Gemini CLI |
-|---------|:-----------:|:-----:|:-----------:|:----------:|
-| Core skill | ✅ | ✅ | ✅ | ✅ |
-| Scanner (`cli.cjs`, `lib/`, `src/`) | ✅ | ✅ | ✅ | ✅ |
-| `${CLAUDE_SKILL_DIR}` env var for resolving the scanner's own path | ✅ | ❌ (resolve the path directly — see `references/platform-limitations.md`) | ✅ (root `SKILL.md` used as-is) | ❌ (resolve the path directly — see `references/platform-limitations.md`) |
-| `.claude-plugin/plugin.json` as a `--version` source | ✅ | ❌ (uses `.codex-plugin/plugin.json`) | ✅ | ❌ (uses `gemini-extension.json`) |
+| | Claude Code | Codex | Antigravity | Gemini CLI |
+|---|:---:|:---:|:---:|:---:|
+| Skill and scanner (`cli.cjs`, `src/`, `lib/`) | ✅ | ✅ | ✅ | ✅ |
+| `--help` / `--version` | ✅ | ✅ | ✅ | ✅ |
+| Skill file used | root `SKILL.md` | `skills/scanskillsafety/SKILL.md` | `skills/scanskillsafety/SKILL.md` | `skills/scanskillsafety/SKILL.md` (via `GEMINI.md`) |
+| How the skill finds `cli.cjs` | `${CLAUDE_SKILL_DIR}` | its own directory (see `references/platform-limitations.md`) | its own directory | its own directory |
+| `--version` reads | `package.json` | `.codex-plugin/plugin.json` | `package.json` | `gemini-extension.json` |
 
-Legend: ✅ Supported · ❌ Not supported
+Legend: ✅ Supported
 
-Where a Claude Code-specific detail has no equivalent, the ported `SKILL.md` (Codex and Gemini CLI copies, under `skills/scanskillsafety/`) documents the fallback under **Platform Limitations** rather than failing silently. This skill never executes the scanned target's code on any platform.
+Where a Claude Code feature has no equivalent, the ported `SKILL.md` documents the fallback under **Platform Limitations** instead of failing silently. No platform ever runs the scanned target's code.
 
 ## References
 
@@ -208,7 +236,15 @@ cd scanskillsafety-skill
 npm test
 ```
 
-Tests use Node's built-in test runner and create their fixtures in a temp directory, so this repo's own scan never picks up the deliberately malicious test text. `test/drift.test.js` fails if this README or `SKILL.md` stops naming a check or non-goal that the scanner defines.
+| Command | What it does |
+|---|---|
+| `npm test` | Runs the test suite (Node's built-in runner, no dependencies) |
+| `npm run sync:port` | Copies `cli.cjs`, `src/`, `lib/`, `package.json`, `LICENSE`, `help.md` into the Codex/Gemini/Antigravity copy at `skills/scanskillsafety/` |
+
+Tests create their fixtures in a temp directory, so this repo's own scan never picks up the deliberately malicious test text. The suite also fails in three drift cases:
+- `skills/scanskillsafety/` no longer matches the root scanner (run `npm run sync:port`).
+- This README or either `SKILL.md` stops naming a check or non-goal that the scanner defines.
+- `lib/` is stale compared with the upstream source.
 
 ### Regenerating `lib/` (maintainers)
 
@@ -218,11 +254,17 @@ Tests use Node's built-in test runner and create their fixtures in a temp direct
 npm run build:safety-skill   # writes ../scanskillsafety-skill/lib
 ```
 
+Then run `npm run sync:port` here to update the ported copy.
+
 When the sibling `../findsafeskills` checkout exists, `npm test` here also rebuilds the scanner to a temp dir and fails if `lib/` is stale. Don't edit `lib/` by hand.
 
 ## Contributing
 
-Issues and pull requests are welcome. For false positives or new attack patterns, include the text that triggered (or should have triggered) a finding. Scanner logic changes land in findsafeskills first (see above). CLI, discovery, and doc changes land here.
+Issues and pull requests are welcome. For false positives or new attack patterns, include the text that triggered (or should have triggered) a finding. Scanner logic changes land in findsafeskills first (see above). CLI, discovery, and doc changes land here. `main` is protected: fork, branch, and open a pull request. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and the PR checklist.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## License
 

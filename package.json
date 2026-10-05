@@ -5,9 +5,14 @@
   "license": "MIT",
   "type": "commonjs",
   "private": true,
-  "bin": { "scanskillsafety": "cli.cjs" },
-  "engines": { "node": ">=18" },
+  "bin": {
+    "scanskillsafety": "cli.cjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test test/",
+    "sync:port": "node scripts/sync-port.js"
   }
 }
