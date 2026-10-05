@@ -27,6 +27,7 @@ All notable changes to this project are documented here. The format follows
   - "Developer Mode enabled" only counts in an instruction form ("you are now in developer mode").
   - Official installers for well-known toolchains (uv, Docker, nvm, Bun, Rust, …) are no longer flagged.
 - Scanner version `2026-10-05.4`: download-and-run installers (`curl | sh`, `| sudo bash`, `bash <(curl …)`, `iex`) are reported under their own **Install scripts run straight from the network** check (`install-script`) instead of destructive commands. Still a warning.
+- Scanner version `2026-10-05.5`: a relay domain such as webhook.site is critical only as a link or a send target. A bare mention, or a comparison like "without webhook.site", is a warning.
 
 ### Fixed
 
