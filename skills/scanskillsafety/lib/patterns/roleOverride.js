@@ -18,7 +18,7 @@ const PATTERNS = [
     /\bact\s+as\s+.{0,40}\bwith\s+developer\s+mode\s+(enabled|activated|on)\b/gi,
     /\bdeveloper\s+mode\s+(is\s+)?now\s+(enabled|activated|on)\b/gi,
 ];
-const EXAMPLE_CUE = /\b(detects?|detected|detecting|detection|detector|flags?|flagged|catches|blocks?|blocked|e\.g\.|i\.e\.|such as|phrases? like|for example|for instance|examples?|attacks? like|patterns? like|injection attempts?|jailbreak attempts?|prompt[- ]injections?)\b/;
+const EXAMPLE_CUE = /\b(detects?|detected|detecting|detection|detector|flags?|flagged|catches|blocks?|blocked|e\.g\.|i\.e\.|such as|phrases? like|for example|for instance|(?<![.\w-])examples?(?![.\w-])|attacks? like|patterns? like|injection attempts?|jailbreak attempts?|prompt[- ]injections?)\b/;
 const TAG_CHAR = /[\u{E0000}-\u{E007F}]/u;
 // True when the match sits inside quotes or inline code: an opening quote right before it, or an
 // unbalanced quote/backtick earlier on the line.

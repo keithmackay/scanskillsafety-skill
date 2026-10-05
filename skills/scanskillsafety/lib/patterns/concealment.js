@@ -22,6 +22,9 @@ const HIDDEN_BLOCK = /<\s*(important|system|hidden)\s*>/;
 function scanConcealment(input) {
     const findings = [];
     for (const { line, text } of input.normalized.lines) {
+        // Detectors and security docs name these patterns; that's documentation, not the thing itself.
+        if ((0, scanInput_1.describesDetection)(text))
+            continue;
         if (HIDE_FROM_USER.some((re) => re.test(text))) {
             findings.push((0, scanInput_1.findingAt)(input, line, { severity: "warning", category: "concealment", detail: "Tells the agent to keep something from the user" }));
         }

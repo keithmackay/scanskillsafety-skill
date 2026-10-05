@@ -18,6 +18,9 @@ const DOWNLOAD_CHMOD_RUN = /\b(curl|wget)\b.*&&\s*chmod\s+(\+x|u\+x|[0-7]?7[0-7]
 function scanSuspiciousDownload(input) {
     const findings = [];
     for (const { line, text } of input.normalized.lines) {
+        // Detectors and security docs name these patterns; that's documentation, not the thing itself.
+        if ((0, scanInput_1.describesDetection)(text))
+            continue;
         // Only as a link (https://rentry.co/…, rentry.co/abc), not a paste site named in a list.
         const pasteSite = PASTE_SITES.find((domain) => new RegExp(`(//|\\bwww\\.)${domain.replace(/\./g, "\\.")}|\\b${domain.replace(/\./g, "\\.")}/`).test(text));
         if (pasteSite) {
