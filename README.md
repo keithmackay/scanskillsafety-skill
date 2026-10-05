@@ -12,13 +12,9 @@ It's the same scanner that produces the safety badge on [findsafeskills](https:/
 - **Scriptable** — exit codes per rating and a `--json` mode.
 - **No dependencies** — one Node.js script plus a compiled, dependency-free scanner library.
 
-## Getting started
+## Installation
 
-### Prerequisites
-
-- Node.js 18 or newer (uses the built-in `fetch`).
-
-### Install as a Claude Code skill
+### Claude Code
 
 ```bash
 git clone https://github.com/keithmackay/scanskillsafety-skill ~/.claude/skills/scanskillsafety
@@ -26,11 +22,63 @@ git clone https://github.com/keithmackay/scanskillsafety-skill ~/.claude/skills/
 
 Claude Code picks it up on the next session. Ask something like "check https://github.com/someone/some-skill before I install it" and the skill runs the scan and reports back.
 
-### Run it directly
-
+Or run the scanner directly without going through the skill:
 ```bash
 node ~/.claude/skills/scanskillsafety/cli.cjs https://github.com/someone/some-skill
 ```
+
+### Codex
+
+Place the plugin directory where Codex can find it, then add an entry to your marketplace:
+
+**`~/.agents/plugins/marketplace.json`** (create if absent):
+```json
+{
+  "name": "personal",
+  "interface": { "displayName": "Personal Plugins" },
+  "plugins": [
+    {
+      "name": "scanskillsafety",
+      "source": { "source": "local", "path": "/path/to/scanskillsafety-skill/" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Security"
+    }
+  ]
+}
+```
+
+### Antigravity
+
+**Global install** (all workspaces):
+```bash
+cp -r /path/to/scanskillsafety-skill/ ~/.gemini/antigravity/skills/scanskillsafety/
+```
+
+**Workspace install** (current project only):
+```bash
+cp -r /path/to/scanskillsafety-skill/ .agents/skills/scanskillsafety/
+```
+
+The root `SKILL.md` has no Claude Code-specific frontmatter, so it's used as-is — no separate `antigravity/SKILL.md` is needed. Skills are auto-discovered; you can also mention the skill by name to force activation.
+
+### Gemini CLI
+
+Gemini CLI installs extensions directly from GitHub:
+
+```bash
+gemini extensions install https://github.com/keithmackay/scanskillsafety-skill
+```
+
+To update:
+```bash
+gemini extensions update scanskillsafety
+```
+
+The skill is auto-discovered from `GEMINI.md` after installation.
+
+### Prerequisites (all platforms)
+
+- Node.js 18 or newer (uses the built-in `fetch`).
 
 ## Usage
 
@@ -130,6 +178,27 @@ For a local path it reads only files on disk. For a URL it contacts only the tar
 - **Any other URL:** that URL, fetched once.
 
 Each request times out after 10 seconds. Nothing is sent to findsafeskills or anywhere else.
+
+## Compatibility
+
+| Feature | Claude Code | Codex | Antigravity | Gemini CLI |
+|---------|:-----------:|:-----:|:-----------:|:----------:|
+| Core skill | ✅ | ✅ | ✅ | ✅ |
+| Scanner (`cli.cjs`, `lib/`, `src/`) | ✅ | ✅ | ✅ | ✅ |
+| `${CLAUDE_SKILL_DIR}` env var for resolving the scanner's own path | ✅ | ❌ (resolve the path directly — see `references/platform-limitations.md`) | ✅ (root `SKILL.md` used as-is) | ❌ (resolve the path directly — see `references/platform-limitations.md`) |
+| `.claude-plugin/plugin.json` as a `--version` source | ✅ | ❌ (uses `.codex-plugin/plugin.json`) | ✅ | ❌ (uses `gemini-extension.json`) |
+
+Legend: ✅ Supported · ❌ Not supported
+
+Where a Claude Code-specific detail has no equivalent, the ported `SKILL.md` (Codex and Gemini CLI copies, under `skills/scanskillsafety/`) documents the fallback under **Platform Limitations** rather than failing silently. This skill never executes the scanned target's code on any platform.
+
+## References
+
+- **Claude Code Skills:** https://code.claude.com/docs/en/skills
+- **Codex Plugins:** https://developers.openai.com/codex/plugins/build
+- **Antigravity Skills:** https://antigravity.google/docs/skills
+- **Gemini CLI Extensions:** https://github.com/google-gemini/gemini-cli/blob/main/docs/extension.md
+- **Agent Skills open standard:** https://agentskills.io/home
 
 ## Development
 

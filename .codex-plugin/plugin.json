@@ -1,0 +1,6 @@
+{
+  "name": "scanskillsafety",
+  "version": "1.0.0",
+  "description": "Statically scans a Claude Code skill, plugin, or MCP server for known prompt-injection, exfiltration, obfuscation, secret, and destructive-command patterns before it's installed. Reads the target's own files (SKILL.md, plugin manifests, commands, agents, hooks, .mcp.json) from a GitHub/Gitea URL or a local path, fully offline apart from that host, and never runs the target's code. Use when the user is about to install a skill, plugin, or MCP server from an unfamiliar source, or asks to check, vet, audit, or scan one, or asks whether one is safe to install.",
+  "skills": "./skills/"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "scanskillsafety",
+  "description": "Statically scans a Claude Code skill, plugin, or MCP server for known prompt-injection, exfiltration, obfuscation, secret, and destructive-command patterns before it's installed.",
+  "version": "1.0.0",
+  "contextFileName": "GEMINI.md"
+}
