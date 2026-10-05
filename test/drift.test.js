@@ -8,7 +8,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { SAFETY_SCANNER_CHECKS } = require("../lib/checks");
+const { SAFETY_SCANNER_CHECKS, SAFETY_SCANNER_NOTES } = require("../lib/checks");
 const { SAFETY_SCANNER_NON_GOALS } = require("../lib/nonGoals");
 
 const ROOT = path.join(__dirname, "..");
@@ -26,7 +26,7 @@ test("lib/ matches a fresh build of findsafeskills' committed src/lib/safety", {
 for (const doc of ["SKILL.md", "README.md", "skills/scanskillsafety/SKILL.md"]) {
   test(`${doc} names every scanner check and every non-goal`, () => {
     const text = norm(fs.readFileSync(path.join(ROOT, doc), "utf-8"));
-    for (const { title } of [...SAFETY_SCANNER_CHECKS, ...SAFETY_SCANNER_NON_GOALS]) {
+    for (const { title } of [...SAFETY_SCANNER_CHECKS, ...SAFETY_SCANNER_NOTES, ...SAFETY_SCANNER_NON_GOALS]) {
       assert.ok(text.includes(norm(title)), `${doc} is missing "${title}"`);
     }
   });

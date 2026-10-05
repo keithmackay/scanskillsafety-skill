@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SAFETY_SCANNER_CHECKS = exports.SAFETY_ADVISORY_SIGNALS = exports.SAFETY_GITHUB_SIGNALS = void 0;
+exports.SAFETY_SCANNER_CHECKS = exports.SAFETY_SCANNER_NOTES = exports.SAFETY_ADVISORY_SIGNALS = exports.SAFETY_GITHUB_SIGNALS = void 0;
 // Findings that do not come from the text scanner. The standalone scanner skill never produces
 // these; they are recorded by the site's nightly GitHub check.
 exports.SAFETY_GITHUB_SIGNALS = [
@@ -31,6 +31,16 @@ exports.SAFETY_ADVISORY_SIGNALS = [
             "published version of the npm package the listing names. A vulnerability is a bug, not " +
             "malice, and says nothing about older versions or the listing's own code. A package with no " +
             "advisory is not thereby safe: absence means no advisory is known.",
+    },
+];
+exports.SAFETY_SCANNER_NOTES = [
+    {
+        title: "Install scripts run straight from the network",
+        explanation: "The listing pipes a script from its own repo or host straight into a shell (curl | sh, " +
+            "| sudo bash, bash <(curl …), PowerShell iex). This is noted on the listing but does not " +
+            "change the rating: the script is code this scan does not read, and the listing page shows " +
+            "the repo's install steps as written so you can review them. Official installers for widely " +
+            "used toolchains (uv, Docker, nvm, Bun, Rust, …) are not noted.",
     },
 ];
 exports.SAFETY_SCANNER_CHECKS = [
@@ -75,14 +85,6 @@ exports.SAFETY_SCANNER_CHECKS = [
             "line by line and flagged as warnings, since setup and uninstall docs genuinely mention some " +
             "of these. Decoding base64 straight into a shell is critical: no honest install step needs " +
             "to hide its commands.",
-    },
-    {
-        title: "Install scripts run straight from the network",
-        severity: "warning",
-        explanation: "The listing pipes a script from its own repo or host straight into a shell (curl | sh, " +
-            "| sudo bash, bash <(curl …), PowerShell iex). That script is code this scan does not read, " +
-            "so it is worth reviewing before you run it. Official installers for widely used toolchains " +
-            "(uv, Docker, nvm, Bun, Rust, …) are not flagged.",
     },
     {
         title: "Fake prerequisites and suspicious downloads",

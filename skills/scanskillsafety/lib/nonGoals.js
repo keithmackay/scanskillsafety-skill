@@ -34,6 +34,7 @@ exports.SAFETY_SCANNER_NON_GOALS = [
         title: "Anything outside the scanned text itself",
         explanation: "The scanner only reads a listing's manifest/README/description text as fetched during " +
             "crawl. It says nothing about the publisher's identity, intent, or track record, and " +
-            "nothing about code in the repo beyond that text — links in it are not followed.",
+            "nothing about code in the repo beyond that text — links in it are not followed, and install " +
+            "scripts a listing downloads and runs (curl | sh and the like) are never read.",
     },
 ];

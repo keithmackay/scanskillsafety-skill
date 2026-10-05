@@ -50,6 +50,8 @@ Always name the files that were scanned and pass on any `notices` (for example, 
 
 **2 (red).** List every finding the same way. For each critical finding, say whether the excerpt reads like an instruction aimed at an agent or like documentation quoting the pattern, such as a security tool listing what it detects. Recommend not installing until the user has read the flagged lines. The decision is theirs, so give your assessment and leave it with them.
 
+**Notes (`severity: "info"`).** Whatever the rating, list any notes separately after the findings, for example: "Note: the README pipes `install.sh` from its own repo into a shell (README.md:5). This scan didn't read that script, so read it before running it." Don't let a note change your verdict.
+
 **3 (could not scan).** Say the scan did not run, quote the `errors`, and suggest a fix: check the URL, link the specific subdirectory, retry later if rate-limited, or clone the repo and scan the local path. Never present this as a clean result.
 
 ## What it checks
@@ -59,7 +61,7 @@ Always name the files that were scanned and pass on any `notices` (for example, 
 - **Obfuscation**: base64-looking blobs, invisible characters, homoglyphs, bidi overrides (warning); text hidden in Unicode Tag characters (critical, and the hidden text is shown in the finding)
 - **Hardcoded secrets**: shown redacted, placeholders ignored (critical)
 - **Destructive shell command patterns** (warning; critical when base64 is decoded straight into a shell)
-- **Install scripts run straight from the network**: `curl | sh` and similar, running the target's own script, which this scan doesn't read (warning)
+- **Install scripts run straight from the network**: `curl | sh` and similar, running the target's own script, which this scan doesn't read. Reported with severity `info`, a note that never changes the rating
 - **Fake prerequisites and suspicious downloads**: password-protected archives, paste-site links, download + chmod +x + run (warning)
 - **Reverse shells** (critical)
 - **Instructions hidden from the user**: "do not tell the user", `<IMPORTANT>`-style blocks (warning)

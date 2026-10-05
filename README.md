@@ -134,17 +134,30 @@ Clean:
 Target: ./tidy-tables
 Scanned 1 file(s): SKILL.md
 Rating: GREEN
-No findings from the static scan.
+No issues found by the static scan.
+```
+
+Clean, with a note to read the install script yourself (notes never change the rating):
+
+```text
+Target: ./my-plugin
+Scanned 2 file(s): .claude-plugin/plugin.json, README.md
+Rating: GREEN
+No issues found by the static scan.
+
+Notes (these don't change the rating):
+  README.md:5 [note] install-script: Pipes a downloaded script directly into a shell (curl | sh / wget | bash)
+      > curl -fsSL https://raw.githubusercontent.com/me/my-plugin/main/install.sh | bash
 ```
 
 Worth a closer look:
 
 ```text
-Target: ./my-plugin
-Scanned 2 file(s): .claude-plugin/plugin.json, README.md
+Target: ./cleaner
+Scanned 1 file(s): SKILL.md
 Rating: YELLOW
-  README.md:5 [warning] destructive-commands: Pipes a downloaded script directly into a shell (curl | sh / wget | bash)
-      > curl -fsSL https://example.com/install.sh | bash
+  SKILL.md:5 [warning] destructive-commands: Runs `rm -rf` against a root or home-directory path
+      > To reset everything, run `rm -rf ~` and start over.
 ```
 
 Don't install without reading it:
@@ -170,7 +183,7 @@ Rating: RED
 
 ### JSON output
 
-`--json` prints `target`, `rating` (`null` if nothing could be scanned), `scannedFiles`, `findings` (each with `file`, `line`, `excerpt`, `severity`, `category`, `detail`), `notices`, `errors`, and `nonGoals`.
+`--json` prints `target`, `rating` (`null` if nothing could be scanned), `scannedFiles`, `findings` (each with `file`, `line`, `excerpt`, `severity`, `category`, `detail`), `notices`, `errors`, and `nonGoals`. A `severity` of `info` marks a note, which never affects `rating` or the exit code.
 
 ## What it checks
 
@@ -181,10 +194,13 @@ Rating: RED
 | **Obfuscation**: long base64-looking blobs (outside URLs), invisible/zero-width characters, Cyrillic look-alikes inside Latin words, bidirectional-override characters. Text hidden in invisible Unicode Tag characters is decoded and scanned by every other check, and a run of 10 or more is critical | warning / critical |
 | **Hardcoded secrets**: AWS, GitHub (classic, fine-grained, OAuth, app), Slack, Anthropic, OpenAI, and Google key shapes, PEM private-key headers. Shown redacted. Placeholders like `ghp_XXXX…` or `xoxp-your-user-token` are ignored | critical |
 | **Destructive shell command patterns**: `rm -rf` of the whole root or home directory, `chmod 777 /`, a fork bomb. Setup and uninstall docs mention some of these, so they're prompts to look, not proof of malice. Decoding base64 straight into a shell is critical | warning / critical |
-| **Install scripts run straight from the network**: the target pipes a script from its own repo or host into a shell (`curl \| sh`, `\| sudo bash`, `bash <(curl …)`, PowerShell `iex`). That script is code this scan doesn't read, so review it before running. Official installers for well-known toolchains (uv, Docker, nvm, Bun, Rust, …) aren't flagged | warning |
 | **Fake prerequisites and suspicious downloads**: a password-protected archive to download and run, commands staged on a paste site (rentry, pastebin, glot.io, …), or a one-line download + `chmod +x` + run. This is the shape of the ClawHavoc campaign's fake installers | warning |
 | **Reverse shells**: `bash -i >& /dev/tcp/…`, `nc -e`, `mkfifo` + `nc`, `socat exec:`, Python socket + subprocess | critical |
 | **Instructions hidden from the user**: "do not tell the user", "without informing the user", and `<IMPORTANT>`/`<system>`-style blocks used to smuggle instructions into MCP tool descriptions | warning |
+
+### Notes (don't change the rating)
+
+- **Install scripts run straight from the network**: the target pipes a script from its own repo or host into a shell (`curl | sh`, `| sudo bash`, `bash <(curl …)`, PowerShell `iex`). That script is code this scan doesn't read, so it's listed as a note for you to review, but it doesn't change the rating. Official installers for well-known toolchains (uv, Docker, nvm, Bun, Rust, …) aren't noted.
 
 ## What it does NOT check
 

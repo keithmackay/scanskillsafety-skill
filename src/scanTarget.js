@@ -1,6 +1,7 @@
 // ABOUTME: Gathers a target's files (local or remote), runs the static scanner on each file
 // ABOUTME: separately so every finding names the file it came from, and formats the result as
-// ABOUTME: text or JSON. rating is null when nothing could be scanned — never "green".
+// ABOUTME: text or JSON. rating is null when nothing could be scanned — never "green". Findings with
+// ABOUTME: severity "info" (e.g. install scripts) are listed as notes and never affect the rating.
 "use strict";
 
 const fs = require("fs");
@@ -50,6 +51,12 @@ async function scanTarget(input, { fetchImpl = fetch } = {}) {
   };
 }
 
+function pushFinding(lines, f, label) {
+  const where = f.line ? `${f.file}:${f.line}` : f.file;
+  lines.push(`  ${where} [${label}] ${f.category}: ${f.detail}`);
+  if (f.excerpt) lines.push(`      > ${f.excerpt}`);
+}
+
 function formatText(result) {
   const lines = [
     "scanskillsafety — static text analysis only. One signal, not a verdict. It does NOT check:",
@@ -66,11 +73,13 @@ function formatText(result) {
   lines.push(`Scanned ${result.scannedFiles.length} file(s): ${result.scannedFiles.join(", ")}`);
   for (const e of result.errors) lines.push(`  warning: could not fetch — ${e}`);
   lines.push(`Rating: ${result.rating.toUpperCase()}`);
-  if (result.findings.length === 0) lines.push("No findings from the static scan.");
-  for (const f of result.findings) {
-    const where = f.line ? `${f.file}:${f.line}` : f.file;
-    lines.push(`  ${where} [${f.severity}] ${f.category}: ${f.detail}`);
-    if (f.excerpt) lines.push(`      > ${f.excerpt}`);
+  const issues = result.findings.filter((f) => f.severity !== "info");
+  const notes = result.findings.filter((f) => f.severity === "info");
+  if (issues.length === 0) lines.push("No issues found by the static scan.");
+  for (const f of issues) pushFinding(lines, f, f.severity);
+  if (notes.length > 0) {
+    lines.push("", "Notes (these don't change the rating):");
+    for (const f of notes) pushFinding(lines, f, "note");
   }
   return lines.join("\n");
 }

@@ -11,13 +11,14 @@ WHAT IT DOES
     - hardcoded secrets, shown redacted; placeholders ignored (critical)
     - destructive shell commands, e.g. rm -rf ~             (warning)
       base64 decoded straight into a shell                  (critical)
-    - install scripts piped from the network, e.g. curl | sh (warning)
+    - install scripts piped from the network, e.g. curl | sh (note:
+      listed for you to review, never changes the rating)
     - fake prerequisites: password-protected archives,
       paste-site links, download + chmod +x + run           (warning)
     - reverse shells                                        (critical)
     - instructions hidden from the user                     (warning)
   Reports a red/yellow/green rating with the file, line, and quoted line
-  for every hit. Never runs the target's code. Contacts only the target's
+  for every hit, plus notes that don't affect the rating. Never runs the target's code. Contacts only the target's
   own host (for GitHub: api.github.com and raw.githubusercontent.com).
 
   A green result means no known pattern was found, not that the target is
