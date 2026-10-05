@@ -1,0 +1,21 @@
+# Dependencies (none at runtime, but keep any local installs out)
+node_modules/
+
+# Git worktrees
+.worktrees/
+
+# Logs and coverage
+*.log
+npm-debug.log*
+coverage/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Local env files
+.env
+.env.*
