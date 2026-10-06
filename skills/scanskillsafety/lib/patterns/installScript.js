@@ -32,6 +32,10 @@ function onlyWellKnownInstallers(line) {
 }
 const PATTERNS = [
     {
+        detail: "Runs a script fetched from GitHub's contents API (base64-decoded into a shell)",
+        matches: (line) => /\bgh\s+api\b.*\/contents\/.*\|\s*base64\s+(-d|--decode)\b.*\|\s*(sudo\s+)?(sh|bash|zsh)\b/i.test(line),
+    },
+    {
         detail: "Pipes a downloaded script directly into a shell (curl | sh / wget | bash)",
         // Requires something to fetch (a URL or host/path) so prose naming "curl | bash" doesn't match.
         matches: (line) => /\b(curl|wget)\s[^|]*(https?:\/\/|\b[\w-]+(\.[\w-]+)+\/)[^|]*\|\s*(sudo\s+(-[a-z]+\s+)*)?(sh|bash|zsh)\b/i.test(line),
