@@ -107,9 +107,9 @@ test("runs from any working directory (the CLI resolves lib/ relative to itself)
   assert.equal(run(makeTree({ "SKILL.md": "ok" })).status, 0);
 });
 
-test("self-scan: this repo's own docs quote the patterns, and every hit points at a file and line (#5)", async () => {
+test("self-scan: this repo's docs quote the patterns as examples, so it rates yellow, and every hit points at a file and line (#5)", async () => {
   const result = await scanTarget(path.join(__dirname, ".."));
-  assert.equal(result.rating, "red");
+  assert.equal(result.rating, "yellow");
   assert.ok(result.findings.length > 0);
   for (const f of result.findings) {
     assert.ok(["SKILL.md", "README.md", "skills/scanskillsafety/SKILL.md"].includes(f.file), `unexpected file ${f.file}`);

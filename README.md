@@ -213,9 +213,9 @@ Read this before trusting a green result.
 - **Novel phrasing not covered by the pattern list.** A new or creative attack won't match until the list is updated.
 - **Anything outside the scanned text itself.** Not the publisher's identity or intent, not source code beyond the files listed above, and links are not followed.
 
-### Why this repo rates itself red
+### Why this repo rates itself yellow
 
-Run it on its own folder and you get RED: this README's examples quote the exact phrases and domains the scanner looks for. Quoted phrases drop to warnings, but the example output's unquoted lines and the webhook.site domains still count as critical. The output points at each line (`README.md:NN …`) so you can see they're documentation. That's the intended way to read any finding: check the excerpt in context. The scanner can't tell quoting from instructing, and it doesn't try to, because attackers can quote too.
+Run it on its own folder and you get YELLOW: this README's examples quote the exact phrases, domains and commands the scanner looks for. Because they appear in example output, blockquotes, tables and quotation marks, they count as documentation and drop to warnings instead of criticals. They still never go silent, because an attacker can quote too. The output points at each line (`README.md:NN …`) so you can see they're documentation. That's the intended way to read any finding: check the excerpt in context.
 
 ## Network and privacy
 
