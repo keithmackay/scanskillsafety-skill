@@ -1,11 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.PASTE_SITES = void 0;
 exports.scanSuspiciousDownload = scanSuspiciousDownload;
 // ABOUTME: Flags the "fake prerequisite" shape behind the ClawHavoc campaign and similar droppers:
 // ABOUTME: a password-protected archive to download and run, commands staged on a paste site, or a
 // ABOUTME: one-line download + chmod +x + execute. Warnings — each has rare legitimate uses.
 const scanInput_1 = require("../scanInput");
-const PASTE_SITES = [
+exports.PASTE_SITES = [
     "rentry.co", "rentry.org", "glot.io", "pastebin.com", "paste.c-net.org", "hastebin.com", "ghostbin",
     "termbin.com", "paste.ee", "dpaste.org", "dpaste.com", "controlc.com", "justpaste.it", "privatebin", "paste.rs", "0bin.net",
 ];
@@ -22,7 +23,7 @@ function scanSuspiciousDownload(input) {
         if ((0, scanInput_1.describesDetection)(text))
             continue;
         // Only as a link (https://rentry.co/…, rentry.co/abc), not a paste site named in a list.
-        const pasteSite = PASTE_SITES.find((domain) => new RegExp(`(//|\\bwww\\.)${domain.replace(/\./g, "\\.")}|\\b${domain.replace(/\./g, "\\.")}/`).test(text));
+        const pasteSite = exports.PASTE_SITES.find((domain) => new RegExp(`(//|\\bwww\\.)${domain.replace(/\./g, "\\.")}|\\b${domain.replace(/\./g, "\\.")}/`).test(text));
         if (pasteSite) {
             findings.push((0, scanInput_1.findingAt)(input, line, {
                 severity: "warning",

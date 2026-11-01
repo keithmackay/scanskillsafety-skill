@@ -198,6 +198,24 @@ Rating: RED
 | **Persistence that fetches from the network**: a cron job, launchd agent, systemd unit, Windows scheduled task or Run key, or a shell-profile line that fetches something to run. Unlike a one-off install script, it keeps pulling code on its own | warning |
 | **Reverse shells**: `bash -i >& /dev/tcp/…`, `nc -e`, `mkfifo` + `nc`, `socat exec:`, Python socket + subprocess | critical |
 | **Instructions hidden from the user**: "do not tell the user", "without informing the user", and `<IMPORTANT>`/`<system>`-style blocks used to smuggle instructions into MCP tool descriptions | warning |
+| **Known malware campaigns**: names, download hosts, addresses and accounts used only by a published campaign against agent skills, such as ClawHavoc's fake "OpenClawCLI" prerequisite (Koi Security, February 2026). Security write-ups that list them as indicators get a note instead | critical |
+
+### In bundled scripts
+
+For a skill or plugin it also reads the scripts, hooks and MCP configs in the folders that hold a SKILL.md or plugin manifest: shell, Python, JavaScript, TypeScript, PowerShell, batch and Ruby files, `hooks.json`, `plugin.json` and `.mcp.json`. Configs are read first; tests, evals, dependencies and build output are skipped; a file copied into several folders is read once. It reads up to 200 files, 200 KB of each and 4,000 KB in all, the same limits findsafeskills uses, and says so when that leaves some out.
+
+Every check above runs on these files. Code quotes the patterns it guards against, so in a script a match that sits only inside a string, regex or comment is a note, unless the file hands strings to a shell or interpreter. Hook and MCP configs and secrets keep full weight. These checks are made only on code:
+
+| Check | Severity |
+|---|---|
+| **Code that runs what it downloads**: eval or exec of text fetched at run time | critical |
+| **Code that runs what it decodes**: eval of base64 (`Buffer.from`, `atob`), exec of `b64decode` or a decompressed blob, PowerShell `-EncodedCommand` | warning |
+| **Reverse shells in code**: an interactive shell on `/dev/tcp`, `nc -e`, a connected socket wired to a shell | critical |
+| **Credentials or the whole environment sent out**: SSH keys, cloud and registry logins or `.netrc` read in a file that sends data; every environment variable serialised or piped out | critical |
+| **Raw IP addresses and throwaway hosts**: code addressing a public raw IP, a paste site, a request relay, a Discord attachment link, transfer.sh or a temporary tunnel; critical in a file that also makes a download executable, adds a startup entry, or sends data to a relay | warning / critical |
+| **Cryptocurrency miners**: xmrig, stratum pool URLs | critical |
+| **setuid and setgid**: `chmod 4755`, `u+s` | warning |
+| **Ransom notes**: "your files have been encrypted" | warning |
 
 ### Notes (don't change the rating)
 
@@ -211,7 +229,7 @@ Read this before trusting a green result.
 - **Rug pulls (a tool's description changing after you already approved it).** It sees one snapshot, with no history.
 - **Contextual or workflow-dependent attacks.** Text that is only dangerous combined with another tool's output or the conversation won't match a fixed pattern.
 - **Novel phrasing not covered by the pattern list.** A new or creative attack won't match until the list is updated.
-- **Anything outside the scanned text itself.** Not the publisher's identity or intent, not source code beyond the files listed above, and links are not followed.
+- **Anything outside the scanned text itself.** Not the publisher's identity or intent, not an MCP server's own source or files past the limits above, and links are not followed.
 
 ### Why this repo rates itself yellow
 

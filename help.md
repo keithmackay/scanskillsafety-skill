@@ -3,7 +3,8 @@ scanskillsafety — check a skill, plugin, or MCP server before you install it
 WHAT IT DOES
   Reads the files an agent would load from the target (SKILL.md, plugin
   manifests, skills/*/SKILL.md, commands, agents, hooks/hooks.json,
-  .mcp.json, package.json/server.json) and pattern-matches them for:
+  .mcp.json, package.json/server.json) and the scripts its skills and
+  plugins bundle, and pattern-matches them for:
     - instruction-override / prompt-injection phrasing      (critical)
     - exfiltration-looking URLs                             (critical/warning)
     - obfuscation: base64 blobs, invisible chars, homoglyphs,
@@ -19,6 +20,20 @@ WHAT IT DOES
       profile) that fetches from the network              (warning)
     - reverse shells                                        (critical)
     - instructions hidden from the user                     (warning)
+    - known malware campaigns, e.g. ClawHavoc's fake
+      "OpenClawCLI" prerequisite                            (critical)
+  and, in bundled scripts only:
+    - code that runs what it downloads                      (critical)
+    - code that runs what it decodes from base64            (warning)
+    - reverse shells in code                                (critical)
+    - credentials or the whole environment sent out         (critical)
+    - raw IP addresses and throwaway hosts                  (warning;
+      critical beside chmod +x, a startup entry, or a relay)
+    - cryptocurrency miners                                 (critical)
+    - setuid and setgid                                     (warning)
+    - ransom notes                                          (warning)
+  Scripts are read up to 200 files, 200 KB each, 4,000 KB in all; a
+  pattern only quoted as data in code is a note.
   Reports a red/yellow/green rating with the file, line, and quoted line
   for every hit, plus notes that don't affect the rating. Never runs the target's code. Contacts only the target's
   own host (for GitHub: api.github.com and raw.githubusercontent.com).

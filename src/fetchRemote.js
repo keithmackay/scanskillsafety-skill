@@ -5,6 +5,14 @@
 "use strict";
 
 const { isDiscoverable, MAX_FILE_BYTES, MAX_FILES } = require("./discover");
+const { selectScriptFiles, MAX_BYTES_PER_FILE } = require("../lib/scriptFiles");
+const { partialScriptsNotice } = require("./scriptsNotice");
+
+// The first MAX_BYTES_PER_FILE bytes of a script's text, as findsafeskills reads it.
+const capScript = (text) => {
+  const bytes = Buffer.from(text, "utf-8");
+  return bytes.length > MAX_BYTES_PER_FILE ? bytes.subarray(0, MAX_BYTES_PER_FILE).toString("utf-8") : text;
+};
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const CONCURRENCY = 6;
@@ -69,23 +77,30 @@ function stripSubpath(fullPath, subpath) {
   return fullPath.startsWith(`${subpath}/`) ? fullPath.slice(subpath.length + 1) : null;
 }
 
-// Filters a tree listing to discoverable blobs under subpath, then fetches each one.
+// Filters a tree listing to discoverable blobs under subpath, and the scripts findsafeskills would read there, then fetches
+// each one. A file that is both (hooks.json, .mcp.json) is fetched once and scanned as a script.
 async function fetchTreeFiles(fetchImpl, tree, subpath, rawUrlFor) {
-  const wanted = [];
+  const blobs = [];
   for (const entry of tree) {
     if (entry.type !== "blob" && entry.type !== "file") continue;
     const rel = stripSubpath(entry.path, subpath);
-    if (rel && isDiscoverable(rel) && (entry.size ?? 0) <= MAX_FILE_BYTES) wanted.push({ full: entry.path, rel });
+    if (rel) blobs.push({ full: entry.path, rel, size: entry.size ?? 0, sha: entry.sha });
   }
+  const scripts = selectScriptFiles(blobs.map((b) => ({ path: b.rel, size: b.size, sha: b.sha })));
+  const scriptPaths = new Set(scripts.paths);
+  const wanted = blobs.filter((b) => !scriptPaths.has(b.rel) && isDiscoverable(b.rel) && b.size <= MAX_FILE_BYTES);
   const limited = wanted.slice(0, MAX_FILES);
-  const fetched = await mapLimit(limited, CONCURRENCY, async (w) => ({ w, result: await fetchText(fetchImpl, rawUrlFor(w.full)) }));
+  const toFetch = [...limited, ...blobs.filter((b) => scriptPaths.has(b.rel)).map((b) => ({ ...b, script: true }))];
+  const fetched = await mapLimit(toFetch, CONCURRENCY, async (w) => ({ w, result: await fetchText(fetchImpl, rawUrlFor(w.full)) }));
   const files = [];
   const errors = [];
   for (const { w, result } of fetched) {
-    if (result.ok) files.push({ path: w.rel, text: result.text });
-    else errors.push(describeFailure(result));
+    if (!result.ok) errors.push(describeFailure(result));
+    else if (w.script) files.push({ path: w.rel, text: capScript(result.text), script: true });
+    else files.push({ path: w.rel, text: result.text });
   }
   const notices = wanted.length > limited.length ? [`Only the first ${MAX_FILES} of ${wanted.length} matching files were scanned.`] : [];
+  if (scripts.truncated) notices.push(partialScriptsNotice());
   return { files, errors, notices };
 }
 

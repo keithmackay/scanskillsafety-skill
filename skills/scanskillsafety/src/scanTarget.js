@@ -1,24 +1,35 @@
-// ABOUTME: Gathers a target's files (local or remote), runs the static scanner on each file
-// ABOUTME: separately so every finding names the file it came from, and formats the result as
-// ABOUTME: text or JSON. rating is null when nothing could be scanned — never "green". Findings with
-// ABOUTME: severity "info" (e.g. install scripts) are listed as notes and never affect the rating.
+// ABOUTME: Gathers a target's files (local or remote) and scans each separately, scripts with the code rules and the rest as
+// ABOUTME: text, so every finding names its file; formats text or JSON. A null rating means nothing could be scanned; notes
+// ABOUTME: (severity "info") never affect the rating.
 "use strict";
 
 const fs = require("fs");
 const path = require("path");
 const { scanText } = require("../lib/scanText");
+const { scanScriptFile } = require("../lib/scanScriptFile");
+const { ratingFromFindings } = require("../lib/ratingFromFindings");
+const { partialScriptsNotice } = require("./scriptsNotice");
 const { SAFETY_SCANNER_NON_GOALS } = require("../lib/nonGoals");
 const { parseTarget } = require("./parseTarget");
-const { discoverLocal, MAX_FILE_BYTES } = require("./discover");
+const { discoverLocal, discoverLocalScripts, MAX_FILE_BYTES } = require("./discover");
 const { gatherGithub, gatherGitHost, gatherRawUrl } = require("./fetchRemote");
 
-const RATING_ORDER = { green: 0, yellow: 1, red: 2 };
+// One file per path: a config that is also loaded as text (hooks.json, .mcp.json) is scanned as a script, at full weight.
+function mergeByPath(textFiles, scriptFiles) {
+  const scripts = new Set(scriptFiles.map((f) => f.path));
+  return [...textFiles.filter((f) => !scripts.has(f.path)), ...scriptFiles];
+}
 
 async function gather(target, fetchImpl) {
   switch (target.kind) {
     case "local-dir": {
-      const files = discoverLocal(target.path);
-      return { files, errors: files.length ? [] : ["no skill/plugin/MCP files (SKILL.md, README.md, plugin manifests, commands, agents, hooks, .mcp.json) found in this directory"], notices: [] };
+      const scripts = discoverLocalScripts(target.path);
+      const files = mergeByPath(discoverLocal(target.path), scripts.files);
+      return {
+        files,
+        errors: files.length ? [] : ["no skill/plugin/MCP files (SKILL.md, README.md, plugin manifests, commands, agents, hooks, .mcp.json) found in this directory"],
+        notices: scripts.truncated ? [partialScriptsNotice()] : [],
+      };
     }
     case "local-file": {
       if (fs.statSync(target.path).size > MAX_FILE_BYTES) return { files: [], errors: ["file is larger than 512 KB"], notices: [] };
@@ -33,13 +44,10 @@ async function gather(target, fetchImpl) {
 
 async function scanTarget(input, { fetchImpl = fetch } = {}) {
   const { files, errors, notices } = await gather(parseTarget(input), fetchImpl);
-  const findings = [];
-  let rating = files.length > 0 ? "green" : null;
-  for (const file of files) {
-    const result = scanText(file.text);
-    if (RATING_ORDER[result.rating] > RATING_ORDER[rating]) rating = result.rating;
-    for (const finding of result.findings) findings.push({ file: file.path, ...finding });
-  }
+  const findings = files.flatMap((file) =>
+    file.script ? scanScriptFile(file.path, file.text) : scanText(file.text).findings.map((finding) => ({ file: file.path, ...finding })),
+  );
+  const rating = files.length > 0 ? ratingFromFindings(findings) : null;
   return {
     target: input,
     rating,

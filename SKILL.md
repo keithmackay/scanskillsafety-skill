@@ -1,6 +1,6 @@
 ---
 name: scanskillsafety
-description: Statically scans a Claude Code skill, plugin, or MCP server for known prompt-injection, exfiltration, obfuscation, secret, and destructive-command patterns before it's installed. Reads the target's own files (SKILL.md, plugin manifests, commands, agents, hooks, .mcp.json) from a GitHub/Gitea URL or a local path, fully offline apart from that host, and never runs the target's code. Use when the user is about to install a skill, plugin, or MCP server from an unfamiliar source, or asks to check, vet, audit, or scan one, or asks whether one is safe to install.
+description: Statically scans a Claude Code skill, plugin, or MCP server for known prompt-injection, exfiltration, obfuscation, secret, and destructive-command patterns before it's installed. Reads the target's own files (SKILL.md, plugin manifests, commands, agents, hooks, .mcp.json, and the scripts its skills and plugins bundle) from a GitHub/Gitea URL or a local path, fully offline apart from that host, and never runs the target's code. Use when the user is about to install a skill, plugin, or MCP server from an unfamiliar source, or asks to check, vet, audit, or scan one, or asks whether one is safe to install.
 ---
 
 # scanskillsafety
@@ -50,7 +50,7 @@ Always name the files that were scanned and pass on any `notices` (for example, 
 
 **2 (red).** List every finding the same way. For each critical finding, say whether the excerpt reads like an instruction aimed at an agent or like documentation quoting the pattern, such as a security tool listing what it detects. Recommend not installing until the user has read the flagged lines. The decision is theirs, so give your assessment and leave it with them.
 
-**Notes (`severity: "info"`).** Whatever the rating, list any notes separately after the findings, for example: "Note: the README pipes `install.sh` from its own repo into a shell (README.md:5). This scan didn't read that script, so read it before running it." Don't let a note change your verdict.
+**Notes (`severity: "info"`).** Whatever the rating, list any notes separately after the findings (code that quotes a pattern as data, such as a guard's list of dangerous commands, shows up as a note), for example: "Note: the README pipes `install.sh` from its own repo into a shell (README.md:5). This scan didn't read that script, so read it before running it." Don't let a note change your verdict.
 
 **3 (could not scan).** Say the scan did not run, quote the `errors`, and suggest a fix: check the URL, link the specific subdirectory, retry later if rate-limited, or clone the repo and scan the local path. Never present this as a clean result.
 
@@ -66,6 +66,18 @@ Always name the files that were scanned and pass on any `notices` (for example, 
 - **Persistence that fetches from the network**: cron, launchd, systemd, startup entries or shell-profile lines that fetch code to run (warning)
 - **Reverse shells** (critical)
 - **Instructions hidden from the user**: "do not tell the user", `<IMPORTANT>`-style blocks (warning)
+- **Known malware campaigns**: names, hosts, addresses and accounts only a published campaign uses, such as ClawHavoc's fake "OpenClawCLI" prerequisite (critical; a note in security write-ups that list them)
+
+It also reads the scripts, hooks and MCP configs in the folders holding a SKILL.md or plugin manifest (up to 200 files, 200 KB of each, 4,000 KB in all; tests, evals and dependencies skipped). Every check above runs on them, and a match quoted only as data in code (a guard's block list, a detection rule) is a note. These checks are made only on code:
+
+- **Code that runs what it downloads** (critical)
+- **Code that runs what it decodes**: eval of base64, PowerShell -EncodedCommand (warning)
+- **Reverse shells in code** (critical)
+- **Credentials or the whole environment sent out** (critical)
+- **Raw IP addresses and throwaway hosts**: paste sites, request relays, Discord attachments, tunnels (warning; critical beside a chmod +x, a startup entry or a send to a relay)
+- **Cryptocurrency miners** (critical)
+- **setuid and setgid** (warning)
+- **Ransom notes** (warning)
 
 ## What it does NOT check
 
@@ -75,4 +87,4 @@ Pass these limits on whenever the result could be read as reassurance:
 - **Rug pulls (a tool's description changing after you already approved it).** It sees one snapshot.
 - **Contextual or workflow-dependent attacks**, such as text that is dangerous only combined with other tools' output.
 - **Novel phrasing not covered by the pattern list.**
-- **Anything outside the scanned text itself**: the publisher's identity, source code beyond the scanned files, and linked pages (links aren't followed).
+- **Anything outside the scanned text itself**: the publisher's identity, an MCP server's own source, files past the limits above, and linked pages (links aren't followed).
