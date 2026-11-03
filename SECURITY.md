@@ -6,7 +6,7 @@ Only the latest release gets fixes. Update with `git pull` in your install folde
 
 ## Reporting a vulnerability
 
-Email Keith MacKay at technofacto@gmail.com with "scanskillsafety security" in the subject. Please don't open a public issue for a vulnerability. Include the version (`node cli.cjs --version`), the target or input that shows the problem, and what happened. A confirmed fix ships in a new release.
+Report it privately through GitHub: [Report a vulnerability](https://github.com/keithmackay/scanskillsafety-skill/security/advisories/new) on the repository's Security tab. If you'd rather not use GitHub, email Keith MacKay at technofacto@gmail.com with "scanskillsafety security" in the subject. Please don't open a public issue for a vulnerability. Include the version (`node cli.cjs --version`), the target or input that shows the problem, and what happened. A confirmed fix ships in a new release.
 
 ## What counts
 

@@ -7,7 +7,7 @@ Check a Claude Code skill, plugin, or MCP server for prompt-injection phrasing, 
 It's the same scanner that produces the safety badge on [findsafeskills](https://findsafeskills.com) listings, packaged to run on your machine with no dependency on that site.
 
 ```
-Version 1.1.0 · MIT license
+Version 1.1.1 · MIT license
 Source:  https://github.com/keithmackay/scanskillsafety-skill
 Author:  Keith MacKay <technofacto@gmail.com>
 Update:  git -C ~/.claude/skills/scanskillsafety pull   (or: gemini extensions update scanskillsafety)
@@ -125,7 +125,7 @@ The skill is auto-discovered from `GEMINI.md` after installation.
 ```text
 scanskillsafety [--json] <local-path-or-repo-url>
 scanskillsafety --help      # usage, options, examples, exit codes
-scanskillsafety --version   # e.g. "scanskillsafety 1.1.0"
+scanskillsafety --version   # e.g. "scanskillsafety 1.1.1"
 ```
 
 An option it doesn't know is refused with exit code `3` rather than ignored. Inside an agent, `/scanskillsafety --help` shows usage and `/scanskillsafety --version` shows the installed version and whether a newer release exists.
