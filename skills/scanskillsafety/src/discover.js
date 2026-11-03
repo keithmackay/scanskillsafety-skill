@@ -1,10 +1,10 @@
-// ABOUTME: Decides which files in a skill/plugin/MCP repo get scanned — the ones Claude Code
-// ABOUTME: actually loads or executes (SKILL.md, plugin manifests, commands, agents, hooks, MCP
-// ABOUTME: config) plus the root README/package.json — and reads them from a local directory.
+// ABOUTME: Decides which files in a skill/plugin/MCP repo get scanned — the ones Claude Code loads (SKILL.md, plugin manifests,
+// ABOUTME: commands, agents, hooks, MCP config, root README/package.json) and the scripts it runs — and reads them locally.
 "use strict";
 
 const fs = require("fs");
 const path = require("path");
+const { selectScriptFiles, MAX_BYTES_PER_FILE } = require("../lib/scriptFiles");
 
 const MAX_DEPTH = 5; // path segments, e.g. plugins/p/skills/x/SKILL.md
 const MAX_FILE_BYTES = 512 * 1024;
@@ -55,4 +55,50 @@ function discoverLocal(root) {
   return found;
 }
 
-module.exports = { isDiscoverable, discoverLocal, MAX_FILE_BYTES, MAX_FILES };
+// Every file in the tree, for choosing scripts: dependencies and git internals are left out, and symlinks are not followed.
+const TREE_SKIP_DIRS = new Set(["node_modules", ".git"]);
+const MAX_TREE_ENTRIES = 100_000;
+
+function listLocalTree(root) {
+  const tree = [];
+  const walk = (dir, rel) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (tree.length >= MAX_TREE_ENTRIES) return;
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!TREE_SKIP_DIRS.has(entry.name)) walk(path.join(dir, entry.name), relPath);
+      } else if (entry.isFile()) {
+        tree.push({ path: relPath, size: fs.statSync(path.join(dir, entry.name)).size });
+      }
+    }
+  };
+  walk(root, "");
+  return tree;
+}
+
+// The first MAX_BYTES_PER_FILE bytes of a file as text, or null for a binary file.
+function readScriptText(full) {
+  const fd = fs.openSync(full, "r");
+  try {
+    const buffer = Buffer.alloc(Math.min(fs.fstatSync(fd).size, MAX_BYTES_PER_FILE));
+    const read = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const bytes = buffer.subarray(0, read);
+    return bytes.includes(0) ? null : bytes.toString("utf-8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// The scripts, hooks and MCP configs in the folders holding a SKILL.md or plugin manifest, chosen and capped as findsafeskills
+// does; truncated when the caps left some out.
+function discoverLocalScripts(root) {
+  const { paths, truncated } = selectScriptFiles(listLocalTree(root));
+  const files = [];
+  for (const relPath of paths) {
+    const text = readScriptText(path.join(root, relPath));
+    if (text !== null) files.push({ path: relPath, text, script: true });
+  }
+  return { files, truncated };
+}
+
+module.exports = { isDiscoverable, discoverLocal, discoverLocalScripts, MAX_FILE_BYTES, MAX_FILES };

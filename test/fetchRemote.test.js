@@ -20,7 +20,7 @@ test("fetchText times out instead of hanging", async () => {
   assert.equal(result.reason, "timeout");
 });
 
-test("GitHub: resolves the default branch, lists the tree, and fetches only discoverable files", async () => {
+test("GitHub: resolves the default branch, lists the tree, and fetches the discoverable files and the scripts of the skill folders", async () => {
   const f = fakeFetch({
     [API]: { body: { default_branch: "trunk" } },
     [`${API}/git/trees/trunk?recursive=1`]: { body: { truncated: false, tree: [
@@ -31,11 +31,28 @@ test("GitHub: resolves the default branch, lists the tree, and fetches only disc
     ] } },
     [`${RAW}/trunk/SKILL.md`]: "root skill",
     [`${RAW}/trunk/skills/x/SKILL.md`]: "nested skill",
+    [`${RAW}/trunk/src/index.js`]: "console.log(1)",
   });
   const result = await gatherGithub({ owner: "o", repo: "r", ref: null, subpath: "", isFile: false }, f);
-  assert.deepEqual(result.files.map((x) => x.path).sort(), ["SKILL.md", "skills/x/SKILL.md"]);
-  assert.ok(!f.calls.some((u) => u.endsWith("src/index.js")));
+  // A SKILL.md at the root makes the whole repository a skill folder, so its scripts are read too.
+  assert.deepEqual(result.files.map((x) => x.path).sort(), ["SKILL.md", "skills/x/SKILL.md", "src/index.js"]);
+  assert.equal(result.files.find((x) => x.path === "src/index.js").script, true);
   assert.deepEqual(result.errors, []);
+});
+
+test("GitHub: also fetches the scripts in folders holding a SKILL.md, marked as scripts, and nothing outside them", async () => {
+  const f = fakeFetch({
+    [`${API}/git/trees/main?recursive=1`]: { body: { tree: [
+      { path: "skills/x/SKILL.md", type: "blob", size: 5, sha: "a" },
+      { path: "skills/x/run.sh", type: "blob", size: 9, sha: "b" },
+      { path: "app/server.js", type: "blob", size: 9, sha: "c" },
+    ] } },
+    [`${RAW}/main/skills/x/SKILL.md`]: "skill",
+    [`${RAW}/main/skills/x/run.sh`]: "echo hi",
+  });
+  const result = await gatherGithub({ owner: "o", repo: "r", ref: "main", subpath: "", isFile: false }, f);
+  assert.deepEqual(result.files.map((x) => [x.path, Boolean(x.script)]).sort(), [["skills/x/SKILL.md", false], ["skills/x/run.sh", true]]);
+  assert.ok(!f.calls.some((u) => u.endsWith("app/server.js")));
 });
 
 test("GitHub: a subdirectory target scans only that subtree, with paths relative to it", async () => {
@@ -81,9 +98,14 @@ test("Gitea/Forgejo: uses the repo API for default branch, tree, and raw files",
       { path: "lib/x.js", type: "blob", size: 2 },
     ] } },
     [`${base}/raw/.claude-plugin/plugin.json?ref=main`]: "{}",
+    [`${base}/raw/lib/x.js?ref=main`]: "1;",
   });
   const result = await gatherGitHost({ origin: "https://git.example.com", owner: "o", repo: "r", ref: null, subpath: "", isFile: false }, f);
-  assert.deepEqual(result.files, [{ path: ".claude-plugin/plugin.json", text: "{}" }]);
+  // The plugin's manifest makes the repository a plugin folder, so its manifest and scripts are scanned as code.
+  assert.deepEqual(result.files, [
+    { path: ".claude-plugin/plugin.json", text: "{}", script: true },
+    { path: "lib/x.js", text: "1;", script: true },
+  ]);
 });
 
 test("raw URL: fetched directly, named by its last path segment", async () => {

@@ -6,8 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-02
+
 ### Added
 
+- Bundled scripts are scanned, as findsafeskills does (scanner version `2026-10-05.11+scripts.9`): the scripts, hooks and MCP configs in the folders holding a SKILL.md or plugin manifest, up to 200 files, 200 KB of each and 4,000 KB in all, with a notice when the limits leave some out. Every check runs on them; a match quoted only as data in code is a note. New checks made only on code: code that runs what it downloads or decodes, reverse shells, credentials or the whole environment sent out, raw IP addresses and throwaway hosts, cryptocurrency miners, setuid, ransom notes. Tested against labeled malicious-skill datasets; see findsafeskills `docs/research/2026-11-01-malicious-sample-test.md`.
+- **Known malware campaigns** (critical): ClawHavoc's fake "OpenClawCLI" prerequisite, its download hosts, C2 address and payload accounts. Security write-ups that list them get a note.
 - New checks, built upstream in findsafeskills (scanner version `2026-10-05.2`):
   - **Fake prerequisites and suspicious downloads**: password-protected archives, paste-site links, download + `chmod +x` + run (warning).
   - **Reverse shells** (critical).

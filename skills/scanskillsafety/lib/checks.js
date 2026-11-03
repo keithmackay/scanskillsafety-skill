@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SAFETY_SCANNER_CHECKS = exports.SAFETY_SCANNER_NOTES = exports.SAFETY_ADVISORY_SIGNALS = exports.SAFETY_GITHUB_SIGNALS = void 0;
+exports.SAFETY_SCRIPT_CHECKS = exports.SAFETY_SCANNER_CHECKS = exports.SAFETY_SCANNER_NOTES = exports.SAFETY_ADVISORY_SIGNALS = exports.SAFETY_GITHUB_SIGNALS = void 0;
 // Findings that do not come from the text scanner. The standalone scanner skill never produces
 // these; they are recorded by the site's nightly GitHub check.
 exports.SAFETY_GITHUB_SIGNALS = [
@@ -111,5 +111,62 @@ exports.SAFETY_SCANNER_CHECKS = [
         severity: "warning",
         explanation: '"Do not tell the user," "without informing the user," and <IMPORTANT>/<system>-style ' +
             "blocks, the usual wrapper for instructions smuggled into an MCP tool description.",
+    },
+    {
+        title: "Known malware campaigns",
+        severity: "critical",
+        explanation: "Names, download hosts, addresses and accounts used only by a published campaign against agent skills, such as " +
+            "ClawHavoc's fake \"OpenClawCLI\" prerequisite (Koi Security, February 2026). Security docs that list them as " +
+            "indicators get a note instead.",
+    },
+];
+// Checks only the script scan makes, on the scripts, hooks and MCP configs a listing bundles (patterns/codeThreats.ts).
+exports.SAFETY_SCRIPT_CHECKS = [
+    {
+        title: "Code that runs what it downloads",
+        severity: "critical",
+        explanation: "eval or exec of text fetched while the script runs (requests.get, urlopen, fetch): what runs can change at any time.",
+    },
+    {
+        title: "Code that runs what it decodes",
+        severity: "warning",
+        explanation: "eval of base64 (Buffer.from, atob), exec of b64decode or a decompressed blob, PowerShell -EncodedCommand: it hides " +
+            "what runs from a reader. Some honest tools do it to ship a launcher, so it is a warning.",
+    },
+    {
+        title: "Reverse shells in code",
+        severity: "critical",
+        explanation: "An interactive shell on a /dev/tcp connection, nc -e, or a connected socket wired to a shell. Port checks on /dev/tcp " +
+            "and redirecting output to a log are not counted.",
+    },
+    {
+        title: "Credentials or the whole environment sent out",
+        severity: "critical",
+        explanation: "A credential file (SSH private keys, cloud and registry logins, .netrc) read in a file that sends data, critical when on " +
+            "one line; every environment variable serialised or piped out in a file that sends data. Handing the environment to a " +
+            "child process is not counted.",
+    },
+    {
+        title: "Raw IP addresses and throwaway hosts",
+        severity: "warning",
+        explanation: "Code that fetches from or sends to a public raw IP address, a paste site, a request relay, a Discord attachment link, " +
+            "transfer.sh or a temporary tunnel. Critical in a file that also makes a download executable, sets a program to start " +
+            "on its own, or sends data to a relay. Private, documentation and DNS-resolver addresses, placeholders, comments and " +
+            "lists of hosts (as security tools keep) are not counted.",
+    },
+    {
+        title: "Cryptocurrency miners",
+        severity: "critical",
+        explanation: "xmrig, stratum mining-pool URLs and similar, outside a scanner's own list of them.",
+    },
+    {
+        title: "setuid and setgid",
+        severity: "warning",
+        explanation: "chmod 4755 or u+s, which runs a program with its owner's rights, usually root. Some installers need it.",
+    },
+    {
+        title: "Ransom notes",
+        severity: "warning",
+        explanation: '"Your files have been encrypted" and similar wording in code.',
     },
 ];

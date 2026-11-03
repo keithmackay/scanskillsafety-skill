@@ -1,7 +1,7 @@
 "use strict";
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { isDiscoverable, discoverLocal } = require("../src/discover");
+const { isDiscoverable, discoverLocal, discoverLocalScripts } = require("../src/discover");
 const { makeTree } = require("./helpers");
 
 test("recognizes the files Claude Code actually loads from a skill/plugin/MCP repo", () => {
@@ -39,4 +39,32 @@ test("discoverLocal skips oversized files and does not follow symlinks", () => {
   fs.symlinkSync(outside, `${root}/skills`);
   const result = discoverLocal(root);
   assert.deepEqual(result.map((f) => f.path), ["SKILL.md"]);
+});
+
+test("discoverLocalScripts reads the scripts, hooks and MCP configs in folders holding a SKILL.md or plugin manifest", () => {
+  const root = makeTree({
+    ".claude/skills/x/SKILL.md": "skill",
+    ".claude/skills/x/scripts/run.sh": "echo hi",
+    ".claude/skills/x/tests/test_run.py": "assert True",
+    ".claude/skills/x/node_modules/dep/index.js": "x",
+    "plugins/p/.claude-plugin/plugin.json": "{}",
+    "plugins/p/hooks/hooks.json": "{}",
+    "plugins/p/lib/util.py": "pass",
+    "app/server.js": "outside any skill",
+  });
+  const { files, truncated } = discoverLocalScripts(root);
+  assert.deepEqual(files.map((f) => f.path).sort(), [
+    ".claude/skills/x/scripts/run.sh",
+    "plugins/p/.claude-plugin/plugin.json",
+    "plugins/p/hooks/hooks.json",
+    "plugins/p/lib/util.py",
+  ]);
+  assert.equal(files.find((f) => f.path === ".claude/skills/x/scripts/run.sh").text, "echo hi");
+  assert.equal(truncated, false);
+});
+
+test("discoverLocalScripts reads only the first 200 KB of a large script, as the site does", () => {
+  const root = makeTree({ "SKILL.md": "s", "big.py": "x".repeat(300 * 1024) });
+  const { files } = discoverLocalScripts(root);
+  assert.equal(files[0].text.length, 200 * 1024);
 });
