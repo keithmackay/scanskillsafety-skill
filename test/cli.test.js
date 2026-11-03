@@ -147,3 +147,36 @@ test("self-scan: this repo's docs quote the patterns as examples, so it rates ye
     assert.ok(Number.isInteger(f.line) && f.excerpt, `${f.file} finding lacks line/excerpt: ${f.detail}`);
   }
 });
+
+test("--help prints usage, every option, examples and what each exit code means, then exits 0", () => {
+  for (const flag of ["--help", "-h"]) {
+    const out = run(flag);
+    assert.equal(out.status, 0);
+    assert.equal(out.stderr, "");
+    for (const expected of ["Usage: scanskillsafety", "--json", "--help", "--version", "Examples:", "https://github.com/", "0  green", "1  yellow", "2  red", "3  could not scan"]) {
+      assert.ok(out.stdout.includes(expected), `${flag} output names ${expected}`);
+    }
+  }
+});
+
+test("--help wins over a target, so nothing is scanned", () => {
+  const out = run("--help", "https://github.com/someone/some-skill");
+  assert.equal(out.status, 0);
+  assert.match(out.stdout, /^Usage: scanskillsafety/);
+});
+
+test("--version prints the name and the version in package.json, then exits 0", () => {
+  const { version } = require("../package.json");
+  for (const flag of ["--version", "-V"]) {
+    const out = run(flag);
+    assert.equal(out.status, 0);
+    assert.equal(out.stdout, `scanskillsafety ${version}\n`);
+  }
+});
+
+test("an option it does not know is refused with the usage line, exit 3", () => {
+  const out = run("--jsn", ".");
+  assert.equal(out.status, 3);
+  assert.match(out.stderr, /unknown option --jsn/);
+  assert.match(out.stderr, /Usage: scanskillsafety/);
+});

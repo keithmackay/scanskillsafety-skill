@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-02
+
+### Added
+
+- The CLI takes `--help`/`-h` (usage, options, examples, exit codes) and `--version`/`-V` (`scanskillsafety <version>`), both exiting 0.
+- `SECURITY.md`: how to report a vulnerability in the scanner, and what counts as one.
+
+### Changed
+
+- The CLI refuses an option it doesn't know (exit 3) instead of ignoring it.
+
 ## [1.1.0] - 2026-11-02
 
 ### Added
