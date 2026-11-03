@@ -39,6 +39,13 @@ Issues:  https://github.com/keithmackay/scanskillsafety-skill/issues
 
 ## Installation
 
+### From the mackayi marketplace (recommended)
+
+```
+/plugin marketplace add keithmackay/mackayi
+/plugin install scanskillsafety@mackayi
+```
+
 ### Prerequisites (all platforms)
 
 - Node.js 18 or newer (uses the built-in `fetch`).
