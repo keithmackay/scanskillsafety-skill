@@ -124,9 +124,11 @@ The skill is auto-discovered from `GEMINI.md` after installation.
 
 ```text
 scanskillsafety [--json] <local-path-or-repo-url>
+scanskillsafety --help      # usage, options, examples, exit codes
+scanskillsafety --version   # e.g. "scanskillsafety 1.1.0"
 ```
 
-Inside an agent, `/scanskillsafety --help` shows usage and `/scanskillsafety --version` shows the installed version and whether a newer release exists.
+An option it doesn't know is refused with exit code `3` rather than ignored. Inside an agent, `/scanskillsafety --help` shows usage and `/scanskillsafety --version` shows the installed version and whether a newer release exists.
 
 Targets it understands:
 
@@ -194,7 +196,7 @@ Rating: RED
 | `0` | Green: no known pattern found |
 | `1` | Yellow: warnings only |
 | `2` | Red: at least one critical finding |
-| `3` | Could not scan (bad target, nothing found, network error). This is **not** a clean result. |
+| `3` | Could not scan (bad arguments, bad target, nothing found, network error). This is **not** a clean result. |
 
 ### JSON output
 

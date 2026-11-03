@@ -62,12 +62,14 @@ FLAGS
   --help        Show this message and exit
   --version     Show installed version and check for updates
   --json        (CLI) Print the result as JSON
+  -h, --help    (CLI) Print the CLI's usage, options, examples and exit codes
+  -V, --version (CLI) Print "scanskillsafety <version>" and exit
 
 EXIT CODES (CLI)
   0  green: no known pattern found
   1  yellow: warnings only
   2  red: at least one critical finding
-  3  could not scan (bad target, nothing found, network error), not a clean result
+  3  could not scan (bad arguments, bad target, nothing found, network error), not a clean result
 
 MORE
   https://github.com/keithmackay/scanskillsafety-skill
