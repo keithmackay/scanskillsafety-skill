@@ -6,6 +6,14 @@ Check a Claude Code skill, plugin, or MCP server for prompt-injection phrasing, 
 
 It's the same scanner that produces the safety badge on [findsafeskills](https://findsafeskills.com) listings, packaged to run on your machine with no dependency on that site.
 
+```
+Version 1.1.0 · MIT license
+Source:  https://github.com/keithmackay/scanskillsafety-skill
+Author:  Keith MacKay <technofacto@gmail.com>
+Update:  git -C ~/.claude/skills/scanskillsafety pull   (or: gemini extensions update scanskillsafety)
+Issues:  https://github.com/keithmackay/scanskillsafety-skill/issues
+```
+
 ## Contents
 
 - [Highlights](#highlights)
