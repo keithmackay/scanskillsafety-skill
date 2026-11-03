@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-02
+
 ### Added
 
 - The CLI takes `--help`/`-h` (usage, options, examples, exit codes) and `--version`/`-V` (`scanskillsafety <version>`), both exiting 0.
