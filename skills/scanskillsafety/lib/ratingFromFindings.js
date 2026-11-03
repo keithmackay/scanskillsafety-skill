@@ -1,9 +1,13 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ratingFromFindings = ratingFromFindings;
-function ratingFromFindings(findings, dismissedCategories = []) {
-    const counted = findings.filter((f) => f.severity !== "info" && !dismissedCategories.includes(f.category));
-    if (counted.some((f) => f.severity === "critical"))
+// ABOUTME: Derives the red/yellow/green rating from a listing's current findings: any critical
+// ABOUTME: finding is red, any warning is yellow, otherwise green. Notes and dismissed findings do not count.
+const applyVerdicts_1 = require("./applyVerdicts");
+// A finding judged less severe after review counts at the severity the review gave it.
+function ratingFromFindings(findings) {
+    const severities = findings.map(applyVerdicts_1.effectiveSeverity);
+    if (severities.includes("critical"))
         return "red";
-    return counted.length > 0 ? "yellow" : "green";
+    return severities.includes("warning") ? "yellow" : "green";
 }
