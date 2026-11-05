@@ -68,7 +68,7 @@ Always name the files that were scanned and pass on any `notices` (for example, 
 - **Instructions hidden from the user**: "do not tell the user", `<IMPORTANT>`-style blocks (warning)
 - **Known malware campaigns**: names, hosts, addresses and accounts only a published campaign uses, such as ClawHavoc's fake "OpenClawCLI" prerequisite (critical; a note in security write-ups that list them)
 
-It also reads the scripts, hooks and MCP configs in the folders holding a SKILL.md or plugin manifest (up to 200 files, 200 KB of each, 4,000 KB in all; tests, evals and dependencies skipped). Every check above runs on them, and a match quoted only as data in code (a guard's block list, a detection rule) is a note. These checks are made only on code:
+It also reads the scripts, hooks and MCP configs in the folders holding a SKILL.md or plugin manifest (up to 200 files, 200 KB of each, 4,000 KB in all; dependencies skipped, and tests and evals too unless a file outside them runs them). Every check above runs on them, and a match quoted only as data in code (a guard's block list, a detection rule) is a note. These checks are made only on code:
 
 - **Code that runs what it downloads** (critical)
 - **Code that runs what it decodes**: eval of base64, PowerShell -EncodedCommand (warning)

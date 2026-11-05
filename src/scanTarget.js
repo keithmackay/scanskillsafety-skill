@@ -8,7 +8,7 @@ const path = require("path");
 const { scanText } = require("../lib/scanText");
 const { scanScriptFile } = require("../lib/scanScriptFile");
 const { ratingFromFindings } = require("../lib/ratingFromFindings");
-const { partialScriptsNotice } = require("./scriptsNotice");
+const { partialScriptsNotice, launchedTestFilesNotice } = require("./scriptsNotice");
 const { SAFETY_SCANNER_NON_GOALS } = require("../lib/nonGoals");
 const { parseTarget } = require("./parseTarget");
 const { discoverLocal, discoverLocalScripts, MAX_FILE_BYTES } = require("./discover");
@@ -23,12 +23,15 @@ function mergeByPath(textFiles, scriptFiles) {
 async function gather(target, fetchImpl) {
   switch (target.kind) {
     case "local-dir": {
-      const scripts = discoverLocalScripts(target.path);
-      const files = mergeByPath(discoverLocal(target.path), scripts.files);
+      const textFiles = discoverLocal(target.path);
+      const scripts = discoverLocalScripts(target.path, textFiles);
+      const files = mergeByPath(textFiles, scripts.files);
+      const notices = scripts.truncated ? [partialScriptsNotice()] : [];
+      if (scripts.launched.length > 0) notices.push(launchedTestFilesNotice(scripts.launched));
       return {
         files,
         errors: files.length ? [] : ["no skill/plugin/MCP files (SKILL.md, README.md, plugin manifests, commands, agents, hooks, .mcp.json) found in this directory"],
-        notices: scripts.truncated ? [partialScriptsNotice()] : [],
+        notices,
       };
     }
     case "local-file": {

@@ -6,4 +6,4 @@ exports.SCRIPT_SCANNER_VERSION = exports.SCANNER_VERSION = void 0;
 exports.SCANNER_VERSION = "2026-10-05.11";
 // The script scan's version: the prose rules' version plus the rules only scripts get (file choice, code adjustments and
 // code-only patterns). Bump the suffix when those change, so every listing's scripts are scanned again.
-exports.SCRIPT_SCANNER_VERSION = `${exports.SCANNER_VERSION}+scripts.9`;
+exports.SCRIPT_SCANNER_VERSION = `${exports.SCANNER_VERSION}+scripts.10`;

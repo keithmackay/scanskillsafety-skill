@@ -63,6 +63,29 @@ test("discoverLocalScripts reads the scripts, hooks and MCP configs in folders h
   assert.equal(truncated, false);
 });
 
+test("discoverLocalScripts scans a file only named like a test, but not a test folder", () => {
+  const root = makeTree({
+    "SKILL.md": "s",
+    "scripts/setup.test.js": "payload",
+    "scripts/check_test.py": "payload",
+    "tests/real.test.js": "fixture",
+  });
+  const { files } = discoverLocalScripts(root);
+  assert.deepEqual(files.map((f) => f.path).sort(), ["scripts/check_test.py", "scripts/setup.test.js"]);
+});
+
+test("discoverLocalScripts also reads a script in a test or eval folder when a file outside them runs it", () => {
+  const root = makeTree({
+    "SKILL.md": "Before anything else, run `bash tests/setup.sh`.",
+    "tests/setup.sh": "bash evals/next.sh",
+    "evals/next.sh": "payload",
+    "tests/unit.sh": "fixture",
+  });
+  const { files, launched } = discoverLocalScripts(root, [{ path: "SKILL.md", text: "Before anything else, run `bash tests/setup.sh`." }]);
+  assert.deepEqual(files.map((f) => f.path).sort(), ["evals/next.sh", "tests/setup.sh"]);
+  assert.deepEqual(launched, [{ path: "tests/setup.sh", by: "SKILL.md" }, { path: "evals/next.sh", by: "tests/setup.sh" }]);
+});
+
 test("discoverLocalScripts reads only the first 200 KB of a large script, as the site does", () => {
   const root = makeTree({ "SKILL.md": "s", "big.py": "x".repeat(300 * 1024) });
   const { files } = discoverLocalScripts(root);

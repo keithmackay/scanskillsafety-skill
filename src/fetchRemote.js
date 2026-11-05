@@ -6,7 +6,8 @@
 
 const { isDiscoverable, MAX_FILE_BYTES, MAX_FILES } = require("./discover");
 const { selectScriptFiles, MAX_BYTES_PER_FILE } = require("../lib/scriptFiles");
-const { partialScriptsNotice } = require("./scriptsNotice");
+const { findLaunchedTestFiles } = require("./launchedTestFiles");
+const { partialScriptsNotice, launchedTestFilesNotice } = require("./scriptsNotice");
 
 // The first MAX_BYTES_PER_FILE bytes of a script's text, as findsafeskills reads it.
 const capScript = (text) => {
@@ -78,7 +79,8 @@ function stripSubpath(fullPath, subpath) {
 }
 
 // Filters a tree listing to discoverable blobs under subpath, and the scripts findsafeskills would read there, then fetches
-// each one. A file that is both (hooks.json, .mcp.json) is fetched once and scanned as a script.
+// each one, then the scripts in test and eval folders that those run. A file that is both (hooks.json, .mcp.json) is fetched
+// once and scanned as a script.
 async function fetchTreeFiles(fetchImpl, tree, subpath, rawUrlFor) {
   const blobs = [];
   for (const entry of tree) {
@@ -99,8 +101,28 @@ async function fetchTreeFiles(fetchImpl, tree, subpath, rawUrlFor) {
     else if (w.script) files.push({ path: w.rel, text: capScript(result.text), script: true });
     else files.push({ path: w.rel, text: result.text });
   }
+  const relTree = blobs.map((b) => ({ path: b.rel, size: b.size }));
+  const fullPath = new Map(blobs.map((b) => [b.rel, b.full]));
+  const launched = [];
+  const tried = new Set();
+  let launchTruncated = false;
+  for (;;) {
+    const round = findLaunchedTestFiles(relTree, files, tried);
+    launchTruncated ||= round.truncated;
+    if (round.launched.length === 0) break;
+    round.launched.forEach((l) => tried.add(l.path));
+    const results = await mapLimit(round.launched, CONCURRENCY, async (l) => ({ l, result: await fetchText(fetchImpl, rawUrlFor(fullPath.get(l.path))) }));
+    for (const { l, result } of results) {
+      if (!result.ok) errors.push(describeFailure(result));
+      else {
+        files.push({ path: l.path, text: capScript(result.text), script: true, launchedBy: l.by });
+        launched.push(l);
+      }
+    }
+  }
   const notices = wanted.length > limited.length ? [`Only the first ${MAX_FILES} of ${wanted.length} matching files were scanned.`] : [];
-  if (scripts.truncated) notices.push(partialScriptsNotice());
+  if (scripts.truncated || launchTruncated) notices.push(partialScriptsNotice());
+  if (launched.length > 0) notices.push(launchedTestFilesNotice(launched));
   return { files, errors, notices };
 }
 

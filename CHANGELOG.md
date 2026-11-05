@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-11-04
+
+### Added
+
+- A script in a test or eval folder (`test`, `tests`, `__tests__`, `evals`) is scanned when a file outside those folders runs it: a SKILL.md, command, agent, hook, config, script, or a `package.json` script other than a test or eval one, whether it names the file by path (`bash tests/setup.sh`, `${CLAUDE_PLUGIN_ROOT}/evals/x.py`), as an import (`require("./tests/util")`) or as a Python module (`python -m tests.setup`). A script so launched can launch another in turn. Each one counts toward the script limits, and a note names it and what runs it. Test files that nothing outside the test folders runs are still skipped, so fixtures that quote the patterns on purpose don't raise false alarms. This is the CLI's own file selection; findsafeskills doesn't do it yet.
+
+### Changed
+
+- Script scanner version `2026-10-05.11+scripts.10` (lib from findsafeskills `fc2b62e`): a script in a skill or plugin folder is scanned even when its name looks like a test (`*.test.js`, `*_test.py`, `test_*.py`), because attackers hide payloads in such names. Test and eval folders are still skipped.
+
 ## [1.1.1] - 2026-11-02
 
 ### Added
