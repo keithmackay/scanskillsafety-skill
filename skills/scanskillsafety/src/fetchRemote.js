@@ -6,7 +6,7 @@
 
 const { isDiscoverable, MAX_FILE_BYTES, MAX_FILES } = require("./discover");
 const { selectScriptFiles, MAX_BYTES_PER_FILE } = require("../lib/scriptFiles");
-const { findLaunchedTestFiles } = require("./launchedTestFiles");
+const { findLaunchedTestFiles } = require("../lib/launchedTestFiles");
 const { partialScriptsNotice, launchedTestFilesNotice } = require("./scriptsNotice");
 
 // The first MAX_BYTES_PER_FILE bytes of a script's text, as findsafeskills reads it.

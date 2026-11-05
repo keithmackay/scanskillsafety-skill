@@ -5,7 +5,7 @@
 const fs = require("fs");
 const path = require("path");
 const { selectScriptFiles, MAX_BYTES_PER_FILE } = require("../lib/scriptFiles");
-const { findLaunchedTestFiles } = require("./launchedTestFiles");
+const { findLaunchedTestFiles } = require("../lib/launchedTestFiles");
 
 const MAX_DEPTH = 5; // path segments, e.g. plugins/p/skills/x/SKILL.md
 const MAX_FILE_BYTES = 512 * 1024;

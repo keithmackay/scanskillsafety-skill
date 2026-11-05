@@ -7,7 +7,7 @@ Check a Claude Code skill, plugin, or MCP server for prompt-injection phrasing, 
 It's the same scanner that produces the safety badge on [findsafeskills](https://findsafeskills.com) listings, packaged to run on your machine with no dependency on that site.
 
 ```
-Version 1.1.2 · MIT license
+Version 1.1.3 · MIT license
 Source:  https://github.com/keithmackay/scanskillsafety-skill
 Author:  Keith MacKay <technofacto@gmail.com>
 Update:  git -C ~/.claude/skills/scanskillsafety pull   (or: gemini extensions update scanskillsafety)
@@ -125,7 +125,7 @@ The skill is auto-discovered from `GEMINI.md` after installation.
 ```text
 scanskillsafety [--json] <local-path-or-repo-url>
 scanskillsafety --help      # usage, options, examples, exit codes
-scanskillsafety --version   # e.g. "scanskillsafety 1.1.2"
+scanskillsafety --version   # e.g. "scanskillsafety 1.1.3"
 ```
 
 An option it doesn't know is refused with exit code `3` rather than ignored. Inside an agent, `/scanskillsafety --help` shows usage and `/scanskillsafety --version` shows the installed version and whether a newer release exists.
@@ -219,7 +219,7 @@ Rating: RED
 
 ### In bundled scripts
 
-For a skill or plugin it also reads the scripts, hooks and MCP configs in the folders that hold a SKILL.md or plugin manifest: shell, Python, JavaScript, TypeScript, PowerShell, batch and Ruby files, `hooks.json`, `plugin.json` and `.mcp.json`. Configs are read first; dependencies and build output are skipped; a file copied into several folders is read once. Test and eval folders (`test`, `tests`, `__tests__`, `evals`) are skipped too, unless a file outside them runs a script inside them (a SKILL.md, command, hook, script, or a `package.json` script other than a test or eval one): then that script is read, and so is any test script it runs in turn, and the output names each one and what runs it. A folder name is no place to hide a payload. It reads up to 200 files, 200 KB of each and 4,000 KB in all, the same limits findsafeskills uses, and says so when that leaves some out.
+For a skill or plugin it also reads the scripts, hooks and MCP configs in the folders that hold a SKILL.md or plugin manifest: shell, Python, JavaScript, TypeScript, PowerShell, batch and Ruby files, `hooks.json`, `plugin.json` and `.mcp.json`. Configs are read first; dependencies and build output are skipped; a file copied into several folders is read once. Test and eval folders (`test`, `tests`, `__tests__`, `evals`) are skipped too, unless a file outside them runs a script inside them: a SKILL.md, command, hook, script or config, or a `package.json` script that isn't a test, eval, benchmark or smoke one. Running means a command (`bash tests/setup.sh`, `./tests/setup.sh`, `python -m tests.setup`), a call or an import; a mention in prose, a comment, a test runner (`pytest`, `vitest`, …) or a file named like a test doesn't count. That script is then read, and so is any test script it runs in turn, and the output names each one and what runs it. findsafeskills' nightly scan uses the same rules. A folder name is no place to hide a payload. It reads up to 200 files, 200 KB of each and 4,000 KB in all, the same limits findsafeskills uses, and says so when that leaves some out.
 
 Every check above runs on these files. Code quotes the patterns it guards against, so in a script a match that sits only inside a string, regex or comment is a note, unless the file hands strings to a shell or interpreter. Hook and MCP configs and secrets keep full weight. These checks are made only on code:
 
