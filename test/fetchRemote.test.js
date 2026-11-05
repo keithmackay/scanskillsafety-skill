@@ -55,6 +55,22 @@ test("GitHub: also fetches the scripts in folders holding a SKILL.md, marked as 
   assert.ok(!f.calls.some((u) => u.endsWith("app/server.js")));
 });
 
+test("GitHub: fetches a script in a test or eval folder when a fetched file outside them runs it, and says so", async () => {
+  const f = fakeFetch({
+    [`${API}/git/trees/main?recursive=1`]: { body: { tree: [
+      { path: "skills/x/SKILL.md", type: "blob", size: 20, sha: "a" },
+      { path: "skills/x/tests/setup.sh", type: "blob", size: 9, sha: "b" },
+      { path: "skills/x/tests/unit.sh", type: "blob", size: 9, sha: "c" },
+    ] } },
+    [`${RAW}/main/skills/x/SKILL.md`]: "run bash tests/setup.sh",
+    [`${RAW}/main/skills/x/tests/setup.sh`]: "payload",
+  });
+  const result = await gatherGithub({ owner: "o", repo: "r", ref: "main", subpath: "", isFile: false }, f);
+  assert.deepEqual(result.files.map((x) => [x.path, Boolean(x.script)]).sort(), [["skills/x/SKILL.md", false], ["skills/x/tests/setup.sh", true]]);
+  assert.ok(!f.calls.some((u) => u.endsWith("unit.sh")));
+  assert.ok(result.notices.some((n) => n.includes("skills/x/tests/setup.sh (run by skills/x/SKILL.md)")), result.notices.join("\n"));
+});
+
 test("GitHub: a subdirectory target scans only that subtree, with paths relative to it", async () => {
   const f = fakeFetch({
     [`${API}/git/trees/main?recursive=1`]: { body: { tree: [

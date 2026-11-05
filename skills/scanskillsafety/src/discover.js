@@ -5,6 +5,7 @@
 const fs = require("fs");
 const path = require("path");
 const { selectScriptFiles, MAX_BYTES_PER_FILE } = require("../lib/scriptFiles");
+const { findLaunchedTestFiles } = require("./launchedTestFiles");
 
 const MAX_DEPTH = 5; // path segments, e.g. plugins/p/skills/x/SKILL.md
 const MAX_FILE_BYTES = 512 * 1024;
@@ -90,15 +91,31 @@ function readScriptText(full) {
 }
 
 // The scripts, hooks and MCP configs in the folders holding a SKILL.md or plugin manifest, chosen and capped as findsafeskills
-// does; truncated when the caps left some out.
-function discoverLocalScripts(root) {
-  const { paths, truncated } = selectScriptFiles(listLocalTree(root));
+// does, then the scripts in test and eval folders that those or textFiles run (launched); truncated when the caps left some out.
+function discoverLocalScripts(root, textFiles = []) {
+  const tree = listLocalTree(root);
+  const { paths, truncated } = selectScriptFiles(tree);
   const files = [];
   for (const relPath of paths) {
     const text = readScriptText(path.join(root, relPath));
     if (text !== null) files.push({ path: relPath, text, script: true });
   }
-  return { files, truncated };
+  const launched = [];
+  const tried = new Set();
+  let launchTruncated = false;
+  for (;;) {
+    const round = findLaunchedTestFiles(tree, [...textFiles, ...files], tried);
+    launchTruncated ||= round.truncated;
+    if (round.launched.length === 0) break;
+    for (const { path: relPath, by } of round.launched) {
+      tried.add(relPath);
+      const text = readScriptText(path.join(root, relPath));
+      if (text === null) continue;
+      files.push({ path: relPath, text, script: true, launchedBy: by });
+      launched.push({ path: relPath, by });
+    }
+  }
+  return { files, truncated: truncated || launchTruncated, launched };
 }
 
 module.exports = { isDiscoverable, discoverLocal, discoverLocalScripts, MAX_FILE_BYTES, MAX_FILES };

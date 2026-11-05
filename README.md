@@ -219,7 +219,7 @@ Rating: RED
 
 ### In bundled scripts
 
-For a skill or plugin it also reads the scripts, hooks and MCP configs in the folders that hold a SKILL.md or plugin manifest: shell, Python, JavaScript, TypeScript, PowerShell, batch and Ruby files, `hooks.json`, `plugin.json` and `.mcp.json`. Configs are read first; tests, evals, dependencies and build output are skipped; a file copied into several folders is read once. It reads up to 200 files, 200 KB of each and 4,000 KB in all, the same limits findsafeskills uses, and says so when that leaves some out.
+For a skill or plugin it also reads the scripts, hooks and MCP configs in the folders that hold a SKILL.md or plugin manifest: shell, Python, JavaScript, TypeScript, PowerShell, batch and Ruby files, `hooks.json`, `plugin.json` and `.mcp.json`. Configs are read first; dependencies and build output are skipped; a file copied into several folders is read once. Test and eval folders (`test`, `tests`, `__tests__`, `evals`) are skipped too, unless a file outside them runs a script inside them (a SKILL.md, command, hook, script, or a `package.json` script other than a test or eval one): then that script is read, and so is any test script it runs in turn, and the output names each one and what runs it. A folder name is no place to hide a payload. It reads up to 200 files, 200 KB of each and 4,000 KB in all, the same limits findsafeskills uses, and says so when that leaves some out.
 
 Every check above runs on these files. Code quotes the patterns it guards against, so in a script a match that sits only inside a string, regex or comment is a note, unless the file hands strings to a shell or interpreter. Hook and MCP configs and secrets keep full weight. These checks are made only on code:
 
