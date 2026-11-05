@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Launched test and eval scripts are chosen by the scanner shared with findsafeskills (`lib/launchedTestFiles.js`, script scanner `2026-10-05.11+scripts.11`, lib from findsafeskills `af71b2d`), which now does it in its nightly scan too. A file has to run the script, not just name it. That means a command (after an interpreter such as `bash` or `python -m`, or `./`/`${VAR}/` at a command's start), a call or an import. A mention in prose, a code comment, a test runner (`pytest`, `vitest`, `npm test`, …), a test-named file, or a `package.json` script named for tests, evals, benchmarks, smoke runs or QA doesn't count. A reference must point at the test folder relative to the referring file, or name its parent folder, so a same-named test in a sibling folder isn't read. Tried on the 200 most-starred skill and plugin listings: 14 launched test files read, none with a warning or critical finding.
+
 ## [1.1.2] - 2026-11-04
 
 ### Added
