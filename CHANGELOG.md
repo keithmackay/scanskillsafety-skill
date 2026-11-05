@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-11-04
+
+### Changed
+
+- Script scanner version `2026-10-05.11+scripts.10` (lib from findsafeskills `fc2b62e`): a script in a skill or plugin folder is scanned even when its name looks like a test (`*.test.js`, `*_test.py`, `test_*.py`), because attackers hide payloads in such names. Test and eval folders are still skipped.
+
 ## [1.1.1] - 2026-11-02
 
 ### Added
