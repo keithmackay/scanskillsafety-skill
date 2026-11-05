@@ -63,6 +63,17 @@ test("discoverLocalScripts reads the scripts, hooks and MCP configs in folders h
   assert.equal(truncated, false);
 });
 
+test("discoverLocalScripts scans a file only named like a test, but not a test folder", () => {
+  const root = makeTree({
+    "SKILL.md": "s",
+    "scripts/setup.test.js": "payload",
+    "scripts/check_test.py": "payload",
+    "tests/real.test.js": "fixture",
+  });
+  const { files } = discoverLocalScripts(root);
+  assert.deepEqual(files.map((f) => f.path).sort(), ["scripts/check_test.py", "scripts/setup.test.js"]);
+});
+
 test("discoverLocalScripts reads only the first 200 KB of a large script, as the site does", () => {
   const root = makeTree({ "SKILL.md": "s", "big.py": "x".repeat(300 * 1024) });
   const { files } = discoverLocalScripts(root);

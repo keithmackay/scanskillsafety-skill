@@ -11,9 +11,9 @@ exports.MAX_FILES_PER_LISTING = 200;
 const SCRIPT_EXTENSION = /\.(sh|bash|zsh|py|js|mjs|cjs|ts|ps1|bat|cmd|rb)$/i;
 const MINIFIED = /\.min\.js$/i;
 const CONFIG_NAMES = new Set(["hooks.json", "plugin.json", ".mcp.json"]);
-// Dependencies and build output, and tests and evals, whose fixtures quote the very patterns the scan looks for.
+// Dependencies and build output, and test and eval folders, whose fixtures quote the very patterns the scan looks for on purpose.
+// A file only named like a test is scanned: attackers hide payloads in such names.
 const SKIPPED_FOLDERS = new Set(["node_modules", "vendor", "dist", "build", "test", "tests", "__tests__", "evals"]);
-const TEST_FILE = /(\.(test|spec)\.[^.]+$)|(_test\.[^.]+$)|(^test_.*\.py$)/i;
 const parentOf = (path) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
 const baseName = (path) => path.slice(path.lastIndexOf("/") + 1);
 // The folders a skill or plugin lives in: those holding a SKILL.md, the folder above a .claude-plugin/plugin.json, and the
@@ -39,7 +39,7 @@ function isRunnable(path) {
     const name = baseName(path);
     if (CONFIG_NAMES.has(name))
         return true;
-    return SCRIPT_EXTENSION.test(name) && !MINIFIED.test(name) && !TEST_FILE.test(name);
+    return SCRIPT_EXTENSION.test(name) && !MINIFIED.test(name);
 }
 const configFirst = (f) => (CONFIG_NAMES.has(baseName(f.path)) ? 0 : 1);
 function selectScriptFiles(tree) {
