@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-07
+
 ### Added
 
 - Two rounds of rules from findsafeskills (script scanner `2026-10-05.13+scripts.13`, lib from findsafeskills `0256cbc`): the first covers what other skill scanners detect, the second what was still missed in MalSkillBench, a set of 3,944 malicious and 4,000 harmless skills. The second round raises the share of malicious skills flagged there from 40% to 55%, mostly ones written by an AI, with the harmless share unchanged at 1.9%. Each was then tried on findsafeskills' catalog (912 listings' scripts, 30,000 READMEs) and narrowed until it raised no false reds there.
