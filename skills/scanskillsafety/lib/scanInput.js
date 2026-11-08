@@ -36,7 +36,7 @@ function findFencedLines(rawLines) {
     });
     return { fencedLines, fenceIntros };
 }
-const INVISIBLE_CHARS = /[\u200B\u200C\u200D\u2060\uFEFF\u202A-\u202E\u2066-\u2069]|[\u{E0000}-\u{E007F}]/gu;
+const INVISIBLE_CHARS = /[\u200B-\u200D\u2060\u2062-\u2064\uFEFF\u202A-\u202E\u2066-\u2069]|[\u{E0000}-\u{E007F}]/gu;
 const EXCERPT_MAX = 160;
 const MAX_FINDINGS_PER_CATEGORY = 20;
 function prepareScanInput(raw) {

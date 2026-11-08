@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Two rounds of rules from findsafeskills (script scanner `2026-10-05.13+scripts.13`, lib from findsafeskills `0256cbc`): the first covers what other skill scanners detect, the second what was still missed in MalSkillBench, a set of 3,944 malicious and 4,000 harmless skills. The second round raises the share of malicious skills flagged there from 40% to 55%, mostly ones written by an AI, with the harmless share unchanged at 1.9%. Each was then tried on findsafeskills' catalog (912 listings' scripts, 30,000 READMEs) and narrowed until it raised no false reds there.
+  - **Requests for secrets** (critical): text telling the agent to read credential files or "all API keys" and send them out or keep it from the user.
+  - **Code in code blocks**: the code-only checks run over each fenced code block of a SKILL.md or README, so a skill can't carry its payload in a block instead of a script. Hosts, links and git hooks there are left to the prose checks, since docs show them as install steps; a block introduced as an example stays below critical.
+  - **The machine's identity sent out** (warning), **Coding agents with permission prompts off** (critical beside credentials or wallets, otherwise a note), **Links to a Windows program** (warning, GitHub release assets excepted), **Programs set to start on their own** (shell start-up files, the Windows Startup folder, global git hooks, Python `.pth` files; warning) and **Ransomware** (ransom notes, and files encrypted across folders with the originals removed; warning).
+  - Instruction overrides also cover telling the agent to disregard or supersede its earlier directives, to work with its safety guardrails off, or to output its system prompt.
+  - Orders to the agent inside an HTML comment are hidden instructions (warning).
+  - Penetration testers' callback catchers (oastify, Burp Collaborator, the `oast.*` hosts, dnslog.cn, ceye.io, requestrepo.com) count as relay domains. Images whose address carries data are critical; Discord or Telegram bots with their token written in, and DNS lookups of names built from data, are warnings.
+  - Code that runs what it downloads or decodes covers Python's `exec` of a name set from a download, decoding or decryption, hex and character codes, reversed text and obfuscator output. The whole environment copied in a file that sends data is a warning. Wallets, the macOS keychain and browser password stores count as credential files.
+  - A downloaded script piped to a shell as a step the agent must take before the skill works, and downloads from link shorteners or anonymous file hosts, are warnings.
+
+### Changed
+
+- Invisible characters are a warning at three or more, or a run of three after visible text, rather than at one.
+- **setuid and setgid** is now **setuid**: setgid alone (`2775`, `g+s`) is how shared folders keep their group and isn't reported, nor is a `0o7777` permission mask.
+
 ## [1.1.3] - 2026-11-05
 
 ### Changed

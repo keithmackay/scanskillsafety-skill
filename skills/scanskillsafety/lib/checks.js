@@ -51,7 +51,16 @@ exports.SAFETY_SCANNER_CHECKS = [
             "phrasing aimed at an agent reading a skill's own instructions rather than at a human reader. " +
             "When the phrase is quoted, in code, in a table, or named as an example (security tools and " +
             "test suites quote it constantly) it is a warning instead, never silent; inside a hidden HTML " +
-            "comment or invisible text it stays critical.",
+            "comment or invisible text it stays critical. Text telling the agent to disregard or supersede its earlier " +
+            "directives, to work with its safety guardrails switched off, or to output its system prompt is critical too, " +
+            "and only a note when quoted or named as an example.",
+    },
+    {
+        title: "Requests for secrets",
+        severity: "critical",
+        explanation: "Text telling the agent to read credential files (SSH keys, cloud logins, wallets, browser password stores) or " +
+            "\"all API keys\" and to send them somewhere or keep it from the user. A bare instruction to read one is how setup " +
+            "docs read and is not reported; quoted whole or shown in a table, it is a warning.",
     },
     {
         title: "Exfiltration-looking URLs",
@@ -60,12 +69,16 @@ exports.SAFETY_SCANNER_CHECKS = [
             "to, which have no legitimate reason to appear in a skill's own instructions (a domain only " +
             "named in prose or a comparison is a warning), or a raw IP-literal URL " +
             "paired with curl/wget on the same line (flagged as a warning, since that case is " +
-            "genuinely ambiguous; loopback addresses are ignored).",
+            "genuinely ambiguous; loopback addresses are ignored). Penetration testers' callback catchers (oastify, Burp " +
+            "Collaborator, the oast.* hosts) count as relays. An image whose address carries the conversation or secrets when " +
+            "it loads is critical; a Discord webhook or Telegram bot with its token written in, and a DNS lookup of a name " +
+            "built from data, are warnings.",
     },
     {
         title: "Obfuscation",
         severity: "warning",
-        explanation: "Long base64-looking blobs, invisible/zero-width characters, homoglyphs substituted into " +
+        explanation: "Long base64-looking blobs, invisible/zero-width characters (three or more touching letters, or a run of three " +
+            "after visible text, which can spell out hidden text), homoglyphs substituted into " +
             "an otherwise-Latin word, and bidirectional-override characters — common tricks for hiding " +
             "text from a casual reader or a naive scanner. Text hidden in invisible Unicode Tag " +
             "characters is decoded and scanned like any other text; a run of 10 or more is critical.",
@@ -91,7 +104,8 @@ exports.SAFETY_SCANNER_CHECKS = [
         severity: "warning",
         explanation: "A password-protected archive to download and run, commands or uploads staged on a paste " +
             "site (rentry, pastebin, glot.io, …), or a one-line download + chmod +x + run — the shape of " +
-            "the ClawHavoc campaign's fake \"prerequisite\" installers.",
+            "the ClawHavoc campaign's fake \"prerequisite\" installers. Downloads from anonymous file hosts, and a " +
+            "downloaded script piped to a shell as a step the agent must take before the skill works, are warnings too.",
     },
     {
         title: "Persistence that fetches from the network",
@@ -110,7 +124,16 @@ exports.SAFETY_SCANNER_CHECKS = [
         title: "Instructions hidden from the user",
         severity: "warning",
         explanation: '"Do not tell the user," "without informing the user," and <IMPORTANT>/<system>-style ' +
-            "blocks, the usual wrapper for instructions smuggled into an MCP tool description.",
+            "blocks, the usual wrapper for instructions smuggled into an MCP tool description, and orders to the agent in " +
+            "an HTML comment, which the rendered page hides.",
+    },
+    {
+        title: "Code in code blocks",
+        severity: "critical",
+        explanation: "The script checks below also run over each fenced code block of a SKILL.md or README, where a skill can carry its " +
+            "payload without shipping a script. Hosts, addresses, links to programs, credential paths and global git hooks are " +
+            "left to the checks above there, as docs show them as examples and install steps; a signature only quoted as data " +
+            "is a note, and a block a doc introduces as an example stays below critical.",
     },
     {
         title: "Known malware campaigns",
@@ -125,13 +148,16 @@ exports.SAFETY_SCRIPT_CHECKS = [
     {
         title: "Code that runs what it downloads",
         severity: "critical",
-        explanation: "eval or exec of text fetched while the script runs (requests.get, urlopen, fetch): what runs can change at any time.",
+        explanation: "eval or exec of text fetched while the script runs (requests.get, urlopen, fetch), or Python's exec of a name set " +
+            "from a download: what runs can change at any time.",
     },
     {
         title: "Code that runs what it decodes",
         severity: "warning",
-        explanation: "eval of base64 (Buffer.from, atob), exec of b64decode or a decompressed blob, PowerShell -EncodedCommand: it hides " +
-            "what runs from a reader. Some honest tools do it to ship a launcher, so it is a warning.",
+        explanation: "eval of base64 (Buffer.from, atob), exec of b64decode or a decompressed blob, hex, character codes or reversed " +
+            "text, exec of a name set from a decoding or decryption, PowerShell -EncodedCommand, and JavaScript obfuscator " +
+            "output: it hides what runs from a reader. Long hex strings are decoded and checked like base64. Some honest tools " +
+            "do it to ship a launcher, so it is a warning.",
     },
     {
         title: "Reverse shells in code",
@@ -142,15 +168,34 @@ exports.SAFETY_SCRIPT_CHECKS = [
     {
         title: "Credentials or the whole environment sent out",
         severity: "critical",
-        explanation: "A credential file (SSH private keys, cloud and registry logins, .netrc) read in a file that sends data, critical when on " +
-            "one line; every environment variable serialised or piped out in a file that sends data. Handing the environment to a " +
-            "child process is not counted.",
+        explanation: "A credential file (SSH private keys, cloud and registry logins, .netrc, wallets, the macOS keychain, browser " +
+            "password and cookie stores) read in a file that sends data, critical when on one line; every environment variable " +
+            "serialised or piped out in a file that sends data. The whole environment copied or iterated in such a file is a " +
+            "warning. Handing the environment to a child process, or reading named variables, is not counted.",
+    },
+    {
+        title: "The machine's identity sent out",
+        severity: "warning",
+        explanation: "Two of the machine's name, its user name and its system details collected in a file that sends data: how stealers report a new victim.",
+    },
+    {
+        title: "Coding agents with permission prompts off",
+        severity: "critical",
+        explanation: "Claude Code, Gemini CLI or Codex started with their permission prompts turned off, in a file that names credentials, " +
+            "keys or wallets (how the s1ngularity attack stole them). Without that, autonomous-loop skills do it for ordinary " +
+            "work, so it is a note.",
+    },
+    {
+        title: "Links to a Windows program",
+        severity: "warning",
+        explanation: "A link to an .exe, .scr, .msi, .bat, .vbs, .hta, .dll or .jar in code, how droppers fetch their payload. A project's " +
+            "GitHub release assets and a request posted to a server's .exe endpoint are not counted; some installers still do it.",
     },
     {
         title: "Raw IP addresses and throwaway hosts",
         severity: "warning",
         explanation: "Code that fetches from or sends to a public raw IP address, a paste site, a request relay, a Discord attachment link, " +
-            "transfer.sh or a temporary tunnel. Critical in a file that also makes a download executable, sets a program to start " +
+            "transfer.sh or a temporary tunnel, or fetches from a link shortener or anonymous file host. Critical in a file that also makes a download executable, sets a program to start " +
             "on its own, or sends data to a relay. Private, documentation and DNS-resolver addresses, placeholders, comments and " +
             "lists of hosts (as security tools keep) are not counted.",
     },
@@ -160,13 +205,23 @@ exports.SAFETY_SCRIPT_CHECKS = [
         explanation: "xmrig, stratum mining-pool URLs and similar, outside a scanner's own list of them.",
     },
     {
-        title: "setuid and setgid",
+        title: "setuid",
         severity: "warning",
-        explanation: "chmod 4755 or u+s, which runs a program with its owner's rights, usually root. Some installers need it.",
+        explanation: "chmod 4755 or u+s, a stat.S_ISUID flag or a setuid mode passed to chmod, which runs a program with its owner's " +
+            "rights, usually root. Some installers need it. setgid alone (2775, g+s) is how shared folders keep their group and " +
+            "is not counted.",
     },
     {
-        title: "Ransom notes",
+        title: "Programs set to start on their own",
         severity: "warning",
-        explanation: '"Your files have been encrypted" and similar wording in code.',
+        explanation: "A command (not a variable, alias, sourced file or condition) added to a shell start-up file, a file put in the " +
+            "Windows Startup folder, a git template or hooks folder set for every repository, and an import line in a Python " +
+            ".pth file, which runs every time Python starts.",
+    },
+    {
+        title: "Ransomware",
+        severity: "warning",
+        explanation: '"Your files have been encrypted" and similar wording in code, and files encrypted across folders with the ' +
+            "originals then removed or renamed.",
     },
 ];

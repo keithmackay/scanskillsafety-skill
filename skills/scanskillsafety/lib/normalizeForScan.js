@@ -8,7 +8,7 @@ exports.revealTagText = revealTagText;
 exports.normalizeForScan = normalizeForScan;
 // Characters with no visible glyph that attackers insert mid-word/mid-phrase specifically to
 // break up a string a scanner would otherwise match verbatim.
-const INVISIBLE_CHARS = /[​‌‍⁠﻿]/g;
+const INVISIBLE_CHARS = /[\u200B-\u200D\u2060\u2062-\u2064\uFEFF]/g;
 // A small, common set of Cyrillic/Greek look-alikes for Latin letters — enough to catch the
 // typical "аdmin" (Cyrillic а) trick without pulling in a full confusables table.
 const HOMOGLYPH_MAP = {
@@ -66,7 +66,9 @@ function normalizeToken(token) {
 function normalizeForScan(input) {
     // Only invisible characters touching a letter count: that's the word-splitting trick. Emoji
     // joiners (👨‍👩) and stray zero-width spaces at line starts are formatting, not evasion.
-    const invisibleCharCount = (input.match(/(?<=\p{L})[\u200B\u200C\u200D\u2060\uFEFF]|[\u200B\u200C\u200D\u2060\uFEFF](?=\p{L})/gu) ?? []).length;
+    const invisibleCharCount = (input.match(/(?<=\p{L})[\u200B-\u200D\u2060\u2062-\u2064\uFEFF]|[\u200B-\u200D\u2060\u2062-\u2064\uFEFF](?=\p{L})/gu) ?? []).length;
+    // A run of them after visible text spells out hidden text in binary, one character per bit.
+    const invisibleRunCount = (input.match(/(?<=[^\s\u200B-\u200D\u2060\u2062-\u2064\uFEFF])[\u200B-\u200D\u2060\u2062-\u2064\uFEFF]{3,}/gu) ?? []).length;
     const bidiControlCount = (input.match(BIDI_CONTROLS) ?? []).length;
     const revealed = revealTagText(input);
     const stripped = revealed.text.replace(INVISIBLE_CHARS, "").replace(BIDI_CONTROLS, "");
@@ -89,5 +91,5 @@ function normalizeForScan(input) {
         }
     });
     const text = lines.map((l) => l.text).join(" ");
-    return { text, lines, invisibleCharCount, homoglyphCount, tagCharCount: revealed.tagCharCount, bidiControlCount };
+    return { text, lines, invisibleCharCount, invisibleRunCount, homoglyphCount, tagCharCount: revealed.tagCharCount, bidiControlCount };
 }
