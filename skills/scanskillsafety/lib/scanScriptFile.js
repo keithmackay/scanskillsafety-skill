@@ -11,6 +11,7 @@ const codeFindings_1 = require("./codeFindings");
 const quotedSignatures_1 = require("./quotedSignatures");
 const scriptFiles_1 = require("./scriptFiles");
 const secretRequests_1 = require("./patterns/secretRequests");
+const launchedTestFiles_1 = require("./launchedTestFiles");
 const INSTALL_SCRIPTS = ["preinstall", "install", "postinstall", "prepare"];
 // The install-time scripts of a package.json, one "name: command" a line; empty when there are none or it is not JSON.
 function installScriptsOf(packageJson) {
@@ -28,6 +29,10 @@ function installScriptsOf(packageJson) {
         .map((name) => `${name}: ${named[name]}`)
         .join("\n");
 }
+// Tests, fixtures and examples hold sample keys; a real one there leaks its publisher's account, not the user's, so it is a warning.
+const SAMPLE_FOLDER = /(^|\/)(tests?|__tests__|evals?|testdata|fixtures?|examples?|demo)\//i;
+const isSampleFile = (path) => SAMPLE_FOLDER.test(path) || launchedTestFiles_1.TEST_FILE_NAME.test(path.slice(path.lastIndexOf("/") + 1));
+const secretsAsWarnings = (path, findings) => isSampleFile(path) ? findings.map((f) => (f.category === "secrets" && f.severity === "critical" ? { ...f, severity: "warning" } : f)) : findings;
 const isPackageJson = (path) => path === "package.json" || path.endsWith("/package.json");
 // The prose rules on code, less the one reading instructions to the agent for credentials and the code rules on fenced blocks:
 // the code rules judge a script's reads and run over the whole file.
@@ -57,6 +62,6 @@ function scanScriptFile(path, text) {
     if ((0, scriptFiles_1.isConfig)(path))
         return (0, codeFindings_1.oneBase64BlobPerFile)([...prose, ...codeThreats(text), ...decoded]).map((f) => ({ ...f, file: path }));
     const lines = text.split(/\r?\n/);
-    const findings = [...(0, codeFindings_1.adjustForCode)(path, prose, lines), ...(0, quotedSignatures_1.adjustCodeThreats)(path, codeThreats(text), lines), ...decoded, ...pthStartupCode(path, text)];
-    return (0, codeFindings_1.oneBase64BlobPerFile)(findings).map((f) => ({ ...f, file: path }));
+    const findings = [...(0, codeFindings_1.adjustForCode)(path, prose, lines), ...(0, quotedSignatures_1.quotedExfiltrationAsWarnings)(path, (0, quotedSignatures_1.adjustCodeThreats)(path, codeThreats(text), lines), lines), ...decoded, ...pthStartupCode(path, text)];
+    return secretsAsWarnings(path, (0, codeFindings_1.oneBase64BlobPerFile)(findings)).map((f) => ({ ...f, file: path }));
 }

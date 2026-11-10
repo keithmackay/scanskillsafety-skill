@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MAX_LAUNCH_CONTEXT_FILES = void 0;
+exports.MAX_LAUNCH_CONTEXT_FILES = exports.TEST_FILE_NAME = void 0;
 exports.hasLaunchableTestFiles = hasLaunchableTestFiles;
 exports.launchContextPaths = launchContextPaths;
 exports.findLaunchedTestFiles = findLaunchedTestFiles;
@@ -15,7 +15,7 @@ const SCRIPT_EXTENSION = /\.(sh|bash|zsh|py|js|mjs|cjs|ts|ps1|bat|cmd|rb)$/i;
 // package.json scripts named for tests, evals, benchmarks, smoke runs or QA are a test context (test, test:unit, bench:startup,
 // win-update-e2e, qa:otel:smoke), and so is a file named like a test.
 const TEST_SCRIPT_NAME = /(?:^|[:_.-])(?:pre|post)?(?:tests?|evals?|e2e|bench(?:mark)?s?|smoke|spec|qa|coverage|ci)(?:[:_.-]|$)/i;
-const TEST_FILE_NAME = /(\.(test|spec)\.[^.]+$)|(_test\.[^.]+$)|(^test_.*\.py$)/i;
+exports.TEST_FILE_NAME = /(\.(test|spec)\.[^.]+$)|(_test\.[^.]+$)|(^test_.*\.py$)/i;
 const WORD = /[\w-]+/g;
 // At most this many SKILL.md, command and agent files are read to see what they run.
 exports.MAX_LAUNCH_CONTEXT_FILES = 100;
@@ -128,7 +128,7 @@ function launchText(file) {
 function findLaunchedTestFiles(tree, files, tried = new Set()) {
     const read = new Set(files.map((f) => f.path));
     const referrers = files
-        .filter((f) => (!inTestFolder(f.path) && !TEST_FILE_NAME.test(baseName(f.path))) || f.launchedBy)
+        .filter((f) => (!inTestFolder(f.path) && !exports.TEST_FILE_NAME.test(baseName(f.path))) || f.launchedBy)
         .map((f) => ({ path: f.path, text: launchText(f) }))
         .filter((f) => Boolean(f.text))
         .map((f) => ({ ...f, words: new Set(f.text.match(WORD) ?? []) }));

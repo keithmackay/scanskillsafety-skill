@@ -6,11 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [1.2.0] - 2026-11-07
+## [1.2.0] - 2026-11-09
 
 ### Added
 
-- Two rounds of rules from findsafeskills (script scanner `2026-10-05.13+scripts.13`, lib from findsafeskills `0256cbc`): the first covers what other skill scanners detect, the second what was still missed in MalSkillBench, a set of 3,944 malicious and 4,000 harmless skills. The second round raises the share of malicious skills flagged there from 40% to 55%, mostly ones written by an AI, with the harmless share unchanged at 1.9%. Each was then tried on findsafeskills' catalog (912 listings' scripts, 30,000 READMEs) and narrowed until it raised no false reds there.
+- Two rounds of rules from findsafeskills (script scanner `2026-10-05.14+scripts.14`, lib from findsafeskills `8606b92`): the first covers what other skill scanners detect, the second what was still missed in MalSkillBench, a set of 3,944 malicious and 4,000 harmless skills. The second round raises the share of malicious skills flagged there from 40% to 55%, mostly ones written by an AI, with the harmless share unchanged at 1.9%. Each was then tried on findsafeskills' catalog (912 listings' scripts, 30,000 READMEs) and narrowed until it raised no false reds there.
   - **Requests for secrets** (critical): text telling the agent to read credential files or "all API keys" and send them out or keep it from the user.
   - **Code in code blocks**: the code-only checks run over each fenced code block of a SKILL.md or README, so a skill can't carry its payload in a block instead of a script. Hosts, links and git hooks there are left to the prose checks, since docs show them as install steps; a block introduced as an example stays below critical.
   - **The machine's identity sent out** (warning), **Coding agents with permission prompts off** (critical beside credentials or wallets, otherwise a note), **Links to a Windows program** (warning, GitHub release assets excepted), **Programs set to start on their own** (shell start-up files, the Windows Startup folder, global git hooks, Python `.pth` files; warning) and **Ransomware** (ransom notes, and files encrypted across folders with the originals removed; warning).
@@ -22,6 +22,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Fewer false reds on security tools. On findsafeskills' catalog, 241 of 327 critical script findings were false alarms, nearly all detectors, guards and their tests quoting attacks as data; 165 of them are no longer critical. MalSkillBench results are unchanged: the same 2,160 malicious and 76 harmless skills are flagged.
+  - Strings and comments that span lines (Python triple quotes, JavaScript template literals and block comments, shell heredocs) count as quoted data unless they are run, interpolated or, for a heredoc, written into a file. An attack written whole inside one string is a warning in a file that runs none of its strings, and a comment is a note even in a file that does.
+  - A miner is critical when pointed at a pool, given its options or fetched as a release archive; named alone it is a warning. A socket reverse shell needs a socket's descriptor or a shell started in the file, `nc -e` needs a shell, and `this.exec(...)`, `re.exec(...)` and code piped in on standard input no longer count as running downloaded code.
+  - Secrets: keys published as public (gitleaks' public Google keys, documentation samples) are ignored; a Google key in a Firebase config and any key in a test, fixture or example file are warnings.
+  - Unicode Tag characters that spell no letters, a camel-case `openclawCli` variable, and text a base64 blob decodes to in a file that never decodes base64 no longer raise criticals.
 - Invisible characters are a warning at three or more, or a run of three after visible text, rather than at one.
 - **setuid and setgid** is now **setuid**: setgid alone (`2775`, `g+s`) is how shared folders keep their group and isn't reported, nor is a `0o7777` permission mask.
 

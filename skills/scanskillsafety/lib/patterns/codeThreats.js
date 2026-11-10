@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.WHOLE_ENVIRONMENT = void 0;
 exports.scanCodeThreats = scanCodeThreats;
 // ABOUTME: Flags threats only code shows, for the script scan: code decoded or downloaded and run, reverse shells, miners, setuid,
 // ABOUTME: unchecked coding agents, ransom notes, throwaway hosts, DNS lookups carrying data, secrets sent out. Not run over READMEs.
@@ -25,12 +26,14 @@ const RUNS_DECODED_TEXT = [
     /\beval\s*\([^;\n]{0,200}?\.split\(\s*['"]{2}\s*\)\.reverse\(\)\.join\(/,
 ];
 // The download must sit inside the same statement as the eval, not anywhere later on a long minified line.
-const RUNS_DOWNLOADED_CODE = /\b(exec|eval)\s*\([^;]{0,80}?\b(requests\.get|urlopen|urllib\.request|fetch\s*\(|https?\.get|axios\.get)/;
+// A method of that name (this.exec in an emulator, cp.exec) is not the language's own.
+const RUNS_DOWNLOADED_CODE = /(?<![\w.])(exec|eval)\s*\([^;]{0,80}?\b(requests\.get|urlopen|urllib\.request|fetch\s*\(|https?\.get|axios\.get)/;
 // Python's exec of a name that was set from a download or a decoding: code that arrives as data. Reading a version file line
-// by line, or a test running its own code, is not that.
+// by line, code piped in on standard input, or a test running its own code, is not that.
 const EXECS_A_NAME = /(?<![\w.])exec\s*\(\s*([a-z_]\w*)\s*[,)]/;
 const ASSIGNS = /^\s*([a-z_]\w*)\s*=\s*(.*)$/;
 const CODE_SOURCE = /\b(requests|httpx)\.(get|post)\s*\(|\burlopen\s*\(|\.(text|content)\b|\.read\(\)|\.json\(\)|\bb64decode\s*\(|\.decrypt\s*\(|\bdecompress\s*\(|\bmarshal\.loads\s*\(|\bfromhex\s*\(|\bunhexlify\s*\(/;
+const STDIN = /\bsys\.stdin\b/;
 const PYTHON_DOWNLOADS = /\b(requests|httpx)\.(get|post)\s*\(|\burlopen\s*\(|\burllib\.request\b|\burlretrieve\s*\(/;
 const PYTHON_DECODES = /\bb64decode\s*\(|\.decrypt\s*\(|\bfernet\s*\(|\bmarshal\.loads\s*\(|\bzlib\.decompress\s*\(|\bbytes\.fromhex\s*\(|\bunhexlify\s*\(/;
 // A DNS name built from data and looked up, the lookup run as a command: the data leaves in the query, past filters that only
@@ -54,11 +57,20 @@ const UNSAFE_AGENT_RUN = new RegExp([
 const NAMES_CREDENTIALS = /\b(wallets?|wallet\.dat|keystores?|seed\s+phrases?|mnemonics?|private\s+keys?|id_(rsa|dsa|ecdsa|ed25519))\b|~\/\.ssh\b/;
 // A shell started interactively on a /dev/tcp connection, netcat handing a shell to a host, or (in a file that opens a socket
 // and connects it) the socket wired to a shell's input and output. A /dev/tcp port probe or an os.dup2 to a log file is neither.
-const REVERSE_SHELL = /\b(ba|z)?sh\s+-i\b.*\/dev\/tcp\/|\/dev\/tcp\/\S+\s+0>&1|\bnc(at)?\s+(-\w+\s+)*-e\s/;
-const SOCKET_TO_SHELL = /\bos\.dup2\s*\(\s*\w+\.fileno\(\)|\bpty\.spawn\s*\(/;
+const REVERSE_SHELL = /\b(ba|z)?sh\s+-i\b.*\/dev\/tcp\/|\/dev\/tcp\/\S+\s+0>&1|\bnc(at)?\s+(-\w+\s+)*-e\s+["']?((\S*\/)?((ba|z|da)?sh|cmd(\.exe)?|powershell(\.exe)?)|\$\{?shell)\b/;
+// A descriptor duplicated over the standard streams counts when it is a socket's or the file starts a shell, not for a log file
+// or /dev/null in a daemon that starts none.
+const DUPS_A_DESCRIPTOR = /\bos\.dup2\s*\(\s*([a-z_]\w*)\.fileno\(\)/;
+const PTY_SPAWN = /\bpty\.spawn\s*\(/;
+// A file that starts a shell: a descriptor it duplicates may be a socket handed in from elsewhere (a function's parameter).
+const STARTS_SHELL = /\/bin\/(ba|z|da)?sh\b|\bcmd\.exe\b|\bpowershell(\.exe)?\b/;
+const SOCKET_ASSIGN = /(?:^|;)\s*([a-z_]\w*)(\s*,\s*\w+)?\s*=\s*[^;=]*?(\bsocket\.socket|\bsocket\.create_connection|\.accept)\s*\(/g;
 const OPENS_SOCKET = /\bsocket\.socket\s*\(/;
 const CONNECTS = /\.connect\s*\(/;
-const MINER = /\bxmrig\b|stratum\+(tcp|ssl):\/\/|\bcryptonight\b|\bminerd\b|--donate-level\b/;
+// A miner pointed at a pool (a stratum address with anything after its scheme), given its options or xmrig's donation setting,
+// or fetched as a release archive (or the binary unpacked from one); a miner's name alone is how detectors list it.
+const MINER_RUN = /stratum\+(tcp|ssl):\/\/[^\s'"`|)\\]|\b(xmrig|minerd|cpuminer)\b[^\s,]*[\s,"']+(-o|-u|-a|--url|--user|--algo|--coin|--config)\b|--donate-level\b|github\.com\/xmrig\/xmrig\/releases|\bxmrig(-\d+(\.\d+)+[\w.-]*)?\.(tar\.gz|tgz|zip)\b|\bxmrig-\d+(\.\d+)+[\w.-]*\/xmrig\b/;
+const MINER_NAME = /\bxmrig\b|stratum\+(tcp|ssl):\/\/|\bcryptonight\b|\bminerd\b/;
 // setuid as a shell command, an os.chmod mode, a stat.S_ISUID flag, or chmod's arguments in a list handed to a process. setgid
 // alone (2775, g+s) is how shared folders keep their group, so only the setuid bit counts.
 const SETUID = /\bchmod\s+(u\+s\b|ug\+s\b|\+s\b|[4-7][0-7]{3}\b)|\bos\.chmod\s*\([^)]*,\s*0o?[4-7][0-7]{3}\b|\bchmod\w*\s*\([^)]*\bs_isuid\b|['"]chmod['"]\s*,\s*\[?\s*(['"]-r['"]\s*,\s*)?['"](u\+s|ug\+s|\+s|[4-7][0-7]{3})['"]/;
@@ -107,11 +119,14 @@ const MAKES_EXECUTABLE = /\bchmod\s+(\+x|u\+x|[0-7]?7[0-7]{2})\b|\bos\.chmod\s*\
 const STARTUP_LOCATION = /\.(bashrc|zshrc|bash_profile|zprofile|profile)\b|\blaunchagents\b|\blaunchdaemons\b|start menu\W+programs\W+startup\b|currentversion\\+run\b|\.config\/systemd\/user\b|\/etc\/systemd\/system\b|\bcrontab\s+-(?!l)|\|\s*crontab\b|\/etc\/cron\./;
 const APPENDS_OR_WRITES = /\bopen\s*\([^)]*['"]a\+?['"]|>>|\bwritefile(sync)?\b|\bappendfile(sync)?\b|\bwrite_text\s*\(|\.write\s*\(/;
 // The whole environment serialised or piped, not one variable read or the environment handed to a child process.
-const WHOLE_ENVIRONMENT = /(?<!\benv\s*=\s*)\bdict\(\s*os\.environ\s*\)|\bjson\.dumps\(\s*(dict\()?\s*os\.environ\b|\bjson\.stringify\(\s*process\.env\s*\)|(^|[\s;&(])(env|printenv)\s*\|\s*(curl|wget|nc|base64|python3?|node|sh|bash)\b/;
+// A test's mock.patch.dict(os.environ) and one variable read (os.environ['x']) are neither.
+exports.WHOLE_ENVIRONMENT = /(?<![\w.]|\benv\s*=\s*)dict\(\s*os\.environ\s*\)|\bjson\.dumps\(\s*(dict\()?\s*os\.environ(\.copy\(\))?\s*\)|\bjson\.stringify\(\s*process\.env\s*\)|(^|[\s;&(])(env|printenv)\s*\|\s*(curl|wget|nc|base64|python3?|node|sh|bash)\b/;
 // The whole environment copied, iterated or kept as a value, which a file that sends data may be collecting. Named variables
 // destructured from it ({ A, B } = process.env) are ordinary reads. A copy made to hand
 // to a child process (env=…, .update(…) nearby) is how programs set a child's variables.
 const COPIES_ENVIRONMENT = /\bos\.environ\.(copy|items)\(\)|[\w\]]\s*=\s*os\.environ\s*$|:\s*os\.environ\s*[,}]|[\w\]]\s*=\s*process\.env\s*;?\s*$|\bobject\.(entries|keys)\(\s*process\.env\s*\)|\bin\s+process\.env\b/;
+// A plain copy into a name, which a program hands to a child process as its environment (env=name).
+const BARE_ENVIRONMENT_COPY = /^\s*([\w.]+)\s*=\s*dict\(\s*os\.environ\s*\)\s*$/;
 const HANDS_TO_CHILD = /\benv\s*[=:]\s*[\w{]|\.update\s*\(/;
 const NEAR_LINES = 3;
 // A link to a Windows program, which code has little reason to name but to fetch and start it. A project's GitHub release
@@ -151,6 +166,12 @@ function scanCodeThreats(input, options = {}) {
     const fileMakesExecutable = fileHas(MAKES_EXECUTABLE);
     const fileWritesStartupFile = fileHas(STARTUP_LOCATION) && (fileHas(APPENDS_OR_WRITES) || fileHas(/\|\s*crontab\b/));
     const fileConnectsSocket = fileHas(OPENS_SOCKET) && fileHas(CONNECTS);
+    const socketNames = new Set(lines.flatMap(({ text }) => [...text.matchAll(SOCKET_ASSIGN)].map((m) => m[1])));
+    const fileStartsShell = fileHas(STARTS_SHELL);
+    const handsSocketToShell = (text) => {
+        const dupped = text.match(DUPS_A_DESCRIPTOR)?.[1];
+        return PTY_SPAWN.test(text) || (dupped !== undefined && (socketNames.has(dupped) || fileStartsShell));
+    };
     const fileChangesModes = fileHas(CHANGES_MODES);
     const fileDownloads = fileHas(PYTHON_DOWNLOADS);
     const fileDecodes = fileHas(PYTHON_DECODES);
@@ -158,7 +179,7 @@ function scanCodeThreats(input, options = {}) {
     const fileEncryptsTree = fileHas(WALKS_FOLDERS) && fileHas(REMOVES_ORIGINAL);
     const assigned = (source) => new Set(lines.flatMap(({ text }) => {
         const m = text.match(ASSIGNS);
-        return m && source.test(m[2]) ? [m[1]] : [];
+        return m && source.test(m[2]) && !STDIN.test(m[2]) ? [m[1]] : [];
     }));
     const codeNames = assigned(CODE_SOURCE);
     const profileNames = assigned(SHELL_PROFILE);
@@ -179,9 +200,10 @@ function scanCodeThreats(input, options = {}) {
         findings.push((0, scanInput_1.findingAt)(input, first, { severity: "warning", category: "obfuscation", detail: "Was run through a JavaScript obfuscator (_0x… names), which hides what it does" }));
     }
     for (const { line, text } of lines) {
-        const execName = COMMENT_LINE.test(text) ? undefined : text.match(EXECS_A_NAME)?.[1];
+        const commentLine = COMMENT_LINE.test(text);
+        const execName = commentLine ? undefined : text.match(EXECS_A_NAME)?.[1];
         const execsAName = execName !== undefined && codeNames.has(execName);
-        if (RUNS_DOWNLOADED_CODE.test(text) || (execsAName && fileDownloads)) {
+        if ((!commentLine && RUNS_DOWNLOADED_CODE.test(text)) || (execsAName && fileDownloads)) {
             findings.push((0, scanInput_1.findingAt)(input, line, { severity: "critical", category: "remote-access", detail: "Runs code it downloads while running" }));
         }
         else if (!COMMENT_LINE.test(text) && (RUNS_DECODED_TEXT.some((pattern) => pattern.test(text)) || (execsAName && fileDecodes))) {
@@ -191,11 +213,14 @@ function scanCodeThreats(input, options = {}) {
                 detail: "Runs code it decodes (base64, hex, character codes, reversed text or a compressed blob), which hides what runs from a reader",
             }));
         }
-        if (REVERSE_SHELL.test(text) || (fileConnectsSocket && SOCKET_TO_SHELL.test(text))) {
+        if (REVERSE_SHELL.test(text) || (fileConnectsSocket && handsSocketToShell(text))) {
             findings.push((0, scanInput_1.findingAt)(input, line, { severity: "critical", category: "remote-access", detail: "Opens a shell for a remote machine (reverse shell)" }));
         }
-        if (MINER.test(text) && !IN_ALTERNATION.test(text)) {
+        if (MINER_RUN.test(text)) {
             findings.push((0, scanInput_1.findingAt)(input, line, { severity: "critical", category: "crypto-mining", detail: "Runs or configures a cryptocurrency miner" }));
+        }
+        else if (MINER_NAME.test(text) && !IN_ALTERNATION.test(text)) {
+            findings.push((0, scanInput_1.findingAt)(input, line, { severity: "warning", category: "crypto-mining", detail: "Names a cryptocurrency miner, without a pool or options to run it" }));
         }
         if (SETUID.test(text) || (fileChangesModes && SETUID_MODE.test(text))) {
             findings.push((0, scanInput_1.findingAt)(input, line, { severity: "warning", category: "privilege-escalation", detail: "Sets the setuid bit, so the program runs with its owner's rights" }));
@@ -221,10 +246,12 @@ function scanCodeThreats(input, options = {}) {
         if (RANSOM_NOTE.test(text)) {
             findings.push((0, scanInput_1.findingAt)(input, line, { severity: "warning", category: "destructive-commands", detail: "Has the wording of a ransom note" }));
         }
-        if (fileSends && WHOLE_ENVIRONMENT.test(text)) {
+        const copiedTo = text.match(BARE_ENVIRONMENT_COPY)?.[1];
+        const copyForChild = copiedTo !== undefined && fileHas(new RegExp(`\\benv\\s*[=:]\\s*${escapeRegExp(copiedTo)}\\b`));
+        if (fileSends && !COMMENT_LINE.test(text) && exports.WHOLE_ENVIRONMENT.test(text) && !copyForChild) {
             findings.push((0, scanInput_1.findingAt)(input, line, { severity: "critical", category: "exfiltration", detail: "Sends out every environment variable, where API keys and tokens live" }));
         }
-        else if (fileSends && COPIES_ENVIRONMENT.test(text) && !nearHandsToChild(line)) {
+        else if (fileSends && !COMMENT_LINE.test(text) && COPIES_ENVIRONMENT.test(text) && !nearHandsToChild(line)) {
             findings.push((0, scanInput_1.findingAt)(input, line, { severity: "warning", category: "exfiltration", detail: "Copies every environment variable, where API keys and tokens live, in a file that sends data" }));
         }
         const { hosts, relay } = addresses ? suspiciousHostsOn(text) : { hosts: new Set(), relay: false };
@@ -241,7 +268,7 @@ function scanCodeThreats(input, options = {}) {
         if (addresses && !reported && !COMMENT_LINE.test(text) && !sendsData_1.SENDS_DATA.test(text) && !GITHUB_RELEASE.test(text) && WINDOWS_PROGRAM_URL.test(text)) {
             findings.push((0, scanInput_1.findingAt)(input, line, { severity: "warning", category: "suspicious-download", detail: "Links to a Windows program from code, which is how droppers fetch their payload" }));
         }
-        if (!addresses || !fileSends || !credentialFiles_1.CREDENTIAL_FILE.test(text))
+        if (!addresses || !fileSends || COMMENT_LINE.test(text) || !credentialFiles_1.CREDENTIAL_FILE.test(text))
             continue;
         findings.push((0, scanInput_1.findingAt)(input, line, sendsData_1.SENDS_DATA.test(text)
             ? { severity: "critical", category: "exfiltration", detail: "Reads a credential file and sends it over the network" }
