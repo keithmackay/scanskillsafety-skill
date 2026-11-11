@@ -1,6 +1,6 @@
 {
   "name": "scanskillsafety",
-  "version": "1.1.3",
+  "version": "1.2.0",
   "description": "Static, offline safety scanner for AI agent skills, plugins, and MCP servers",
   "license": "MIT",
   "type": "commonjs",

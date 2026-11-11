@@ -39,11 +39,13 @@ function scanObfuscation(input) {
             findings.push((0, scanInput_1.findingAt)(input, index + 1, { severity: "warning", category: "obfuscation", detail: "Contains a long base64-looking blob — not necessarily malicious, but worth inspecting what it decodes to" }));
         }
     });
-    const { invisibleCharCount, homoglyphCount, tagCharCount, bidiControlCount } = input.normalized;
+    const { invisibleCharCount, invisibleRunCount, homoglyphCount, tagCharCount, bidiControlCount } = input.normalized;
     if (tagCharCount > 0) {
         const index = input.rawLines.findIndex((l) => TAG_RUN.test(l.replace(/\u{1F3F4}[\u{E0020}-\u{E007E}]{1,10}\u{E007F}/gu, "")));
         const hidden = (0, secretPatterns_1.redactSecrets)((0, normalizeForScan_1.decodeTagChars)(input.rawLines[index]?.match(TAG_RUN)?.[0] ?? "")).slice(0, 120);
-        const critical = tagCharCount >= TAG_CRITICAL_THRESHOLD;
+        // Hidden text spells words; Tag characters that decode to no letter at all are range ends or flag leftovers.
+        const spellsLetters = /[a-z]/i.test((0, normalizeForScan_1.decodeTagChars)(input.rawLines.join("\n").match(new RegExp(TAG_RUN.source, "gu"))?.join("") ?? ""));
+        const critical = tagCharCount >= TAG_CRITICAL_THRESHOLD && spellsLetters;
         const finding = {
             severity: critical ? "critical" : "warning",
             category: "obfuscation",
@@ -62,7 +64,7 @@ function scanObfuscation(input) {
         }));
     }
     // Document-level counts — no single line to point at.
-    if (invisibleCharCount >= INVISIBLE_CHAR_THRESHOLD) {
+    if (invisibleCharCount >= INVISIBLE_CHAR_THRESHOLD || invisibleRunCount > 0) {
         findings.push({ severity: "warning", category: "obfuscation", detail: `Contains ${invisibleCharCount} invisible/zero-width characters — a common technique for evading substring-based scanners` });
     }
     if (homoglyphCount >= HOMOGLYPH_THRESHOLD) {

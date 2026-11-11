@@ -7,7 +7,7 @@ Check a Claude Code skill, plugin, or MCP server for prompt-injection phrasing, 
 It's the same scanner that produces the safety badge on [findsafeskills](https://findsafeskills.com) listings, packaged to run on your machine with no dependency on that site.
 
 ```
-Version 1.1.3 · MIT license
+Version 1.2.0 · MIT license
 Source:  https://github.com/keithmackay/scanskillsafety-skill
 Author:  Keith MacKay <technofacto@gmail.com>
 Update:  git -C ~/.claude/skills/scanskillsafety pull   (or: gemini extensions update scanskillsafety)
@@ -125,7 +125,7 @@ The skill is auto-discovered from `GEMINI.md` after installation.
 ```text
 scanskillsafety [--json] <local-path-or-repo-url>
 scanskillsafety --help      # usage, options, examples, exit codes
-scanskillsafety --version   # e.g. "scanskillsafety 1.1.3"
+scanskillsafety --version   # e.g. "scanskillsafety 1.2.0"
 ```
 
 An option it doesn't know is refused with exit code `3` rather than ignored. Inside an agent, `/scanskillsafety --help` shows usage and `/scanskillsafety --version` shows the installed version and whether a newer release exists.
@@ -206,15 +206,17 @@ Rating: RED
 
 | Check | Severity |
 |---|---|
-| **Instruction-override / prompt-injection phrasing**: "ignore previous instructions," "you are now an unrestricted assistant," and similar text aimed at the agent reading the skill. When the phrase is quoted, in code, in a table, or named as an example, it's a warning instead (security tools quote it constantly); inside a hidden HTML comment or invisible text it stays critical | critical / warning |
-| **Exfiltration-looking URLs**: links to known data-relay/testing domains (webhook.site, requestbin, pipedream, …) or instructions to send data there. A domain only named in prose or a comparison ("without webhook.site") is a warning, as is a raw IP-literal URL fetched with curl/wget on the same line | critical / warning |
-| **Obfuscation**: long base64-looking blobs (outside URLs), invisible/zero-width characters, Cyrillic look-alikes inside Latin words, bidirectional-override characters. Text hidden in invisible Unicode Tag characters is decoded and scanned by every other check, and a run of 10 or more is critical | warning / critical |
+| **Instruction-override / prompt-injection phrasing**: "ignore previous instructions," "you are now an unrestricted assistant," and similar text aimed at the agent reading the skill. When the phrase is quoted, in code, in a table, or named as an example, it's a warning instead (security tools quote it constantly); inside a hidden HTML comment or invisible text it stays critical. Text telling the agent to disregard or supersede its earlier directives, to work with its safety guardrails switched off, or to output its system prompt is critical too, and a note when quoted or named as an example | critical / warning |
+| **Requests for secrets**: text telling the agent to read credential files (SSH keys, cloud logins, wallets, browser password stores) or "all API keys" and to send them somewhere or keep it from the user. A bare instruction to read one is how setup docs read and isn't reported; quoted whole or shown in a table, it's a warning | critical / warning |
+| **Exfiltration-looking URLs**: links to known data-relay/testing domains (webhook.site, requestbin, pipedream, …) or instructions to send data there. A domain only named in prose or a comparison ("without webhook.site") is a warning, as is a raw IP-literal URL fetched with curl/wget on the same line. Penetration testers' callback catchers (oastify, Burp Collaborator, the `oast.*` hosts) count as relays. An image whose address carries the conversation or secrets when it loads is critical; a Discord webhook or Telegram bot with its token written in, and a DNS lookup of a name built from data, are warnings | critical / warning |
+| **Obfuscation**: long base64-looking blobs (outside URLs), invisible/zero-width characters (three or more, or a run of three after visible text, which can spell out hidden text), Cyrillic look-alikes inside Latin words, bidirectional-override characters. Text hidden in invisible Unicode Tag characters is decoded and scanned by every other check, and a run of 10 or more is critical | warning / critical |
 | **Hardcoded secrets**: AWS, GitHub (classic, fine-grained, OAuth, app), Slack, Anthropic, OpenAI, and Google key shapes, PEM private-key headers. Shown redacted. Placeholders like `ghp_XXXX…` or `xoxp-your-user-token` are ignored | critical |
 | **Destructive shell command patterns**: `rm -rf` of the whole root or home directory, `chmod 777 /`, a fork bomb. Setup and uninstall docs mention some of these, so they're prompts to look, not proof of malice. Decoding base64 straight into a shell is critical | warning / critical |
-| **Fake prerequisites and suspicious downloads**: a password-protected archive to download and run, commands staged on a paste site (rentry, pastebin, glot.io, …), or a one-line download + `chmod +x` + run. This is the shape of the ClawHavoc campaign's fake installers | warning |
+| **Fake prerequisites and suspicious downloads**: a password-protected archive to download and run, commands staged on a paste site (rentry, pastebin, glot.io, …), or a one-line download + `chmod +x` + run. This is the shape of the ClawHavoc campaign's fake installers. Downloads from anonymous file hosts, and a downloaded script piped to a shell as a step the agent must take before the skill works, are warnings too | warning |
 | **Persistence that fetches from the network**: a cron job, launchd agent, systemd unit, Windows scheduled task or Run key, or a shell-profile line that fetches something to run. Unlike a one-off install script, it keeps pulling code on its own | warning |
 | **Reverse shells**: `bash -i >& /dev/tcp/…`, `nc -e`, `mkfifo` + `nc`, `socat exec:`, Python socket + subprocess | critical |
-| **Instructions hidden from the user**: "do not tell the user", "without informing the user", and `<IMPORTANT>`/`<system>`-style blocks used to smuggle instructions into MCP tool descriptions | warning |
+| **Instructions hidden from the user**: "do not tell the user", "without informing the user", and `<IMPORTANT>`/`<system>`-style blocks used to smuggle instructions into MCP tool descriptions, and orders to the agent inside an HTML comment, which the rendered page hides | warning |
+| **Code in code blocks**: the script checks below also run over each fenced code block of a SKILL.md or README, where a skill can carry its payload without shipping a script. Hosts, addresses, links to programs, credential paths and global git hooks are left to the checks above there, since docs show them as examples and install steps. A signature only quoted as data is a note, and a block the doc introduces as an example stays below critical | critical / warning |
 | **Known malware campaigns**: names, download hosts, addresses and accounts used only by a published campaign against agent skills, such as ClawHavoc's fake "OpenClawCLI" prerequisite (Koi Security, February 2026). Security write-ups that list them as indicators get a note instead | critical |
 
 ### In bundled scripts
@@ -225,14 +227,18 @@ Every check above runs on these files. Code quotes the patterns it guards agains
 
 | Check | Severity |
 |---|---|
-| **Code that runs what it downloads**: eval or exec of text fetched at run time | critical |
-| **Code that runs what it decodes**: eval of base64 (`Buffer.from`, `atob`), exec of `b64decode` or a decompressed blob, PowerShell `-EncodedCommand` | warning |
+| **Code that runs what it downloads**: eval or exec of text fetched at run time, or Python's `exec` of a name set from a download | critical |
+| **Code that runs what it decodes**: eval of base64 (`Buffer.from`, `atob`), exec of `b64decode` or a decompressed blob, hex, character codes or reversed text, exec of a name set from a decoding or decryption, PowerShell `-EncodedCommand`, and JavaScript obfuscator output. Long hex strings are decoded and checked like base64 | warning |
 | **Reverse shells in code**: an interactive shell on `/dev/tcp`, `nc -e`, a connected socket wired to a shell | critical |
-| **Credentials or the whole environment sent out**: SSH keys, cloud and registry logins or `.netrc` read in a file that sends data; every environment variable serialised or piped out | critical |
-| **Raw IP addresses and throwaway hosts**: code addressing a public raw IP, a paste site, a request relay, a Discord attachment link, transfer.sh or a temporary tunnel; critical in a file that also makes a download executable, adds a startup entry, or sends data to a relay | warning / critical |
+| **Credentials or the whole environment sent out**: SSH keys, cloud and registry logins, `.netrc`, wallets, the macOS keychain or browser password and cookie stores read in a file that sends data; every environment variable serialised or piped out. The whole environment copied or iterated in such a file is a warning; handing it to a child process isn't counted | critical / warning |
+| **The machine's identity sent out**: two of the machine's name, its user name and its system details collected in a file that sends data, the way stealers report a new victim | warning |
+| **Coding agents with permission prompts off**: Claude Code, Gemini CLI or Codex started with permission prompts turned off in a file that names credentials, keys or wallets (the s1ngularity attack). Otherwise it's a note, since autonomous-loop skills do it for ordinary work | critical |
+| **Links to a Windows program**: a link to an `.exe`, `.scr`, `.msi`, `.bat`, `.vbs`, `.hta`, `.dll` or `.jar` in code, how droppers fetch their payload. A project's GitHub release assets don't count; some installers still do it, so it's a warning | warning |
+| **Raw IP addresses and throwaway hosts**: code addressing a public raw IP, a paste site, a request relay, a Discord attachment link, transfer.sh, a temporary tunnel, a link shortener or an anonymous file host; critical in a file that also makes a download executable, adds a startup entry, or sends data to a relay | warning / critical |
 | **Cryptocurrency miners**: xmrig, stratum pool URLs | critical |
-| **setuid and setgid**: `chmod 4755`, `u+s` | warning |
-| **Ransom notes**: "your files have been encrypted" | warning |
+| **setuid**: `chmod 4755`, `u+s`, `stat.S_ISUID`, a setuid mode passed to chmod. setgid alone (`2775`, `g+s`) is how shared folders keep their group and isn't counted | warning |
+| **Programs set to start on their own**: a command added to a shell start-up file, a file put in the Windows Startup folder, a git template or hooks folder set for every repository, an import line in a Python `.pth` file | warning |
+| **Ransomware**: "your files have been encrypted" and similar wording, and files encrypted across folders with the originals then removed or renamed | warning |
 
 ### Notes (don't change the rating)
 

@@ -56,8 +56,9 @@ Always name the files that were scanned and pass on any `notices` (for example, 
 
 ## What it checks
 
-- **Instruction-override / prompt-injection phrasing** (critical)
-- **Exfiltration-looking URLs** (critical for known relay domains; warning for curl/wget to a raw IP)
+- **Instruction-override / prompt-injection phrasing**, including telling the agent to drop its earlier directives or safety guardrails or to output its system prompt (critical)
+- **Requests for secrets**: telling the agent to read credential files or "all API keys" and send them out or hide it (critical)
+- **Exfiltration-looking URLs** (critical for known relay domains and pentest callback catchers, and for images whose address carries data; warning for curl/wget to a raw IP, Discord or Telegram bots with their token written in, and DNS lookups of names built from data)
 - **Obfuscation**: base64-looking blobs, invisible characters, homoglyphs, bidi overrides (warning); text hidden in Unicode Tag characters (critical, and the hidden text is shown in the finding)
 - **Hardcoded secrets**: shown redacted, placeholders ignored (critical)
 - **Destructive shell command patterns** (warning; critical when base64 is decoded straight into a shell)
@@ -65,19 +66,24 @@ Always name the files that were scanned and pass on any `notices` (for example, 
 - **Fake prerequisites and suspicious downloads**: password-protected archives, paste-site links, download + chmod +x + run (warning)
 - **Persistence that fetches from the network**: cron, launchd, systemd, startup entries or shell-profile lines that fetch code to run (warning)
 - **Reverse shells** (critical)
-- **Instructions hidden from the user**: "do not tell the user", `<IMPORTANT>`-style blocks (warning)
+- **Instructions hidden from the user**: "do not tell the user", `<IMPORTANT>`-style blocks, orders to the agent in an HTML comment (warning)
+- **Code in code blocks**: the code-only checks below also run on each fenced code block of a SKILL.md or README (critical; a note when only quoted as data, below critical in a block introduced as an example)
 - **Known malware campaigns**: names, hosts, addresses and accounts only a published campaign uses, such as ClawHavoc's fake "OpenClawCLI" prerequisite (critical; a note in security write-ups that list them)
 
 It also reads the scripts, hooks and MCP configs in the folders holding a SKILL.md or plugin manifest (up to 200 files, 200 KB of each, 4,000 KB in all; dependencies skipped, and tests and evals too unless a file outside them runs them). Every check above runs on them, and a match quoted only as data in code (a guard's block list, a detection rule) is a note. These checks are made only on code:
 
 - **Code that runs what it downloads** (critical)
-- **Code that runs what it decodes**: eval of base64, PowerShell -EncodedCommand (warning)
+- **Code that runs what it decodes**: eval of base64 or hex, exec of a decoded or decrypted name, PowerShell -EncodedCommand, obfuscator output (warning)
 - **Reverse shells in code** (critical)
-- **Credentials or the whole environment sent out** (critical)
+- **Credentials or the whole environment sent out** (critical; the whole environment copied in a file that sends data is a warning)
+- **The machine's identity sent out** (warning)
+- **Coding agents with permission prompts off**, beside credentials or wallets (critical; otherwise a note)
+- **Links to a Windows program**: `.exe`, `.msi`, `.scr` and similar, outside GitHub releases (warning)
 - **Raw IP addresses and throwaway hosts**: paste sites, request relays, Discord attachments, tunnels (warning; critical beside a chmod +x, a startup entry or a send to a relay)
 - **Cryptocurrency miners** (critical)
-- **setuid and setgid** (warning)
-- **Ransom notes** (warning)
+- **setuid** (warning)
+- **Programs set to start on their own**: shell start-up files, the Windows Startup folder, global git hooks, Python `.pth` files (warning)
+- **Ransomware**: ransom notes, and files encrypted across folders with the originals removed (warning)
 
 ## What it does NOT check
 
