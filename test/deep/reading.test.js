@@ -105,6 +105,10 @@ test("findClaude on Windows: claude.exe is used; a claude.cmd alone is named as 
   assert.deepEqual(findClaude({ PATH: cmdOnly }, "win32"), {
     reason: "the claude CLI is installed as claude.cmd, which this tool cannot start safely without a shell (Windows)",
   });
+  assert.deepEqual(findClaude({ PATH: "", CLAUDE_BIN: path.join(cmdOnly, "claude.cmd") }, "win32"), {
+    reason: "the claude CLI is installed as claude.cmd, which this tool cannot start safely without a shell (Windows)",
+  });
+  assert.deepEqual(findClaude({ PATH: "", CLAUDE_BIN: path.join(cmdOnly, "claude.BAT") }, "win32").reason.includes("claude.cmd"), true);
   const withExe = makeTree({ "claude.cmd": "@echo off", "claude.exe": "MZ" });
   assert.deepEqual(findClaude({ Path: withExe }, "win32"), { path: path.join(withExe, "claude.exe") });
 });
@@ -198,7 +202,7 @@ test("reads risky files first, then what runs at install and start-up, then what
 test("the plan id is a digest of the model and every file read, its path and the SHA-256 of its text, in reading order", () => {
   const reading = [{ path: "a.md", text: "one" }, { path: "b.md", text: "two" }];
   const sha = (text) => createHash("sha256").update(text).digest("hex");
-  const expected = sha(`5:haiku4:a.md${sha("one")}4:b.md${sha("two")}`).slice(0, 32);
+  const expected = sha(`5:haiku4:a.md${sha("one")}4:b.md${sha("two")}`);
   const plan = planReading(reading, "haiku");
   assert.equal(plan.planId, expected);
   assert.equal(plan.calls.length, 1);

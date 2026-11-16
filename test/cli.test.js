@@ -230,7 +230,7 @@ test("--deep with no terminal stops at Claude's plan, names Anthropic first, mak
   assert.equal(out.status, 0);
   assert.equal(out.stderr, "Deep scan will contact: Anthropic, through your own claude CLI (the text of the files Claude reads, only after you agree).\n");
   assert.match(out.stdout, /Claude's reading \(not checked by a person\): planned, not run/);
-  const id = /rerun with --claude-ok ([0-9a-f]{32})\./.exec(out.stdout)[1];
+  const id = /rerun with --claude-ok ([0-9a-f]{64})\./.exec(out.stdout)[1];
   assert.deepEqual(fakeClaudeCalls(log), []);
 
   const json = JSON.parse(runWith(env, "--deep", "--json", "--no-osv", root).stdout);

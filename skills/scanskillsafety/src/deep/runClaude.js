@@ -38,6 +38,7 @@ function isExecutableFile(file, platform) {
 // start. Node cannot start a .cmd or .bat without a shell, so on Windows only claude and claude.exe are used.
 function findClaude(env = process.env, platform = process.platform) {
   const name = env.CLAUDE_BIN || "claude";
+  if (platform === "win32" && /\.(cmd|bat)$/i.test(name)) return { reason: ONLY_CMD };
   if (name.includes("/") || name.includes(path.sep)) return isExecutableFile(name, platform) ? { path: path.resolve(name) } : { reason: NOT_INSTALLED };
   const folders = (env.PATH ?? env.Path ?? "").split(platform === "win32" ? ";" : path.delimiter).filter(Boolean);
   const endings = platform === "win32" ? ["", ".exe"] : [""];
@@ -70,7 +71,10 @@ function runClaude({
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      fs.rmSync(folder, { recursive: true, force: true });
+      // A folder that cannot be removed (a program still holding it open on Windows) does not change the call's outcome.
+      try {
+        fs.rmSync(folder, { recursive: true, force: true });
+      } catch {}
       resolve(outcome);
     };
     let child;
@@ -82,6 +86,8 @@ function runClaude({
     const chunks = [];
     let bytes = 0;
     const stop = () => {
+      child.stdout.destroy();
+      child.stderr.destroy();
       child.kill("SIGTERM");
       const killer = setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");

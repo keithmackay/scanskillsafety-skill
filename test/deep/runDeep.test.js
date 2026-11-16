@@ -365,7 +365,7 @@ test("with no terminal and no --claude-ok: the plan is given, no call is made, a
   assert.deepEqual(fakeClaudeCalls(log), []);
   const { status, plan } = result.deep.claude;
   assert.equal(status, "planned");
-  assert.match(plan.id, /^[0-9a-f]{32}$/);
+  assert.match(plan.id, /^[0-9a-f]{64}$/);
   assert.equal(plan.model, "haiku");
   assert.deepEqual(plan.files.map((f) => f.path), ["package.json", "setup.js", "SKILL.md", "docs/a.md", "notes.md"]);
   assert.deepEqual(plan.files[0], { path: "package.json", parts: 1 });
@@ -407,7 +407,7 @@ test("in a terminal: yes runs the reading, and the result says what Claude found
     assert.match(claude.usageLine, /^Claude tokens: 100 input .* and 10 output in 1 calls; \$0\.01 at API list prices\.$/);
     assert.equal(exitCodeFor(result), 0);
     const out = formatDeep(result);
-    assert.match(out, /Claude's reading \(not checked by a person\)\n {2}Read with haiku, on plan [0-9a-f]{32}\.\n/);
+    assert.match(out, /Claude's reading \(not checked by a person\)\n {2}Read with haiku, on plan [0-9a-f]{64}\.\n/);
     assert.match(out, /2 file\(s\) Claude called benign\./);
     assert.match(out, /Claude flagged nothing; a file written to mislead a reviewer can pass\./);
     assert.match(out, /Claude tokens: /);
