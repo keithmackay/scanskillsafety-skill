@@ -4,10 +4,12 @@ Works with: Claude Code · Codex · Antigravity · Gemini CLI
 
 Check a Claude Code skill, plugin, or MCP server for prompt-injection phrasing, exfiltration URLs, hidden text, leaked secrets, and destructive shell commands before you install it. Point it at a GitHub link or a local folder and it reads the files Claude Code would load (`SKILL.md`, plugin manifests, commands, agents, hooks, `.mcp.json`), pattern-matches them, and reports a red/yellow/green rating with the file and line of every hit. It never runs the code it's checking and never contacts any service except the target's own host.
 
+`--deep` goes further on your own machine: it reads every file of the exact commit you would install, lists what runs at install and start-up, checks the packages it pulls in against OSV, and can have Claude read every file through your own `claude` CLI once you agree to the plan. It names every service it will contact, and what each receives, before it sends anything.
+
 It's the same scanner that produces the safety badge on [findsafeskills](https://findsafeskills.com) listings, packaged to run on your machine with no dependency on that site.
 
 ```
-Version 1.2.0 · MIT license
+Version 1.3.0 · MIT license
 Source:  https://github.com/keithmackay/scanskillsafety-skill
 Author:  Keith MacKay <technofacto@gmail.com>
 Update:  git -C ~/.claude/skills/scanskillsafety pull   (or: gemini extensions update scanskillsafety)
@@ -19,6 +21,7 @@ Issues:  https://github.com/keithmackay/scanskillsafety-skill/issues
 - [Highlights](#highlights)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Deep scan](#deep-scan)
 - [What it checks](#what-it-checks)
 - [What it does NOT check](#what-it-does-not-check)
 - [Network and privacy](#network-and-privacy)
@@ -35,6 +38,7 @@ Issues:  https://github.com/keithmackay/scanskillsafety-skill/issues
 - **Points at the evidence** — every finding names its file and line and quotes the line (with any secret-shaped token redacted), so you can judge it yourself.
 - **Honest about its limits** — prints what it does *not* check on every run; a green result means "no known pattern found," not "safe."
 - **Scriptable** — exit codes per rating and a `--json` mode.
+- **A deeper check when you want one** — `--deep` reads every file of the exact commit, lists what runs at install, checks dependencies against OSV and, with your agreement, has Claude read every file. Claude's findings are shown apart and never change the rating.
 - **No dependencies** — one Node.js script plus a compiled, dependency-free scanner library.
 
 ## Installation
@@ -124,11 +128,12 @@ The skill is auto-discovered from `GEMINI.md` after installation.
 
 ```text
 scanskillsafety [--json] <local-path-or-repo-url>
+scanskillsafety [--json] --deep [deep options] <local-folder-or-repo-url>   # see Deep scan
 scanskillsafety --help      # usage, options, examples, exit codes
-scanskillsafety --version   # e.g. "scanskillsafety 1.2.0"
+scanskillsafety --version   # e.g. "scanskillsafety 1.3.0"
 ```
 
-An option it doesn't know is refused with exit code `3` rather than ignored. Inside an agent, `/scanskillsafety --help` shows usage and `/scanskillsafety --version` shows the installed version and whether a newer release exists.
+An option it doesn't know is refused with exit code `3` rather than ignored, and so is a deep option given without `--deep`. Inside an agent, `/scanskillsafety --help` shows usage and `/scanskillsafety --version` shows the installed version and whether a newer release exists.
 
 Targets it understands:
 
@@ -197,10 +202,91 @@ Rating: RED
 | `1` | Yellow: warnings only |
 | `2` | Red: at least one critical finding |
 | `3` | Could not scan (bad arguments, bad target, nothing found, network error). This is **not** a clean result. |
+| `4` | `--deep` only: the rating is not red, but Claude's reading marked a file suspicious or malicious. Read those files. A red rating exits `2` whatever Claude found. |
 
 ### JSON output
 
-`--json` prints `target`, `rating` (`null` if nothing could be scanned), `scannedFiles`, `findings` (each with `file`, `line`, `excerpt`, `severity`, `category`, `detail`), `notices`, `errors`, and `nonGoals`. A `severity` of `info` marks a note, which never affects `rating` or the exit code.
+`--json` prints `target`, `rating` (`null` if nothing could be scanned), `scannedFiles`, `findings` (each with `file`, `line`, `excerpt`, `severity`, `category`, `detail`), `notices`, `errors`, and `nonGoals`. A `severity` of `info` marks a note, which never affects `rating` or the exit code. With `--deep` it also prints `deep` (see [Deep scan](#deep-scan)). Every string taken from the target (paths, excerpts, commands) has its control and format characters replaced with `?`, in text and JSON alike, so a target can't hide or rewrite part of the output.
+
+## Deep scan
+
+```text
+scanskillsafety --deep [--json] [deep options] <local-folder-or-repo-url>
+```
+
+The plain scan reads the files an agent loads. `--deep` checks the exact commit a person would install, in five stages:
+
+1. **The exact commit.** For a repository URL on GitHub, Gitea or Forgejo it resolves the branch, tag or commit (`--ref`, default the default branch) to a full commit id and prints it, downloads that commit's archive from the repository's own host into a temporary folder, and reads every file from there, so every file comes from one commit. The folder is removed when the scan ends, also on an error or Ctrl-C. A link into a subfolder (`…/tree/<ref>/<path>`) reads that folder of the commit. Only public repositories can be read. For a local folder it names the git commit at `HEAD` and says whether there are uncommitted changes (then the files scanned are not exactly any commit); outside a git checkout it says no commit can be named. A link to a single file, or a local file, is refused (exit `3`).
+2. **Every file.** The static rules run on every text file, tests included, with no limit on the number or size of files. Binary files, files that aren't UTF-8, files over 5 MB, and symbolic links (never followed) are listed by name with the reason. Findings in test files that nothing launches are listed under their own heading and don't count toward the rating, so a security tool's test fixtures don't turn it red; test files something does run count as usual. The rating comes from the same rules as the plain scan.
+3. **What runs at install and start-up**, listed as facts with the file and the command: npm `preinstall`, `install`, `postinstall` and `prepare` scripts in every `package.json` outside `node_modules/` and `vendor/`; `setup.py` (runs code at install) and the `pyproject.toml` build backend; MCP server commands in `.mcp.json`, `server.json` and plugin manifests; hooks; plugin commands and agents; and scripts a `SKILL.md` names. Each command is scanned as part of the file that holds it.
+4. **The packages it pulls in**, from its lockfiles, checked against [OSV](https://osv.dev) (`--no-osv` turns this off). A package OSV lists as malicious (an id starting `MAL-`) is a critical finding and counts toward the rating. Known vulnerabilities are listed per package (count, highest severity, ids) and don't count toward the rating. If OSV can't be reached, the output says the check did not run; it is never shown as clean.
+5. **Claude reads every file** (`--no-claude` turns this off), after you agree to the plan below. See [Claude's reading](#claudes-reading).
+
+For a repository URL it also asks findsafeskills whether the repository is listed there (`--no-site` turns this off) and says how the commit it read relates to the one findsafeskills scanned: the same commit; so many commits newer or older, or diverged (GitHub's compare call; on other hosts it names the commit findsafeskills scanned and the scan's date); "not listed on findsafeskills"; or "could not reach findsafeskills", which never means "not listed". A local folder is not compared.
+
+Before any request leaves your machine, `--deep` names each service it will contact and what each receives (on stderr, or in `deep.services` with `--json`). See [Network and privacy](#network-and-privacy).
+
+### Deep options
+
+| Option | What it does |
+|---|---|
+| `--deep` | Run the deep scan |
+| `--ref <ref>` | The branch, tag or commit to check (default: the default branch). A local folder is read as it is, and `--ref` is ignored there |
+| `--no-site` | Don't ask findsafeskills.com about the repository |
+| `--no-osv` | Don't ask api.osv.dev about the packages it uses |
+| `--no-claude` | Don't have Claude read the files |
+| `--claude-ok <plan id>` | Agree to Claude's reading of the plan with this id |
+| `--budget <tokens>` | Stop Claude's reading at this many tokens |
+| `--model <model>` | The model Claude reads with (default: `sonnet`) |
+
+### The plan, and agreeing to it
+
+Before Claude reads anything, `--deep` prints a plan: the files Claude would read, in order (files that look risky first, then what runs at install and start-up, then what an agent loads, then the rest); the files it leaves out, each with the reason; the number of calls; and an estimate of the input and output tokens. The estimate counts the characters sent over four, plus a fixed cost per call for the prompt and the reply's schema, plus the expected reply.
+
+- **In a terminal** it asks `Run Claude's reading? [y/N]`. Anything but `y` or `yes` skips it.
+- **With no terminal, or with `--json`** (an agent running it), it prints the scan, the package check and the plan, and exits with the rating's code. Claude's reading runs only when you run the same command again with `--claude-ok <plan id>` added.
+
+The plan id pins exactly what you agreed to: the model and the exact text of every file Claude would read. For a repository URL it is `<commit>:<digest>`, and with no `--ref` the rerun downloads that same commit; for a local folder it is the digest alone. If anything changed since the plan (a file, the commit `--ref` names, or the model), the tool reads nothing, says so, and exits `3`; run `--deep` again without `--claude-ok` for a fresh plan.
+
+Claude's reading leaves out vendored copies (`node_modules/`, `vendor/`), build output (`dist/`, `build/`), files that look minified or generated (a line over 1,000 characters in the first 50, or a generated marker in the first five lines), empty files, and lockfiles (they go to OSV instead). Files are packed into calls of about 60,000 characters; a larger file is split at line boundaries into numbered parts. The calls run one at a time. The reading stops at the budget (before a call the estimate says would pass it, and after any call that did), at a usage limit, at a refusal, or after two failed calls in a row, and lists every file Claude did not read. It ends with a usage line (`Claude tokens: ...`).
+
+### Claude's reading
+
+Claude's findings are shown after the scanner's result, under "Claude's reading (not checked by a person)", grouped by file: malicious, then suspicious; files it called benign are counted, not listed. With `--json` they are under `deep.claude`.
+
+What it can tell you: that a model read every file it lists and flagged these files, with a category, a severity and a reason for each finding. What it can't:
+
+- **Claude's findings are not checked by a person, and they never change the rating.** Red, yellow and green come from the static rules and the package check only. Exit code `4` says the rating is not red but Claude marked a file suspicious or malicious.
+- **"Claude flagged nothing" is not reassurance.** A file written to mislead a reviewer can pass. A benign verdict never lowers the rating.
+- **A file can try to steer what Claude writes.** The tool checks each finding against what it sent: a finding naming a file, part or line Claude was not shown is dropped and counted. The quoted line comes from the file itself (secrets redacted), never from Claude's reply. Each reason is cut to 300 characters, with control characters and fence-like text removed. That limits what a hostile file can make Claude say; it doesn't prevent it. Read Claude's reasons as claims about the target, not as instructions.
+
+### How Claude is run
+
+Each call is a separate `claude -p` started without a shell, with `--safe-mode --tools "" --strict-mcp-config --no-session-persistence`, its own system prompt, and a JSON schema for its reply. It runs in an empty temporary folder, never the target's, so nothing in the target (`CLAUDE.md`, settings, hooks) can load. The files go in on stdin, each between fences that carry a random token chosen for the run, with its path and line numbers; the prompt says everything between the fences is content under review, never instructions. It uses `claude` on your `PATH`, or the program `CLAUDE_BIN` names, with your own login, account and settings such as `apiKeyHelper` and `ANTHROPIC_BASE_URL`. It never runs inside your agent's session: the agent that runs `scanskillsafety` sees only its output.
+
+Your own Claude Code settings (`~/.claude/settings.json` hooks, plugins, MCP servers) could still apply to these calls if those flags didn't turn them off. This was checked on 2026-11-15 with Claude Code 2.1.311, on a scratch home folder holding user hooks, a plugin with hooks, a user-level MCP server and a `CLAUDE.md`, and only partly:
+
+| Setting | Turned off by the flags above |
+|---|---|
+| User hooks that run at start-up and end (SessionStart, UserPromptSubmit, SessionEnd) | Confirmed |
+| Plugin hooks that run at start-up and end | Confirmed |
+| User-level MCP servers (not started) | Confirmed |
+| Hooks that need a model turn (Stop, SubagentStop, PreToolUse, PostToolUse, Notification, PreCompact) | Not confirmed |
+| Your `CLAUDE.md` being loaded | Not confirmed |
+
+The last two couldn't be confirmed because the scratch home folder couldn't be logged in, so no model turn took place. With `--tools ""`, a `CLAUDE.md` that still loaded could change only the wording of Claude's reply, which the tool treats as data checked against its schema. If you have hooks of those kinds, know that they may run during Claude's reading.
+
+### Limits
+
+- **Archive:** the download stops, and the tool exits `3` ("too large to check deeply"), past 200 MB downloaded, or 1 GB or 100,000 files unpacked. Both are checked before anything is unpacked. The download times out after 10 minutes.
+- **Files:** a file over 5 MB is listed, not read.
+- **Lockfiles read:** `package-lock.json` and `npm-shrinkwrap.json` (`lockfileVersion` 1, 2 and 3), `yarn.lock` (classic and Berry), `pnpm-lock.yaml` (`lockfileVersion` 6 and 9), `poetry.lock`, `uv.lock`, and `requirements*.txt` lines pinned with `==`. A lockfile it can't parse, or in another format version, is listed as "could not read". `Cargo.lock`, `go.sum` and `Gemfile.lock` are listed as not checked.
+- **No lockfile:** the names in `package.json` (`dependencies`, `optionalDependencies`, `peerDependencies`) and `pyproject.toml` are checked by name only, and the output says so. A package checked by name only counts as malicious (critical) only when OSV says every version is; otherwise it is a warning naming the affected versions.
+- **OSV details:** severities are fetched for the first 200 advisory ids; the rest are listed without severity, and the output says so.
+
+### Platforms
+
+macOS and Linux are supported and tested. Windows is best effort: Windows 10 and later ship `tar`, and the tool uses no POSIX-only calls, but nothing is tested there. Claude's reading won't start if `claude` is installed only as `claude.cmd` (or `.bat`), since Node can't start those without a shell; the output says the reading was skipped and why. `--deep` needs Node.js 18.3 or newer, like the plain scan.
 
 ## What it checks
 
@@ -260,6 +346,8 @@ Run it on its own folder and you get YELLOW: this README's examples quote the ex
 
 ## Network and privacy
 
+### The plain scan
+
 For a local path it reads only files on disk. For a URL it contacts only the target's own host:
 
 - **GitHub:** `api.github.com` (default branch and file list) and `raw.githubusercontent.com` (file contents). If the API is rate-limited (60 requests/hour unauthenticated), it falls back to checking well-known paths on `main`/`master` and says so.
@@ -268,12 +356,27 @@ For a local path it reads only files on disk. For a URL it contacts only the tar
 
 Each request times out after 10 seconds. Nothing is sent to findsafeskills or anywhere else.
 
+### With `--deep`
+
+`--deep` may contact more services. It names each one, with what it receives, before any request leaves your machine, and each one past the target's host can be turned off:
+
+| Service | Receives | Turn off |
+|---|---|---|
+| The target's host: `api.github.com` and `codeload.github.com`, or the Gitea/Forgejo host | requests for the repository, its commit id and that commit's archive | (needed; a local folder contacts nothing here) |
+| findsafeskills.com | the repository's address (repository URLs only) | `--no-site` |
+| `api.github.com`, when the repository is listed on findsafeskills | a request comparing this commit with the one findsafeskills scanned | `--no-site` |
+| `api.osv.dev` | the names, ecosystems and versions of the packages it uses | `--no-osv` |
+| Anthropic, through your own `claude` CLI | the text of the files Claude reads, only after you agree to the plan | `--no-claude` |
+
+Nothing goes to Anthropic before you agree to the plan, and Anthropic is not named at all when no `claude` CLI is found. findsafeskills records nothing about the lookup beyond what the site already logs. Nothing is sent back to findsafeskills about the result.
+
 ## Compatibility
 
 | | Claude Code | Codex | Antigravity | Gemini CLI |
 |---|:---:|:---:|:---:|:---:|
 | Skill and scanner (`cli.cjs`, `src/`, `lib/`) | ✅ | ✅ | ✅ | ✅ |
 | `--help` / `--version` | ✅ | ✅ | ✅ | ✅ |
+| `--deep` (Claude's reading needs the `claude` CLI installed) | ✅ | ✅ | ✅ | ✅ |
 | Skill file used | root `SKILL.md` | `skills/scanskillsafety/SKILL.md` | `skills/scanskillsafety/SKILL.md` | `skills/scanskillsafety/SKILL.md` (via `GEMINI.md`) |
 | How the skill finds `cli.cjs` | `${CLAUDE_SKILL_DIR}` | its own directory (see `references/platform-limitations.md`) | its own directory | its own directory |
 | `--version` reads | `package.json` | `.codex-plugin/plugin.json` | `package.json` | `gemini-extension.json` |
