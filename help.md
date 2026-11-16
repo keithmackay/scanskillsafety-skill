@@ -30,7 +30,7 @@ WHAT IT DOES
     - raw IP addresses and throwaway hosts                  (warning;
       critical beside chmod +x, a startup entry, or a relay)
     - cryptocurrency miners                                 (critical)
-    - setuid and setgid                                     (warning)
+    - setuid                                                (warning)
     - ransom notes                                          (warning)
   Scripts are read up to 200 files, 200 KB each, 4,000 KB in all; a
   pattern only quoted as data in code is a note.
@@ -77,7 +77,7 @@ DEEP SCAN
   agent must ask you before rerunning with --claude-ok <plan id>.
 
   --ref <ref>        (CLI) the branch, tag or commit to check
-                     (default: the default branch)
+                     (default: the default branch; repository URLs only)
   --no-site          (CLI) don't ask findsafeskills.com about the repository
   --no-osv           (CLI) don't ask api.osv.dev about the packages
   --no-claude        (CLI) don't have Claude read the files

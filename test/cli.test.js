@@ -222,6 +222,13 @@ test("--deep on a single file is a could-not-scan result, exit 3", () => {
   assert.match(out.stdout, /--deep needs a repository URL or a local folder/);
 });
 
+test("--deep --ref on a local folder is a could-not-scan result, exit 3", () => {
+  const root = makeTree({ "SKILL.md": "hi" });
+  const out = run("--deep", "--no-osv", "--no-claude", "--ref", "main", root);
+  assert.equal(out.status, 3);
+  assert.match(out.stdout, /--ref needs a repository URL; a local folder is read as it is/);
+});
+
 test("--deep with no terminal stops at Claude's plan, names Anthropic first, makes no call and exits by the rating", { skip: process.platform === "win32" ? "the stand-in claude is a POSIX script" : false }, () => {
   const log = path.join(makeTree({}), "calls.log");
   const env = { CLAUDE_BIN: makeFakeClaude(), FAKE_CLAUDE_LOG: log };

@@ -168,7 +168,8 @@ async function runDeep(input, options, deps = {}) {
   const found = options.claude ? findClaude(deps.env ?? process.env) : null;
   const claudePath = found?.path ?? null;
   const badAddresses = addressErrors(target, options);
-  const readable = target.kind === "local-dir" || isRepository(target);
+  const refOnLocal = target.kind === "local-dir" && options.ref !== null && options.ref !== undefined;
+  const readable = (target.kind === "local-dir" && !refOnLocal) || isRepository(target);
   const services = readable && badAddresses.length === 0 ? servicesFor(target, options, { claudeFound: claudePath !== null }) : [];
   const result = {
     target: input,
@@ -196,6 +197,11 @@ async function runDeep(input, options, deps = {}) {
   };
   if (target.kind !== "local-dir" && !isRepository(target)) {
     result.errors.push("--deep needs a repository URL or a local folder");
+    return result;
+  }
+  // A local folder is read as it is, so a ref would name a commit the scan does not read.
+  if (refOnLocal) {
+    result.errors.push("--ref needs a repository URL; a local folder is read as it is");
     return result;
   }
   if (badAddresses.length > 0) {

@@ -231,7 +231,7 @@ Before any request leaves your machine, `--deep` names each service it will cont
 | Option | What it does |
 |---|---|
 | `--deep` | Run the deep scan |
-| `--ref <ref>` | The branch, tag or commit to check (default: the default branch). A local folder is read as it is, and `--ref` is ignored there |
+| `--ref <ref>` | The branch, tag or commit to check (default: the default branch). Repository URLs only: a local folder is read as it is, and `--ref` with one is refused (exit `3`) |
 | `--no-site` | Don't ask findsafeskills.com about the repository |
 | `--no-osv` | Don't ask api.osv.dev about the packages it uses |
 | `--no-claude` | Don't have Claude read the files |

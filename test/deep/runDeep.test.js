@@ -129,6 +129,16 @@ test("a single file or a plain URL is not something --deep can read", async () =
   }
 });
 
+test("--ref with a local folder is refused: a local folder is read as it is", async () => {
+  const root = makeTree({ "SKILL.md": "hi" });
+  const fetchImpl = fakeFetch({});
+  const result = await runDeep(root, { ...ALL_ON, ref: "main" }, { fetchImpl });
+  assert.equal(result.rating, null);
+  assert.deepEqual(result.errors, ["--ref needs a repository URL; a local folder is read as it is"]);
+  assert.equal(result.deep.read, false);
+  assert.deepEqual(fetchImpl.calls, []);
+});
+
 test("names the services it will contact, and what each receives, before the first request", async () => {
   const events = [];
   const fetchImpl = async (url) => {
