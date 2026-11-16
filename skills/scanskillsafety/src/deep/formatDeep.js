@@ -1,6 +1,6 @@
 // ABOUTME: The deep scan's text output: the plain scan's text, then the commit, the files read and left out, what runs at
-// ABOUTME: install and start-up, the package check, findings in test files nothing launches and Claude's reading (its plan, or what
-// ABOUTME: it found); and the services line.
+// ABOUTME: install and start-up, the package check, how the commit relates to what findsafeskills scanned, findings in test files
+// ABOUTME: nothing launches and Claude's reading (its plan, or what it found); and the services line.
 "use strict";
 
 const { formatText, pushFinding } = require("../scanTarget");
@@ -46,6 +46,35 @@ function packageLines(packages, findings) {
 }
 
 const n = (x) => x.toLocaleString("en-US");
+const commits = (count) => `${n(count)} commit${count === 1 ? "" : "s"}`;
+const dayOf = (timestamp) => (timestamp === null ? "an unknown date" : printable(timestamp.slice(0, 10)));
+
+// How one scan's commit relates to the commit read here.
+function relationLine(scan, scannedAt) {
+  if (scan.relation === "same") return "findsafeskills scanned this commit";
+  const scanned = `findsafeskills scanned ${scan.commit.slice(0, 7)} on ${dayOf(scannedAt)}`;
+  if (scan.relation === "newer") return `${scanned}; this commit is ${commits(scan.by)} newer`;
+  if (scan.relation === "older") return `${scanned}; this commit is ${commits(scan.by)} older`;
+  if (scan.relation === "diverged") {
+    return `${scanned}; the two have diverged (this commit has ${commits(scan.newerBy)} the scanned one lacks, and lacks ${n(scan.olderBy)} of its)`;
+  }
+  return `${scanned} (not compared: ${printable(scan.reason)})`;
+}
+
+function siteLines(site) {
+  if (site.status === "off") return ["findsafeskills: not compared (--no-site)"];
+  if (site.status === "local") return ["findsafeskills: not compared (a local folder has no repository address)"];
+  if (site.status === "unreachable") return [`findsafeskills: could not reach findsafeskills (${printable(site.reason)})`];
+  if (site.status === "not-listed") return ["findsafeskills: not listed on findsafeskills"];
+  const lines = ["findsafeskills:"];
+  for (const listing of site.listings) {
+    lines.push(`  ${printable(listing.url ?? "a listing with no page address")} (${listing.rating === null ? "no rating" : `rating: ${printable(listing.rating)}`})`);
+    if (listing.text) lines.push(`    Text scan: ${relationLine(listing.text, listing.scannedAt)}`);
+    if (listing.scripts) lines.push(`    Script scan: ${relationLine(listing.scripts, listing.scannedAt)}`);
+    if (!listing.text && !listing.scripts) lines.push(`    Scanned on ${dayOf(listing.scannedAt)}, with no commit recorded to compare`);
+  }
+  return lines;
+}
 
 // What Claude would read and what it would cost, as shown before the person agrees.
 function formatPlan(plan) {
@@ -102,6 +131,7 @@ function formatDeep(result) {
   if (deep.installTime.length === 0) lines.push("  nothing found");
   for (const e of deep.installTime) lines.push(`  ${printable(e.file)}: ${printable(e.when)}: ${printableCut(e.command, COMMAND_MAX)}`);
   lines.push(...packageLines(deep.packages, result.findings));
+  lines.push(...siteLines(deep.site));
   if (deep.launchedTests.length > 0) lines.push(`Test files the target runs (counted in the rating): ${pathList(deep.launchedTests)}`);
   if (deep.testFindings.length > 0) {
     lines.push("Findings in test files nothing launches (not counted in the rating):");

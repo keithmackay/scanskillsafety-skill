@@ -1,6 +1,7 @@
 // ABOUTME: Runs a deep scan's stages in order and builds its result: the plain scan's shape plus `deep`, holding the services it
-// ABOUTME: may contact (named before any request), the exact commit, every file's findings, what runs at install and start-up and
-// ABOUTME: what OSV knows about the packages it pulls in, and Claude's reading of every file once the person agrees to its plan.
+// ABOUTME: may contact (named before any request), the exact commit and how it relates to what findsafeskills scanned, every
+// ABOUTME: file's findings, what runs at install and start-up, what OSV knows about the packages it pulls in, and Claude's reading
+// ABOUTME: of every file once the person agrees to its plan.
 "use strict";
 
 const { posix } = require("path");
@@ -14,6 +15,7 @@ const { scanEveryFile } = require("./scanEveryFile");
 const { installTimeEntries } = require("./installTime");
 const { readPackages } = require("./lockfiles");
 const { checkPackages, osvUrl } = require("./osv");
+const { compareWithSite, siteUrl } = require("./siteCompare");
 const { findClaude } = require("./runClaude");
 const { chooseForReading, planReading, readEveryFile, quoteLine } = require("./reading");
 const { printable } = require("../printable");
@@ -34,6 +36,14 @@ function commitServices(target) {
   return [];
 }
 
+// A repository's address goes to the site; GitHub is asked how this commit relates to each commit the site scanned.
+function siteServices(target, options) {
+  if (!options.site || !isRepository(target)) return [];
+  const site = { service: new URL(siteUrl()).host, receives: "this repository's address" };
+  if (target.kind !== "github") return [site];
+  return [site, { service: "api.github.com", receives: "a request comparing this commit with the one findsafeskills scanned, if it is listed" }];
+}
+
 const osvServices = (target, options) =>
   options.osv ? [{ service: new URL(osvUrl()).host, receives: "the names, ecosystems and versions of the packages it uses" }] : [];
 
@@ -42,7 +52,7 @@ const claudeServices = (target, options, { claudeFound }) =>
   claudeFound ? [{ service: "Anthropic, through your own claude CLI", receives: "the text of the files Claude reads, only after you agree" }] : [];
 
 // Each stage that contacts a service names it here, with what it receives, so the list is complete before any request.
-const SERVICE_STAGES = [commitServices, osvServices, claudeServices];
+const SERVICE_STAGES = [commitServices, siteServices, osvServices, claudeServices];
 const servicesFor = (target, options, found) => SERVICE_STAGES.flatMap((stage) => stage(target, options, found));
 
 // The folder to read: a local folder in place, or a repository's exact commit unpacked into a temporary folder.
@@ -190,6 +200,7 @@ async function runDeep(input, options, deps = {}) {
     }
     const { findings: fileFindings, testFindings, launched } = scanEveryFile(files);
     const { findings: packageFindings, packages } = await packageCheck(files, leftOut, options, deps.fetchImpl ?? fetch);
+    const site = options.site ? await compareWithSite(target, opened.commit, deps.fetchImpl ?? fetch) : { status: "off" };
     const findings = [...fileFindings, ...packageFindings];
     Object.assign(result, {
       rating: files.length > 0 ? ratingFromFindings(findings) : null,
@@ -207,6 +218,7 @@ async function runDeep(input, options, deps = {}) {
       installTime: entries,
       testFindings,
       launchedTests: launched,
+      site,
       packages,
     });
     if (reading) result.deep.claude = await claudeStage(reading, files, options, claudePath, deps);
