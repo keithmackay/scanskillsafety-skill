@@ -43,7 +43,7 @@ WHAT IT DOES
   attacks, novel phrasing, or anything outside the scanned files.
 
 WHAT IT NEEDS
-  - Node.js 18 or newer
+  - Node.js 18.3 or newer
 
 USAGE
   Ask the agent, e.g.:

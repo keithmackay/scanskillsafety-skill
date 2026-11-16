@@ -9,7 +9,7 @@
     "scanskillsafety": "cli.cjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18.3"
   },
   "scripts": {
     "test": "node --test test/",

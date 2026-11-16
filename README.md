@@ -48,7 +48,7 @@ Issues:  https://github.com/keithmackay/scanskillsafety-skill/issues
 
 ### Prerequisites (all platforms)
 
-- Node.js 18 or newer (uses the built-in `fetch`).
+- Node.js 18.3 or newer (uses the built-in `fetch` and `util.parseArgs`).
 
 ### Claude Code
 

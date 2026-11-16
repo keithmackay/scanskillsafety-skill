@@ -22,7 +22,7 @@ Open an issue describing the problem first (for example, "it doesn't read X, whi
 
 ## Development setup
 
-Requires Node.js 18 or newer. There are no dependencies to install.
+Requires Node.js 18.3 or newer. There are no dependencies to install.
 
 ```bash
 git clone https://github.com/keithmackay/scanskillsafety-skill
