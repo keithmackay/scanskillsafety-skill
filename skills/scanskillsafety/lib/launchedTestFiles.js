@@ -1,12 +1,16 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MAX_LAUNCH_CONTEXT_FILES = exports.TEST_FILE_NAME = void 0;
+exports.isInTestFolder = exports.MAX_LAUNCH_CONTEXT_FILES = exports.TEST_FILE_NAME = exports.NO_LIMITS = exports.SCRIPT_LIMITS = void 0;
 exports.hasLaunchableTestFiles = hasLaunchableTestFiles;
 exports.launchContextPaths = launchContextPaths;
 exports.findLaunchedTestFiles = findLaunchedTestFiles;
 // ABOUTME: Finds the scripts in test and eval folders that a file outside them runs, so a payload can't hide in a folder the
 // ABOUTME: script scan skips: a skill, command, agent, hook, script or non-test package.json script that names one gets it read.
 const scriptFiles_1 = require("./scriptFiles");
+// The limits findsafeskills reads a listing's scripts within.
+exports.SCRIPT_LIMITS = { files: scriptFiles_1.MAX_FILES_PER_LISTING, bytes: scriptFiles_1.MAX_BYTES_PER_LISTING, bytesPerFile: scriptFiles_1.MAX_BYTES_PER_FILE };
+// No limits, for a check on the person's own machine that reads every file.
+exports.NO_LIMITS = { files: Infinity, bytes: Infinity, bytesPerFile: Infinity };
 // The test and eval folders scriptFiles skips; its dependency and build folders stay skipped.
 const TEST_FOLDERS = new Set(["test", "tests", "__tests__", "evals"]);
 const DEPENDENCY_FOLDERS = new Set(["node_modules", "vendor", "dist", "build"]);
@@ -22,7 +26,8 @@ exports.MAX_LAUNCH_CONTEXT_FILES = 100;
 const segmentsOf = (path) => path.split("/");
 const baseName = (path) => path.slice(path.lastIndexOf("/") + 1);
 const testFolderIndex = (path) => segmentsOf(path).slice(0, -1).findIndex((s) => TEST_FOLDERS.has(s));
-const inTestFolder = (path) => testFolderIndex(path) >= 0;
+const isInTestFolder = (path) => testFolderIndex(path) >= 0;
+exports.isInTestFolder = isInTestFolder;
 const inDependencyFolder = (path) => segmentsOf(path).slice(0, -1).some((s) => DEPENDENCY_FOLDERS.has(s));
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const byPath = (a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
@@ -34,7 +39,7 @@ function isLaunchable(path) {
 }
 // Whether the tree has anything a file could launch from a test or eval folder: when not, nothing need be read to find out.
 function hasLaunchableTestFiles(tree) {
-    return tree.some((f) => inTestFolder(f.path) && isLaunchable(f.path));
+    return tree.some((f) => (0, exports.isInTestFolder)(f.path) && isLaunchable(f.path));
 }
 // The files that say what a skill or plugin runs without being scripts themselves: SKILL.md, commands and agents in its
 // folders, and the repository's package.json. (Hooks and MCP configs are already read as scripts.)
@@ -44,7 +49,7 @@ function launchContextPaths(tree) {
     return tree
         .filter((f) => f.path === "package.json" ||
         (under(f.path) &&
-            !inTestFolder(f.path) &&
+            !(0, exports.isInTestFolder)(f.path) &&
             !inDependencyFolder(f.path) &&
             (baseName(f.path) === "SKILL.md" || /(^|\/)(commands|agents)\/[^/]+\.md$/.test(f.path))))
         .sort(byPath)
@@ -125,20 +130,20 @@ function launchText(file) {
 // The files in the tree's test and eval folders that a file read so far runs, from outside those folders or from a test
 // file already launched, within what is left of the script limits. `tried` holds paths already looked for. Call again with
 // the launched files added (script, launchedBy) until none are found: a launched file can launch another.
-function findLaunchedTestFiles(tree, files, tried = new Set()) {
+function findLaunchedTestFiles(tree, files, tried = new Set(), limits = exports.SCRIPT_LIMITS) {
     const read = new Set(files.map((f) => f.path));
     const referrers = files
-        .filter((f) => (!inTestFolder(f.path) && !exports.TEST_FILE_NAME.test(baseName(f.path))) || f.launchedBy)
+        .filter((f) => (!(0, exports.isInTestFolder)(f.path) && !exports.TEST_FILE_NAME.test(baseName(f.path))) || f.launchedBy)
         .map((f) => ({ path: f.path, text: launchText(f) }))
         .filter((f) => Boolean(f.text))
         .map((f) => ({ ...f, words: new Set(f.text.match(WORD) ?? []) }));
     const scripts = files.filter((f) => f.script);
     let count = scripts.length;
-    let bytes = scripts.reduce((sum, f) => sum + Math.min(Buffer.byteLength(f.text), scriptFiles_1.MAX_BYTES_PER_FILE), 0);
+    let bytes = scripts.reduce((sum, f) => sum + Math.min(Buffer.byteLength(f.text), limits.bytesPerFile), 0);
     const launched = [];
     let truncated = false;
     const candidates = tree
-        .filter((f) => inTestFolder(f.path) && isLaunchable(f.path) && !read.has(f.path) && !tried.has(f.path))
+        .filter((f) => (0, exports.isInTestFolder)(f.path) && isLaunchable(f.path) && !read.has(f.path) && !tried.has(f.path))
         .sort(byPath);
     for (const f of candidates) {
         // A file can only name this one if the first word of its name is in it; that check is cheap, the pattern is not.
@@ -147,8 +152,8 @@ function findLaunchedTestFiles(tree, files, tried = new Set()) {
         const by = referrers.find((r) => r.path !== f.path && r.words.has(firstWord) && runs(f.path, pattern, r));
         if (!by)
             continue;
-        const cost = Math.min(f.size, scriptFiles_1.MAX_BYTES_PER_FILE);
-        if (count + 1 > scriptFiles_1.MAX_FILES_PER_LISTING || bytes + cost > scriptFiles_1.MAX_BYTES_PER_LISTING) {
+        const cost = Math.min(f.size, limits.bytesPerFile);
+        if (count + 1 > limits.files || bytes + cost > limits.bytes) {
             truncated = true;
             continue;
         }
