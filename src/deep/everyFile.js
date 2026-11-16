@@ -13,8 +13,15 @@ const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 function listEveryFile(root) {
   const files = [];
   const leftOut = [];
+  const unreadable = (relPath, err) => leftOut.push({ path: relPath, reason: `unreadable (${err.code ?? err.message})` });
   const walk = (dir, rel) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort(byName)) {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      return unreadable(rel, err);
+    }
+    for (const entry of entries.sort(byName)) {
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
       const full = path.join(dir, entry.name);
       if (entry.isSymbolicLink()) leftOut.push({ path: relPath, reason: "symbolic link, not followed" });
@@ -25,13 +32,18 @@ function listEveryFile(root) {
     }
   };
   const readOne = (full, relPath) => {
-    const size = fs.lstatSync(full).size;
+    let size;
+    try {
+      size = fs.lstatSync(full).size;
+    } catch (err) {
+      return unreadable(relPath, err);
+    }
     if (size > MAX_TEXT_BYTES) return leftOut.push({ path: relPath, reason: "larger than 5 MB" });
     let bytes;
     try {
       bytes = fs.readFileSync(full);
     } catch (err) {
-      return leftOut.push({ path: relPath, reason: `unreadable (${err.code ?? err.message})` });
+      return unreadable(relPath, err);
     }
     if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) return leftOut.push({ path: relPath, reason: "binary" });
     try {

@@ -27,3 +27,13 @@ test("does not read a .git folder", () => {
   const root = makeTree({ ".git/config": "[core]", "x.md": "y" });
   assert.deepEqual(listEveryFile(root).files.map((f) => f.path), ["x.md"]);
 });
+
+test("lists a folder it cannot read with the reason and reads the rest", { skip: process.getuid && process.getuid() === 0 ? "root reads every folder" : false }, (t) => {
+  const root = makeTree({ "a.md": "hi", "locked/b.md": "secret", "z.md": "bye" });
+  const locked = path.join(root, "locked");
+  fs.chmodSync(locked, 0o000);
+  t.after(() => fs.chmodSync(locked, 0o755));
+  const { files, leftOut } = listEveryFile(root);
+  assert.deepEqual(files.map((f) => f.path), ["a.md", "z.md"]);
+  assert.deepEqual(leftOut, [{ path: "locked", reason: "unreadable (EACCES)" }]);
+});
