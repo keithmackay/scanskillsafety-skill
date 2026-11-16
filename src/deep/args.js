@@ -23,7 +23,8 @@ function parseCliArgs(argv) {
   try {
     parsed = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true, strict: true });
   } catch (err) {
-    return { ok: false, error: err.message };
+    const unknown = err.code === "ERR_PARSE_ARGS_UNKNOWN_OPTION" && /'([^']+)'/.exec(err.message);
+    return { ok: false, error: unknown ? `unknown option ${unknown[1]}` : err.message };
   }
   const { values, positionals } = parsed;
   if (positionals.length !== 1) return { ok: false, error: "give exactly one target" };

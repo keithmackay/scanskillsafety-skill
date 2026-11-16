@@ -98,4 +98,4 @@ function formatText(result) {
 const EXIT_CODES = { green: 0, yellow: 1, red: 2 };
 const exitCodeFor = (result) => (result.rating === null ? 3 : EXIT_CODES[result.rating]);
 
-module.exports = { scanTarget, formatText, exitCodeFor };
+module.exports = { scanTarget, formatText, pushFinding, exitCodeFor };

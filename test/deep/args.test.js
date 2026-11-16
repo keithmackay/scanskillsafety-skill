@@ -42,3 +42,8 @@ test("--budget takes a positive whole number no larger than JavaScript counts ex
   assert.equal(parseCliArgs(["--deep", "--budget", String(Number.MAX_SAFE_INTEGER), "x"]).deep.budget, Number.MAX_SAFE_INTEGER);
   assert.equal(parseCliArgs(["--deep", "--budget", "1", "x"]).deep.budget, 1);
 });
+
+test("an unknown option is named plainly", () => {
+  assert.deepEqual(parseCliArgs(["--jsn", "x"]), { ok: false, error: "unknown option --jsn" });
+  assert.deepEqual(parseCliArgs(["-q", "x"]), { ok: false, error: "unknown option -q" });
+});
