@@ -117,4 +117,4 @@ function installTimeEntries(files) {
   return withoutRepeats(entries.sort(byFileCommandWhen));
 }
 
-module.exports = { installTimeEntries };
+module.exports = { installTimeEntries, isVendored };

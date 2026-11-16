@@ -1,0 +1,32 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@pnpm/exe':
+        specifier: 9.15.0
+        version: 9.15.0
+
+packages:
+
+  '@pnpm/exe@9.15.0':
+    resolution: {integrity: sha512-RIy3pcLvMOdyTYumvdbz4ZE+6ODO7QkoMjgnOJdvMDhIhhKw3B3HPATuL3zTLGIMt2LEDwlmXjmRcJqJ1aBSdg==}
+    hasBin: true
+
+  semver@7.6.3:
+    resolution: {integrity: sha512-oVekc3TL7qEHi2NAG3ii4eG8QnZD1XPpyZ6uoQHUnPDGhw7XjP3q0FMOVgO4F2PptSEVYvrM6HdkRf1cAgOXvA==}
+    engines: {node: '>=10'}
+    hasBin: true
+
+snapshots:
+
+  '@pnpm/exe@9.15.0':
+    dependencies:
+      semver: 7.6.3
+
+  semver@7.6.3: {}
