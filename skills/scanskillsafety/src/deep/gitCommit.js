@@ -8,7 +8,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 const { runTool, describeDuration } = require("./runTool");
 const { classifyFile, MAX_TEXT_BYTES } = require("./everyFile");
-const { describeLimit, temporaryFolder } = require("./util");
+const { LINK_MODE, describeLimit, temporaryFolder } = require("./util");
 const { repoPath } = require("../fetchRemote");
 
 // What git does here, checked with git 2.56.1 against github.com, codeberg.org and a local repository on 2026-11-16:
@@ -17,36 +17,48 @@ const { repoPath } = require("../fetchRemote");
 //   one that is not a tip, so the ref is then fetched by name and its commit compared).
 // - A bare fetch carries none of the repository's own configuration: the only config in the bare repository is what git init
 //   wrote and a remote entry for the URL marked promisor, from the filter.
-// - Because of that promisor entry, git would fetch a filtered blob when asked about it later (ls-tree -l, cat-file). Every
-//   command after the fetch sets GIT_NO_LAZY_FETCH and turns the promisor off, so a filtered blob reads as missing.
+// - Because of that promisor entry, git would fetch a filtered blob when asked about it later (ls-tree -l, cat-file), and a
+//   "-c remote.<url>.promisor=false" given on the command line does not stop it. So the remote entry is removed right after the
+//   fetch, and GIT_NO_LAZY_FETCH (git 2.44 and newer) is set as well: a filtered blob then reads as missing.
+// - With http.followRedirects=false, a host that redirects (a renamed repository on some hosts; github.com serves a renamed
+//   repository without one) fails with "The requested URL returned error: 301".
 // - `ls-tree -l` prints no size for a filtered blob; `cat-file --batch-check` answers "<id> missing".
 const GIT_TIMEOUT_MS = 5 * 60 * 1000;
 const POLL_MS = 100;
 const STDERR_MAX = 64 * 1024;
 const READ_CHUNK_BYTES = 64 * 1024 ** 2;
 const FILTER_SINCE = [2, 19];
-const LINK_MODE = "120000";
+const END_OF_OPTIONS_SINCE = [2, 24];
+const REDIRECTED = /returned error: 30[1278]\b/;
+const IS_WINDOWS = process.platform === "win32";
 
-// No system or user configuration, no credential helper or prompt, no hooks, https only, and every object checked as it arrives.
+// No system or user configuration, no credential helper or prompt, no hooks, https only with no redirects followed, and every
+// object checked as it arrives.
 const ISOLATION_ARGS = [
   "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "credential.helper=",
-  "-c", `core.hooksPath=${os.devNull}`, "-c", "transfer.fsckObjects=true",
+  "-c", `core.hooksPath=${os.devNull}`, "-c", "transfer.fsckObjects=true", "-c", "http.followRedirects=false",
 ];
 
 const tooLarge = (what) => new Error(`too large to check deeply: ${what}`);
 
 const gitUrl = (target) => `${target.kind === "github" ? "https://github.com" : target.origin}/${repoPath(target)}.git`;
 
-function gitSupportsFilter(versionLine) {
+// What this git can do: leave out blobs by size when fetching, and end its options with --end-of-options.
+function gitFeatures(versionLine) {
   const [major, minor] = (/(\d+)\.(\d+)/.exec(versionLine) || []).slice(1).map(Number);
-  return major > FILTER_SINCE[0] || (major === FILTER_SINCE[0] && minor >= FILTER_SINCE[1]);
+  const since = ([m, n]) => major > m || (major === m && minor >= n);
+  return { filter: since(FILTER_SINCE), endOfOptions: since(END_OF_OPTIONS_SINCE) };
 }
 
-// The environment git runs with: the person's own, less every GIT_ setting that could redirect or reconfigure it, plus isolation.
-function gitEnv(env) {
+// The environment git runs with: the person's own, less every GIT_ setting that could redirect or reconfigure it, with an empty
+// home folder (so no .gitconfig, XDG configuration or .netrc of theirs is read, whatever the git version), plus isolation.
+function gitEnv(env, home) {
   const kept = Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith("GIT_") && name !== "SSH_ASKPASS"));
   return {
     ...kept,
+    HOME: home,
+    XDG_CONFIG_HOME: home,
+    USERPROFILE: home,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: os.devNull,
     GIT_TERMINAL_PROMPT: "0",
@@ -56,11 +68,11 @@ function gitEnv(env) {
   };
 }
 
-// Whether git is installed, and whether it can leave out blobs by size when fetching.
+// Whether git is installed, and what it can do.
 function findGit(env) {
-  const run = runTool("git", ["version"], GIT_TIMEOUT_MS, { env: gitEnv(env) });
-  if (run.error || run.status !== 0) return { found: false, filter: false };
-  return { found: true, filter: gitSupportsFilter(run.stdout) };
+  const run = runTool("git", ["version"], GIT_TIMEOUT_MS, { env: gitEnv(env, os.devNull) });
+  if (run.error || run.status !== 0) return { found: false, filter: false, endOfOptions: false };
+  return { found: true, ...gitFeatures(run.stdout) };
 }
 
 function folderSize(dir) {
@@ -90,7 +102,18 @@ function folderSize(dir) {
 function fetchWithin(args, env, repoDir, limits) {
   const overLimit = () => tooLarge(`the fetch is larger than ${describeLimit(limits.downloadBytes)}`);
   return new Promise((resolve, reject) => {
-    const child = spawn("git", args, { env, stdio: ["ignore", "ignore", "pipe"] });
+    // Started in its own process group (on POSIX), so stopping it stops the helpers it starts, which write the download.
+    const child = spawn("git", args, { env, stdio: ["ignore", "ignore", "pipe"], detached: !IS_WINDOWS });
+    const killAll = () => {
+      try {
+        if (IS_WINDOWS) child.kill("SIGKILL");
+        else process.kill(-child.pid, "SIGKILL");
+      } catch {}
+    };
+    // A group of its own no longer gets the terminal's Ctrl-C, so the scan's own ending stops it.
+    process.once("exit", killAll);
+    process.prependOnceListener("SIGINT", killAll);
+    process.prependOnceListener("SIGTERM", killAll);
     let stderr = "";
     let stopped = null;
     child.stderr.on("data", (d) => {
@@ -99,13 +122,16 @@ function fetchWithin(args, env, repoDir, limits) {
     const stop = (err) => {
       if (stopped) return;
       stopped = err;
-      child.kill("SIGKILL");
+      killAll();
     };
     const poll = setInterval(() => folderSize(repoDir) > limits.downloadBytes && stop(overLimit()), POLL_MS);
     const timer = setTimeout(() => stop(new Error(`the fetch timed out after ${describeDuration(limits.downloadMs)}`)), limits.downloadMs);
     const done = () => {
       clearInterval(poll);
       clearTimeout(timer);
+      process.removeListener("exit", killAll);
+      process.removeListener("SIGINT", killAll);
+      process.removeListener("SIGTERM", killAll);
     };
     child.on("error", (err) => {
       done();
@@ -158,31 +184,41 @@ function blobContents(bytes) {
   return contents;
 }
 
-async function readCommitWithGit({ target, commit, ref, url, limits, filter, env = process.env, allowFileProtocol = false }) {
-  const environment = gitEnv(env);
+// git: what findGit found this git can do. testOnlyProtocols: protocols a test serves from (file, http), for the fetch only.
+async function readCommitWithGit({ target, commit, ref, url, limits, git, env = process.env, testOnlyProtocols = [] }) {
   const { dir, cleanup } = temporaryFolder("scanskillsafety-git-");
   const repo = path.join(dir, "repo.git");
-  // file:// is allowed only where a test asks for it, and only for the fetch itself.
+  const home = path.join(dir, "home");
+  fs.mkdirSync(home);
+  const environment = gitEnv(env, home);
   const fetchArgs = (wanted) => [
-    "-C", repo, ...ISOLATION_ARGS, ...(allowFileProtocol ? ["-c", "protocol.file.allow=always"] : []),
-    "fetch", "-q", "--depth", "1", "--no-tags", ...(filter ? [`--filter=blob:limit=${MAX_TEXT_BYTES}`] : []), url, wanted,
+    "-C", repo, ...ISOLATION_ARGS, ...testOnlyProtocols.flatMap((p) => ["-c", `protocol.${p}.allow=always`]),
+    "fetch", "-q", "--depth", "1", "--no-tags", ...(git.filter ? [`--filter=blob:limit=${MAX_TEXT_BYTES}`] : []),
+    ...(git.endOfOptions ? ["--end-of-options"] : []), url, wanted,
   ];
   const local = (args, options = {}) => {
-    const run = runTool("git", ["-C", repo, ...ISOLATION_ARGS, "-c", `remote.${url}.promisor=false`, ...args], GIT_TIMEOUT_MS, { env: environment, binary: true, ...options });
+    const run = runTool("git", ["-C", repo, ...ISOLATION_ARGS, ...args], GIT_TIMEOUT_MS, { env: environment, binary: true, ...options });
     if (run.error || run.status !== 0) throw new Error(`git could not read the commit (${firstLine(String(run.stderr ?? run.error))})`);
     return run.stdout;
+  };
+  const fetch = async (wanted) => {
+    const run = await fetchWithin(fetchArgs(wanted), environment, repo, limits);
+    if (REDIRECTED.test(run.stderr)) throw new Error("the repository answered with a redirect; scan its current address");
+    return run;
   };
   try {
     const init = runTool("git", [...ISOLATION_ARGS, "init", "--bare", "-q", repo], GIT_TIMEOUT_MS, { env: environment });
     if (init.error || init.status !== 0) throw new Error(`git could not make a repository to fetch into (${firstLine(String(init.stderr ?? init.error))})`);
-    const byId = await fetchWithin(fetchArgs(commit), environment, repo, limits);
+    const byId = await fetch(commit);
     if (byId.status !== 0) {
       const name = ref ?? target.ref ?? "HEAD";
-      const byName = await fetchWithin(fetchArgs(name), environment, repo, limits);
+      const byName = await fetch(name);
       if (byName.status !== 0) throw refused(commit, url, firstLine(byId.stderr));
       const fetched = local(["rev-parse", "--verify", "-q", "FETCH_HEAD^{commit}"]).toString("utf-8").trim();
       if (fetched !== commit) throw refused(commit, url, `the host gave another commit for ${name} (${fetched})`);
     }
+    // The filter marks the URL a promisor remote; without the entry, a filtered blob stays missing instead of being fetched.
+    if (git.filter) local(["config", "--remove-section", `remote.${url}`]);
     return readTree(target, commit, limits, local);
   } finally {
     cleanup();
@@ -252,4 +288,4 @@ function chunksOf(blobs) {
   return chunks;
 }
 
-module.exports = { readCommitWithGit, findGit, gitUrl, gitSupportsFilter };
+module.exports = { readCommitWithGit, findGit, gitUrl, gitFeatures };

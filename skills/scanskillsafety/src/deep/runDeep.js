@@ -99,8 +99,8 @@ async function openTarget(target, options, deps, git) {
   const commit = await resolveRef(target, options.ref, fetchImpl);
   try {
     const { files, leftOut } = await readCommitWithGit({
-      target, commit, ref: options.ref, url: deps.gitUrl ? deps.gitUrl(target) : gitUrl(target), limits, filter: git.filter,
-      env: deps.env ?? process.env, allowFileProtocol: deps.allowFileProtocol === true,
+      target, commit, ref: options.ref, url: deps.gitUrl ? deps.gitUrl(target) : gitUrl(target), limits, git,
+      env: deps.env ?? process.env, testOnlyProtocols: deps.testOnlyProtocols ?? [],
     });
     return { files, leftOut, commit, changed: false, changesChecked: true, note: null, fetchedSeparately: [], route: { method: "git" } };
   } catch (err) {

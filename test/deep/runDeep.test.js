@@ -11,7 +11,7 @@ const { sourceRepository } = require("./gitSource");
 
 // Most tests here read a repository from its archive through fakeFetch, so they say git is not installed; the tests of the git
 // route pass `git: undefined` to look for git as the tool does.
-const NO_GIT = { found: false, filter: false };
+const NO_GIT = { found: false, filter: false, endOfOptions: false };
 const runDeep = (input, options, deps = {}) => runDeepWith(input, options, { git: NO_GIT, ...deps });
 const hasGit = spawnSync("git", ["--version"]).status === 0;
 const { formatDeep, formatServices } = require("../../src/deep/formatDeep");
@@ -142,7 +142,7 @@ test("a file .gitattributes keeps out of the archive is fetched, scanned and nam
 test("with git installed, a repository is read with git: every file, one .gitattributes keeps out of an archive too", { skip: hasGit ? false : "no git here" }, async () => {
   const source = sourceRepository();
   const fetchImpl = fakeFetch({ "https://api.github.com/repos/o/r/commits/HEAD": source.commit });
-  const result = await runDeep("https://github.com/o/r", ALL_OFF, { git: undefined, fetchImpl, gitUrl: () => source.url, allowFileProtocol: true });
+  const result = await runDeep("https://github.com/o/r", ALL_OFF, { git: undefined, fetchImpl, gitUrl: () => source.url, testOnlyProtocols: ["file"] });
   assert.deepEqual(result.errors, []);
   assert.equal(result.deep.commit, source.commit);
   assert.deepEqual(result.deep.route, { method: "git" });
@@ -173,7 +173,7 @@ test("without git, a repository is read from its archive, and the output says wh
 });
 
 test("with git, the services named are the commit id request and a git fetch with no credentials sent", async () => {
-  const services = async (input) => (await runDeep(input, ALL_OFF, { git: { found: true, filter: true }, fetchImpl: fakeFetch({}) })).deep.services;
+  const services = async (input) => (await runDeep(input, ALL_OFF, { git: { found: true, filter: true, endOfOptions: true }, fetchImpl: fakeFetch({}) })).deep.services;
   assert.deepEqual(await services("https://github.com/o/r"), [
     { service: "api.github.com", receives: "a request for this repository's commit id" },
     { service: "github.com", receives: "a git fetch of this commit, with no credentials sent" },
@@ -194,7 +194,7 @@ test("a Gitea or Forgejo host that will not serve the commit to git is read from
     [`${api}/archive/${SHA}.tar.gz`]: { body: makeTarball({ "r-abc/SKILL.md": "Formats tables." }) },
     [`${api}/git/trees/${SHA}?recursive=true&per_page=10000&page=1`]: { body: { truncated: false, page: 1, tree: [] } },
   });
-  const deps = { git: undefined, fetchImpl, gitUrl: () => source.url, allowFileProtocol: true };
+  const deps = { git: undefined, fetchImpl, gitUrl: () => source.url, testOnlyProtocols: ["file"] };
   const gitea = await runDeep("https://code.example/o/r", ALL_OFF, deps);
   assert.equal(gitea.deep.route.method, "archive");
   assert.match(gitea.deep.route.reason, /^the host would not serve this commit to git \(git could not fetch commit c{40} from file:/);
