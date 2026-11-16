@@ -24,9 +24,11 @@ test("reads every text file, tests included, and lists binary, oversized, non-UT
   ]);
 });
 
-test("does not read a .git folder", () => {
-  const root = makeTree({ ".git/config": "[core]", "x.md": "y" });
-  assert.deepEqual(listEveryFile(root).files.map((f) => f.path), ["x.md"]);
+test("does not read a .git folder; one below the root is listed as git metadata, the root's own is not", () => {
+  const root = makeTree({ ".git/config": "[core]", "x.md": "y", "sub/.git/config": "[core]", "sub/z.md": "z" });
+  const { files, leftOut } = listEveryFile(root);
+  assert.deepEqual(files.map((f) => f.path), ["sub/z.md", "x.md"]);
+  assert.deepEqual(leftOut, [{ path: "sub/.git", reason: "git metadata folder, not read" }]);
 });
 
 test("lists a folder it cannot read with the reason and reads the rest", { skip: process.getuid && process.getuid() === 0 ? "root reads every folder" : false }, (t) => {

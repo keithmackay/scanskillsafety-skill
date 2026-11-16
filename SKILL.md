@@ -88,7 +88,7 @@ Claude's findings are not checked by a person and never change the rating.
 
 ### Deep exit codes
 
-- **0, 1, 2**: the rating, as above. While `deep.claude.status` is `planned`, `skipped` or `stopped`, the code is the rating's alone: Claude's reading did not finish.
+- **0, 1, 2**: the rating, as above. While `deep.claude.status` is `planned`, `skipped` or `stopped`, the code is the rating's alone: Claude's reading did not finish, or stopped before flagging a file. A stopped reading that flagged a file still exits 4.
 - **3**: could not scan; quote `errors` (for example "too large to check deeply", a missing or private repository, or a target that changed since the plan). Never present it as a clean result.
 - **4**: say "The scanner found nothing that makes the rating red (it is <rating>), but Claude flagged files: read them", and list them as above.
 

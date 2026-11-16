@@ -27,6 +27,10 @@ test("--claude-ok takes the plan id", () => {
   assert.equal(parseCliArgs(["--deep", "--claude-ok", "abc", "x"]).deep.claudeOk, "abc");
 });
 
+test("--claude-ok with --no-claude is an error", () => {
+  assert.deepEqual(parseCliArgs(["--deep", "--no-claude", "--claude-ok", "abc", "x"]), { ok: false, error: "--claude-ok agrees to Claude's reading, which --no-claude turns off" });
+});
+
 test("deep options without --deep, a bad budget, or two targets are errors", () => {
   assert.equal(parseCliArgs(["--ref", "main", "x"]).ok, false);
   assert.equal(parseCliArgs(["--deep", "--budget", "lots", "x"]).ok, false);

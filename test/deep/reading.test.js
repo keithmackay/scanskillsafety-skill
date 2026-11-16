@@ -100,6 +100,21 @@ test("findClaude: an executable claude on PATH or CLAUDE_BIN, found without runn
   assert.deepEqual(findClaude({ PATH: makeTree({}) }, "darwin"), { reason: "the claude CLI is not installed" });
 });
 
+test("findClaude: a claude found through a relative PATH entry is given by its full path", () => {
+  const dir = makeTree({ claude: "#!/bin/sh\n" });
+  fs.chmodSync(path.join(dir, "claude"), 0o755);
+  assert.deepEqual(findClaude({ PATH: path.relative(process.cwd(), dir) }, "darwin"), { path: path.join(dir, "claude") });
+});
+
+test("runClaude: its folder is also removed if the scan is stopped by Ctrl-C or SIGTERM, and the listeners go with the call", { skip }, async () => {
+  const before = ["SIGINT", "SIGTERM", "exit"].map((s) => process.listenerCount(s));
+  const { env } = fakeEnv({ FAKE_CLAUDE_MODE: "sleep" });
+  const pending = runClaude({ args: [], prompt: "x", timeoutMs: 300, command: FAKE, env });
+  assert.deepEqual(["SIGINT", "SIGTERM", "exit"].map((s) => process.listenerCount(s)), before.map((n) => n + 1));
+  await pending;
+  assert.deepEqual(["SIGINT", "SIGTERM", "exit"].map((s) => process.listenerCount(s)), before);
+});
+
 test("findClaude on Windows: claude.exe is used; a claude.cmd alone is named as something it cannot start safely", () => {
   const cmdOnly = makeTree({ "claude.cmd": "@echo off", "claude.bat": "@echo off" });
   assert.deepEqual(findClaude({ PATH: cmdOnly }, "win32"), {

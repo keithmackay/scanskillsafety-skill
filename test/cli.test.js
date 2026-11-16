@@ -158,7 +158,7 @@ test("--help prints usage, every option, examples and what each exit code means,
     const out = run(flag);
     assert.equal(out.status, 0);
     assert.equal(out.stderr, "");
-    for (const expected of ["Usage: scanskillsafety", "--json", "--help", "--version", "--deep", "--ref", "--no-site", "--no-osv", "--no-claude", "--claude-ok", "--budget", "--model", "Examples:", "https://github.com/", "0  green", "1  yellow", "2  red", "3  could not scan", "4  ", "deep.claude.status"]) {
+    for (const expected of ["Usage: scanskillsafety", "--json", "--help", "--version", "--deep", "--ref", "--no-site", "--no-osv", "--no-claude", "--claude-ok", "--budget", "--model", "Examples:", "https://github.com/", "0  green", "1  yellow", "2  red", "3  could not scan", "4  ", "deep.claude.status", "a stopped reading that flagged a file still exits 4"]) {
       assert.ok(out.stdout.includes(expected), `${flag} output names ${expected}`);
     }
   }

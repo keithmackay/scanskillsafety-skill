@@ -103,7 +103,11 @@ EXIT CODES (CLI)
   1  yellow: warnings only
   2  red: at least one critical finding
   3  could not scan (bad arguments, bad target, nothing found, network error), not a clean result
-  4  --deep: the rating is not red, but Claude marked a file suspicious or malicious
+  4  --deep: the rating is not red, but Claude marked a file suspicious or malicious;
+     a stopped reading that flagged a file still exits 4
+     With --deep, 0, 1 or 2 while deep.claude.status is planned, skipped or stopped means
+     Claude's reading did not finish (or stopped before flagging a file): the code is the
+     rating's alone.
 
 MORE
   https://github.com/keithmackay/scanskillsafety-skill

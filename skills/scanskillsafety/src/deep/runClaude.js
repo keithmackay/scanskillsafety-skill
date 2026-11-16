@@ -6,6 +6,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
+const { temporaryFolder } = require("./util");
 
 const CLAUDE_TIMEOUT_MS = 10 * 60_000;
 const KILL_AFTER_MS = 5000;
@@ -46,7 +47,7 @@ function findClaude(env = process.env, platform = process.platform) {
   for (const folder of folders) {
     for (const ending of endings) {
       const file = path.join(folder, name + ending);
-      if (isExecutableFile(file, platform)) return { path: file };
+      if (isExecutableFile(file, platform)) return { path: path.resolve(file) };
     }
   }
   if (platform === "win32" && folders.some((folder) => isFile(path.join(folder, `${name}.cmd`)) || isFile(path.join(folder, `${name}.bat`)))) {
@@ -62,7 +63,7 @@ function runClaude({
   args, prompt, timeoutMs = CLAUDE_TIMEOUT_MS, killAfterMs = KILL_AFTER_MS, command = process.env.CLAUDE_BIN || "claude",
   env = process.env, tmpDir = os.tmpdir(),
 }) {
-  const folder = fs.mkdtempSync(path.join(tmpDir, "scanskillsafety-claude-"));
+  const { dir: folder, cleanup } = temporaryFolder("scanskillsafety-claude-", tmpDir);
   const childEnv = { ...env };
   for (const name of SESSION_VARIABLES) delete childEnv[name];
   return new Promise((resolve) => {
@@ -72,10 +73,7 @@ function runClaude({
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      // A folder that cannot be removed (a program still holding it open on Windows) does not change the call's outcome.
-      try {
-        fs.rmSync(folder, { recursive: true, force: true });
-      } catch {}
+      cleanup();
       resolve(outcome);
     };
     let child;

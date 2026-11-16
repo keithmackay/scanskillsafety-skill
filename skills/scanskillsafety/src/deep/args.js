@@ -33,6 +33,7 @@ function parseCliArgs(argv) {
     if (stray) return { ok: false, error: `--${stray} needs --deep` };
     return { ok: true, target: positionals[0], json: Boolean(values.json), deep: null };
   }
+  if (values["claude-ok"] !== undefined && values["no-claude"]) return { ok: false, error: "--claude-ok agrees to Claude's reading, which --no-claude turns off" };
   let budget = null;
   if (values.budget !== undefined) {
     budget = /^\d+$/.test(values.budget) ? Number(values.budget) : NaN;

@@ -4,7 +4,6 @@
 "use strict";
 
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
 const zlib = require("zlib");
 const { Readable, Transform, Writable } = require("stream");
@@ -12,7 +11,7 @@ const { pipeline } = require("stream/promises");
 const { fetchResponse, fetchText, describeFailure, repoPath } = require("../fetchRemote");
 const { runTool, describeDuration } = require("./runTool");
 const { printableCut } = require("../printable");
-const { OBJECT_ID, describeLimit } = require("./util");
+const { OBJECT_ID, describeLimit, temporaryFolder } = require("./util");
 const { fillArchiveGaps } = require("./archiveGaps");
 
 // Endpoint shapes, checked with curl on 2026-11-15:
@@ -79,26 +78,6 @@ async function resolveCommit(target, ref, commitUrl, fetchImpl) {
   if (commit === null) throw noCommit;
   if (typeof commit !== "string" || !OBJECT_ID.test(commit)) throw new Error(`did not answer a commit id: ${commitUrl}`);
   return commit;
-}
-
-// A temporary folder removed by cleanup(), and also when the process exits or is stopped by Ctrl-C or SIGTERM, after which the
-// signal is sent again so the process ends as it would have. Cleaning up removes its own listeners.
-function temporaryFolder() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scanskillsafety-deep-"));
-  const cleanup = () => {
-    process.removeListener("exit", cleanup);
-    process.removeListener("SIGINT", onSignal);
-    process.removeListener("SIGTERM", onSignal);
-    fs.rmSync(dir, { recursive: true, force: true });
-  };
-  const onSignal = (signal) => {
-    cleanup();
-    process.kill(process.pid, signal);
-  };
-  process.once("exit", cleanup);
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
-  return { dir, cleanup };
 }
 
 function byteLimit(limit, error) {
@@ -174,7 +153,7 @@ async function fetchCommit(target, ref, fetchImpl, givenLimits = ARCHIVE_LIMITS)
   const wanted = ref ?? target.ref ?? null;
   const { commitUrl, archiveUrl } = endpoints(target, wanted);
   const commit = await resolveCommit(target, wanted, commitUrl, fetchImpl);
-  const { dir, cleanup } = temporaryFolder();
+  const { dir, cleanup } = temporaryFolder("scanskillsafety-deep-");
   try {
     const archive = path.join(dir, "archive.tar.gz");
     const tree = path.join(dir, "tree");

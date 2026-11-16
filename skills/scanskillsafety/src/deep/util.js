@@ -1,6 +1,10 @@
 // ABOUTME: Small helpers the deep scan's files share: path names, ordering, JSON and object checks, git object ids, vendored
-// ABOUTME: folders and how a size limit is named.
+// ABOUTME: folders, how a size limit is named, and temporary folders removed however the scan ends.
 "use strict";
+
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
 // A git object id, a commit's among them: 40 hex characters (SHA-1) or 64 (SHA-256).
 const OBJECT_ID = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -25,4 +29,27 @@ function parseJson(text) {
 const describeLimit = (bytes) =>
   bytes % 1024 ** 3 === 0 ? `${bytes / 1024 ** 3} GB` : bytes % 1024 ** 2 === 0 ? `${bytes / 1024 ** 2} MB` : `${bytes} bytes`;
 
-module.exports = { OBJECT_ID, VENDORED_FOLDERS, baseName, compare, isObject, isVendored, parseJson, describeLimit };
+// A temporary folder removed by cleanup(), and also when the process exits or is stopped by Ctrl-C or SIGTERM, after which the
+// signal is sent again so the process ends as it would have. Cleaning up removes its own listeners; a folder that cannot be
+// removed (a program still holding it open on Windows) is left rather than ending the scan.
+function temporaryFolder(prefix, tmpDir = os.tmpdir()) {
+  const dir = fs.mkdtempSync(path.join(tmpDir, prefix));
+  const cleanup = () => {
+    process.removeListener("exit", cleanup);
+    process.removeListener("SIGINT", onSignal);
+    process.removeListener("SIGTERM", onSignal);
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {}
+  };
+  const onSignal = (signal) => {
+    cleanup();
+    process.kill(process.pid, signal);
+  };
+  process.once("exit", cleanup);
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  return { dir, cleanup };
+}
+
+module.exports = { OBJECT_ID, VENDORED_FOLDERS, baseName, compare, isObject, isVendored, parseJson, describeLimit, temporaryFolder };

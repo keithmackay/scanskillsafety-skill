@@ -29,7 +29,9 @@ function listEveryFile(root) {
       const full = path.join(dir, entry.name);
       if (entry.isSymbolicLink()) leftOut.push({ path: relPath, reason: "symbolic link, not followed" });
       else if (entry.isDirectory()) {
+        // The root's own .git is the checkout being read; one further down is another repository's metadata, named so.
         if (entry.name !== ".git") walk(full, relPath);
+        else if (rel) leftOut.push({ path: relPath, reason: "git metadata folder, not read" });
       } else if (!entry.isFile()) leftOut.push({ path: relPath, reason: "not a regular file" });
       else readOne(full, relPath);
     }
