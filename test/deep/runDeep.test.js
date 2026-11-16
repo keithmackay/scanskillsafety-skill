@@ -207,7 +207,7 @@ test("OSV out of reach: the check did not run, said with the reason, and the rat
     reason: "https://api.osv.dev/v1/querybatch answered 503",
   });
   const out = formatDeep(result);
-  assert.match(out, /Packages:\n {2}OSV could not be reached: the package check did not run \(https:\/\/api\.osv\.dev\/v1\/querybatch answered 503\)\n/);
+  assert.match(out, /Packages:\n {2}The package check did not run \(https:\/\/api\.osv\.dev\/v1\/querybatch answered 503\)\n/);
   assert.match(out, /Not checked \(no support for these lockfiles\): Cargo\.lock/);
 });
 

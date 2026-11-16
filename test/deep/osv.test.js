@@ -183,3 +183,42 @@ test("a name-only package whose malicious record is past the 200 details says it
   });
   assert.equal(result.detailsLeft, 1);
 });
+
+test("a query OSV keeps paging past 50 pages, or with a token it gave before, means the check did not run", async () => {
+  const endless = fakeFetch({ [BATCH]: (init) => ({ body: { results: [{ next_page_token: `t${JSON.parse(init.body).queries[0].page_token ?? ""}x` }] } }) });
+  const result = await checkPackages([pinned("x", "1.0.0")], endless);
+  assert.equal(result.status, "not-run");
+  assert.match(result.reason, /more than 50 pages for x/);
+  assert.equal(endless.calls.length, 50);
+  const same = fakeFetch({ [BATCH]: answers({ next_page_token: "same" }) });
+  const repeated = await checkPackages([pinned("x", "1.0.0")], same);
+  assert.match(repeated.reason, /the same page token twice for x/);
+  assert.equal(same.calls.length, 2);
+});
+
+test("a malformed malicious-package record is read as naming no versions, never as every version", async () => {
+  const shapes = [
+    { affected: [{ ranges: [{ events: [null, 7, { introduced: "0" }, { fixed: null }] }] }] },
+    { affected: [null, "x", { ranges: "x" }, { ranges: [null, { events: "x" }] }, { versions: [null, 3] }] },
+    { affected: "everything" },
+  ];
+  for (const shape of shapes) {
+    const fetchImpl = fakeFetch({ [BATCH]: answers(vulns("MAL-1")), [vulnUrl("MAL-1")]: record("MAL-1", shape) });
+    const result = await checkPackages([nameOnly("a")], fetchImpl);
+    assert.deepEqual(result.findings.map((f) => [f.severity, f.detail]), [
+      ["warning", "a has malicious-package records in OSV (MAL-1) that name no versions it can read; this project does not pin a version"],
+    ], JSON.stringify(shape));
+  }
+  const notObject = fakeFetch({ [BATCH]: answers(vulns("MAL-1", "GHSA-a")), [vulnUrl("MAL-1")]: { body: "null" }, [vulnUrl("GHSA-a")]: { body: [1] } });
+  const pinnedResult = await checkPackages([pinned("a", "1.0.0")], notObject);
+  assert.equal(pinnedResult.findings[0].severity, "critical");
+  assert.equal(pinnedResult.vulnerabilities[0].highest, null);
+});
+
+test("once a details request fails, no more are sent", async () => {
+  const ids = Array.from({ length: 40 }, (_, i) => `GHSA-${i}`);
+  const fetchImpl = fakeFetch({ [BATCH]: answers(vulns(...ids)) });
+  const result = await checkPackages([pinned("a", "1.0.0")], fetchImpl);
+  assert.equal(result.status, "not-run");
+  assert.ok(fetchImpl.calls.filter((u) => u.includes("/vulns/")).length <= 8);
+});

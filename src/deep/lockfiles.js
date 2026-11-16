@@ -26,18 +26,54 @@ function parseJson(text) {
   }
 }
 
-// The line of each `"key": {` in a JSON lockfile, found in document order, so a name that appears twice gets the right one.
-function jsonKeyLines(text) {
-  let cursor = 0;
+const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+const isWhitespace = (c) => c === " " || c === "\t" || c === "\n" || c === "\r";
+// An integer-like key is listed by Object.entries before every other key, out of document order.
+const isIndexKey = (key) => /^(0|[1-9]\d{0,8})$/.test(key);
+const KEY_LOOKAHEAD = 1000;
+
+// Every key of valid JSON text whose value is an object, decoded, with its line, in document order: one pass over the text.
+function objectKeys(text) {
+  const keys = [];
   let line = 1;
+  let i = 0;
+  const skipWhitespace = () => {
+    while (i < text.length && isWhitespace(text[i])) if (text[i++] === "\n") line++;
+  };
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "\n") line++;
+    if (c !== '"') {
+      i++;
+      continue;
+    }
+    const start = i++;
+    while (i < text.length && text[i] !== '"') i += text[i] === "\\" ? 2 : 1;
+    const raw = text.slice(start, ++i);
+    skipWhitespace();
+    if (text[i] !== ":") continue;
+    i++;
+    skipWhitespace();
+    if (text[i] === "{") keys.push({ key: JSON.parse(raw), line });
+  }
+  return keys;
+}
+
+// The line of each `"key": {` in a JSON lockfile, asked for in document order, so a name that appears twice gets the right one.
+// A key not found close ahead, or one out of document order, has no line rather than a wrong one.
+function jsonKeyLines(text) {
+  const keys = objectKeys(text);
+  let cursor = 0;
   return (key) => {
-    const pattern = new RegExp(`${JSON.stringify(key).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:\\s*\\{`, "g");
-    pattern.lastIndex = cursor;
-    const match = pattern.exec(text);
-    if (!match) return null;
-    for (let i = cursor; i < match.index; i++) if (text[i] === "\n") line++;
-    cursor = match.index;
-    return line;
+    if (isIndexKey(key)) return null;
+    const end = Math.min(keys.length, cursor + KEY_LOOKAHEAD);
+    for (let i = cursor; i < end; i++) {
+      if (keys[i].key === key) {
+        cursor = i + 1;
+        return keys[i].line;
+      }
+    }
+    return null;
   };
 }
 
@@ -53,7 +89,7 @@ function readNpmLock(text) {
   const lineOf = jsonKeyLines(text);
   if (version === 2 || version === 3) {
     // Keys without node_modules/ are the project's own workspace folders.
-    const entries = Object.entries(json.packages ?? {}).filter(([key, entry]) => key.includes("node_modules/") && !(entry && entry.link));
+    const entries = Object.entries(isObject(json.packages) ? json.packages : {}).filter(([key, entry]) => key.includes("node_modules/") && !(entry && entry.link));
     const packages = entries
       .filter(([, entry]) => entry && typeof entry.version === "string")
       .map(([key, entry]) => ({
@@ -64,17 +100,21 @@ function readNpmLock(text) {
     return found(packages, entries.length);
   }
   if (version === 1) {
+    const dependenciesOf = (entry) => Object.entries(isObject(entry.dependencies) ? entry.dependencies : {});
     const out = [];
-    const walk = (dependencies) => {
-      for (const [name, entry] of Object.entries(dependencies ?? {})) {
-        if (!entry || typeof entry.version !== "string") continue;
-        const line = lineOf(name);
-        out.push({ ...(npmAlias(entry.version) ?? { name, version: entry.version }), line });
-        walk(entry.dependencies);
+    // Depth first in document order, with a stack of the entries still to visit at each level, so nesting cannot run out of stack.
+    const stack = [dependenciesOf(json).reverse()];
+    while (stack.length > 0) {
+      const [name, entry] = stack[stack.length - 1].pop() ?? [];
+      if (name === undefined) {
+        stack.pop();
+        continue;
       }
-    };
-    walk(json.dependencies);
-    return found(out, Object.keys(json.dependencies ?? {}).length);
+      if (!isObject(entry) || typeof entry.version !== "string") continue;
+      out.push({ ...(npmAlias(entry.version) ?? { name, version: entry.version }), line: lineOf(name) });
+      stack.push(dependenciesOf(entry).reverse());
+    }
+    return found(out, dependenciesOf(json).length);
   }
   throw unsupportedVersion(version);
 }
@@ -82,6 +122,7 @@ function readNpmLock(text) {
 // A Yarn spec's package name: the text before the first `@` past the start, or the real name an `npm:` alias points at.
 function yarnSpecName(spec) {
   const at = spec.indexOf("@", 1);
+  if (at < 0) return spec;
   const range = spec.slice(at + 1);
   if (range.startsWith("npm:")) {
     const aliasAt = range.indexOf("@", 5);
@@ -176,66 +217,93 @@ function readRequirements(text) {
   return found(out, entries, "no pinned versions in it");
 }
 
-const LOCKFILES = {
-  "package-lock.json": { ecosystem: "npm", read: readNpmLock },
-  "npm-shrinkwrap.json": { ecosystem: "npm", read: readNpmLock },
-  "yarn.lock": { ecosystem: "npm", read: readYarnLock },
-  "pnpm-lock.yaml": { ecosystem: "npm", read: readPnpmLock },
-  "poetry.lock": { ecosystem: "PyPI", read: readPackageBlocks },
-  "uv.lock": { ecosystem: "PyPI", read: readPackageBlocks },
-};
+const LOCKFILES = new Map([
+  ["package-lock.json", { ecosystem: "npm", read: readNpmLock }],
+  ["npm-shrinkwrap.json", { ecosystem: "npm", read: readNpmLock }],
+  ["yarn.lock", { ecosystem: "npm", read: readYarnLock }],
+  ["pnpm-lock.yaml", { ecosystem: "npm", read: readPnpmLock }],
+  ["poetry.lock", { ecosystem: "PyPI", read: readPackageBlocks }],
+  ["uv.lock", { ecosystem: "PyPI", read: readPackageBlocks }],
+]);
 const REQUIREMENTS = { ecosystem: "PyPI", read: readRequirements };
 const NOT_CHECKED = new Set(["Cargo.lock", "go.sum", "Gemfile.lock"]);
 
-const lockfileKind = (p) => LOCKFILES[baseName(p)] ?? (/^requirements.*\.txt$/.test(baseName(p)) ? REQUIREMENTS : null);
+const lockfileKind = (p) => LOCKFILES.get(baseName(p)) ?? (/^requirements.*\.txt$/.test(baseName(p)) ? REQUIREMENTS : null);
 
 function packageJsonNames(text) {
   const json = parseJson(text);
   const sections = ["dependencies", "optionalDependencies", "peerDependencies"];
-  return sections.flatMap((section) => (json && typeof json[section] === "object" && json[section] ? Object.keys(json[section]) : []));
+  return sections.flatMap((section) => (isObject(json) && isObject(json[section]) ? Object.keys(json[section]) : []));
 }
 
-// The quoted strings of a TOML array starting at `from`, up to its closing bracket outside quotes.
+// The quoted strings of a TOML array starting at `from`, up to its closing bracket outside quotes (comments skipped), and where
+// the array ends.
 function quotedStrings(text, from) {
-  const out = [];
+  const strings = [];
   let quote = null;
   let current = "";
-  for (let i = from; i < text.length; i++) {
+  let i = from;
+  for (; i < text.length; i++) {
     const c = text[i];
     if (quote) {
       if (c === quote) {
-        out.push(current);
+        strings.push(current);
         quote = null;
         current = "";
       } else current += c;
     } else if (c === '"' || c === "'") quote = c;
-    else if (c === "]") break;
+    else if (c === "#") {
+      while (i + 1 < text.length && text[i + 1] !== "\n") i++;
+    } else if (c === "]") break;
   }
-  return out;
+  return { strings, end: i };
 }
+
+const TABLE_HEADER = /^\[\[?([^[\]]+)\]\]?\s*(#.*)?$/;
 
 function pyprojectNames(text) {
   const names = [];
-  const lines = linesOf(text);
   let table = null;
-  lines.forEach((line, i) => {
-    const header = /^\[+([^\]]+)\]+\s*$/.exec(line);
+  // Lines are walked with their offsets, so a dependencies list is read once from where it starts and the lines it spans skipped.
+  const lineBreak = /\r?\n/g;
+  let start = 0;
+  let readUpTo = 0;
+  while (start <= text.length) {
+    const match = lineBreak.exec(text);
+    const end = match ? match.index : text.length;
+    const line = text.slice(start, end);
+    const lineStart = start;
+    start = match ? lineBreak.lastIndex : text.length + 1;
+    if (lineStart < readUpTo) continue;
+    const header = TABLE_HEADER.exec(line);
     if (header) table = header[1].trim();
     else if (table === "project" && /^dependencies\s*=\s*\[/.test(line)) {
-      const rest = lines.slice(i).join("\n");
-      names.push(...quotedStrings(rest, line.indexOf("[") + 1).map((requirement) => requirement.trim().split(/[<>=!~;[ (]/)[0]));
+      const list = quotedStrings(text, lineStart + line.indexOf("[") + 1);
+      readUpTo = list.end;
+      names.push(...list.strings.map((requirement) => requirement.trim().split(/[<>=!~;[ (]/)[0]));
     } else if (table === "tool.poetry.dependencies") {
       const key = /^(["']?)([A-Za-z0-9._-]+)\1\s*=/.exec(line);
       if (key && key[2] !== "python") names.push(key[2]);
     }
-  });
+  }
   return names.filter(Boolean);
 }
 
-const MANIFESTS = {
-  "package.json": { ecosystem: "npm", names: packageJsonNames },
-  "pyproject.toml": { ecosystem: "PyPI", names: pyprojectNames },
-};
+const MANIFESTS = new Map([
+  ["package.json", { ecosystem: "npm", names: packageJsonNames }],
+  ["pyproject.toml", { ecosystem: "PyPI", names: pyprojectNames }],
+]);
+
+// What a reader makes of a file, or why it could not; input nested past what the reader can follow is said to be so.
+function readSafely(read, text) {
+  try {
+    return { entries: read(text) };
+  } catch (err) {
+    if (err instanceof Unreadable) return { reason: err.message };
+    if (err instanceof RangeError) return { reason: "too deeply nested" };
+    throw err;
+  }
+}
 
 // files: the text files read; leftOut: the files left out of that list with the reason, so a lockfile among them is said to be
 // unchecked rather than missed.
@@ -256,12 +324,9 @@ function readPackages(files, leftOut = []) {
     const kind = lockfileKind(f.path);
     if (!kind) continue;
     locked.add(kind.ecosystem);
-    try {
-      for (const entry of kind.read(f.text)) add(kind.ecosystem, f.path, entry);
-    } catch (err) {
-      if (!(err instanceof Unreadable)) throw err;
-      result.couldNotRead.push({ file: f.path, reason: err.message });
-    }
+    const read = readSafely(kind.read, f.text);
+    if (read.reason) result.couldNotRead.push({ file: f.path, reason: read.reason });
+    else for (const entry of read.entries) add(kind.ecosystem, f.path, entry);
   }
   const ownLeftOut = leftOut.filter((l) => !isVendored(l.path));
   result.notChecked.push(...ownLeftOut.filter((l) => NOT_CHECKED.has(baseName(l.path))).map((l) => l.path));
@@ -270,16 +335,15 @@ function readPackages(files, leftOut = []) {
     result.couldNotRead.push({ file: f.path, reason: `${f.reason}, not checked` });
   }
   for (const f of ownFiles) {
-    const manifest = MANIFESTS[baseName(f.path)];
+    const manifest = MANIFESTS.get(baseName(f.path));
     if (!manifest || locked.has(manifest.ecosystem)) continue;
-    try {
-      const names = manifest.names(f.text);
-      result.namesOnly.push(f.path);
-      for (const name of names) add(manifest.ecosystem, f.path, { name, version: null, line: null });
-    } catch (err) {
-      if (!(err instanceof Unreadable)) throw err;
-      result.couldNotRead.push({ file: f.path, reason: err.message });
+    const read = readSafely(manifest.names, f.text);
+    if (read.reason) {
+      result.couldNotRead.push({ file: f.path, reason: read.reason });
+      continue;
     }
+    result.namesOnly.push(f.path);
+    for (const name of read.entries) add(manifest.ecosystem, f.path, { name, version: null, line: null });
   }
   return result;
 }

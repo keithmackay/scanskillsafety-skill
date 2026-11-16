@@ -19,7 +19,7 @@ function commitLine(deep) {
 function packageLines(packages, findings) {
   if (packages.status === "off") return ["Packages: not checked (--no-osv)"];
   const lines = ["Packages:"];
-  if (packages.status === "not-run") lines.push(`  OSV could not be reached: the package check did not run (${packages.reason})`);
+  if (packages.status === "not-run") lines.push(`  The package check did not run (${packages.reason})`);
   else if (packages.checked === 0) lines.push("  No package found in a lockfile or manifest.");
   else lines.push(`  Checked ${packages.checked} package(s) against OSV.`);
   const malicious = findings.filter((f) => f.source === "osv" && f.category === "malicious-package");

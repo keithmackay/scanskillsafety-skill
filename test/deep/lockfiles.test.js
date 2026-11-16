@@ -276,3 +276,55 @@ test("an oversized Cargo, Go or Ruby lockfile is still listed as not checked", (
   const read = readPackages([], [{ path: "Cargo.lock", reason: "larger than 5 MB" }, { path: "vendor/go.sum", reason: "larger than 5 MB" }]);
   assert.deepEqual(read, { ...EMPTY, notChecked: ["Cargo.lock"] });
 });
+
+const quickly = (fn, ms = 2000) => {
+  const start = Date.now();
+  const value = fn();
+  const took = Date.now() - start;
+  assert.ok(took < ms, `took ${took} ms`);
+  return value;
+};
+
+test("files named like built-in object properties are not taken for lockfiles or manifests", () => {
+  for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+    assert.deepEqual(readPackages([{ path: `x/${name}`, text: "hi" }], [{ path: name, reason: "binary" }]), EMPTY, name);
+  }
+});
+
+test("a package-lock.json version 1 nested 20,000 levels deep is read without running out of stack", () => {
+  let text = '{"lockfileVersion":1,"dependencies":';
+  for (let i = 0; i < 20000; i++) text += `{"p${i}":{"version":"1.0.0","dependencies":`;
+  text += "{}" + "}}".repeat(20000) + "}";
+  const read = quickly(() => readPackages([{ path: "package-lock.json", text }]));
+  assert.equal(read.packages.length, 20000);
+  assert.deepEqual(read.packages[19999], npm("p19999", "1.0.0", "package-lock.json", 1));
+});
+
+test("lockfile keys written with escapes, by the thousand, are read quickly; a key it cannot place has no line", () => {
+  const keys = Array.from({ length: 20000 }, (_, i) => `"node_modules/\\u0061${i}":{"version":"1.0.0"}`);
+  const text = `{"lockfileVersion":2,"packages":{\n${keys.join(",\n")}}}`;
+  const read = quickly(() => readPackages([{ path: "package-lock.json", text }]));
+  assert.equal(read.packages.length, 20000);
+  assert.deepEqual(read.packages[1], npm("a1", "1.0.0", "package-lock.json", 3));
+  const numbered = '{\n  "lockfileVersion": 1,\n  "dependencies": {\n    "b": { "version": "1.0.0" },\n    "7": { "version": "2.0.0" }\n  }\n}';
+  assert.deepEqual(readPackages([{ path: "package-lock.json", text: numbered }]).packages, [
+    npm("7", "2.0.0", "package-lock.json", null),
+    npm("b", "1.0.0", "package-lock.json", 4),
+  ]);
+});
+
+test("a pyproject.toml built to make the reader backtrack or rescan is read quickly", () => {
+  quickly(() => readPackages([{ path: "pyproject.toml", text: "[".repeat(100000) }]));
+  const read = quickly(() => readPackages([{ path: "pyproject.toml", text: "[project]\n" + "dependencies = [\n".repeat(20000) }]));
+  assert.deepEqual(read.packages, []);
+});
+
+test("pyproject.toml comments: after a table header, and inside the dependencies list", () => {
+  const text = '[project]  # the package\ndependencies = [\n  # "commented-out>=1",\n  "anyio>=4",  # async\n]\n';
+  assert.deepEqual(readPackages([{ path: "pyproject.toml", text }]).packages.map((p) => p.name), ["anyio"]);
+});
+
+test("a yarn.lock entry whose spec has no version part keeps its whole name", () => {
+  const text = '# yarn lockfile v1\n\nleft-pad:\n  version "1.3.0"\n';
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text }]).packages, [npm("left-pad", "1.3.0", "yarn.lock", 3)]);
+});

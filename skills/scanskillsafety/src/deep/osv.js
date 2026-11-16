@@ -16,6 +16,7 @@
 const DEFAULT_OSV_URL = "https://api.osv.dev";
 const QUERIES_PER_REQUEST = 1000;
 const MAX_DETAILS = 200;
+const MAX_PAGES_PER_QUERY = 50;
 const DETAIL_CONCURRENCY = 8;
 const TIMEOUT_MS = 30_000;
 const SEVERITY_ORDER = ["LOW", "MODERATE", "HIGH", "CRITICAL"];
@@ -40,9 +41,14 @@ async function request(fetchImpl, url, init = {}) {
   }
 }
 
-// The ids OSV lists for each query, following each result's pages until it has none.
+const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+
+// The ids OSV lists for each query, following each result's pages until it has none; a query that pages on and on, or hands
+// back a token it gave before, is a failure rather than a loop.
 async function queryIds(queries, fetchImpl, base) {
   const ids = queries.map(() => []);
+  const pages = queries.map(() => 1);
+  const tokens = queries.map(() => new Set());
   let pending = queries.map((query, index) => ({ index, query }));
   while (pending.length > 0) {
     const next = [];
@@ -57,13 +63,18 @@ async function queryIds(queries, fetchImpl, base) {
       const results = body && Array.isArray(body.results) ? body.results : [];
       if (results.length !== chunk.length) throw new OsvFailure(`${url} answered ${results.length} results for ${chunk.length} queries`);
       chunk.forEach(({ index, query }, j) => {
-        const result = results[j] ?? {};
+        const result = isObject(results[j]) ? results[j] : {};
         for (const vuln of Array.isArray(result.vulns) ? result.vulns : []) {
           if (vuln && typeof vuln.id === "string") ids[index].push(vuln.id);
         }
-        if (typeof result.next_page_token === "string" && result.next_page_token) {
-          next.push({ index, query: { ...query, page_token: result.next_page_token } });
-        }
+        const token = result.next_page_token;
+        if (typeof token !== "string" || !token) return;
+        const name = query.package.name;
+        if (tokens[index].has(token)) throw new OsvFailure(`${url} answered the same page token twice for ${name}`);
+        if (pages[index] >= MAX_PAGES_PER_QUERY) throw new OsvFailure(`${url} answered more than ${MAX_PAGES_PER_QUERY} pages for ${name}`);
+        tokens[index].add(token);
+        pages[index]++;
+        next.push({ index, query: { ...query, page_token: token } });
       });
     }
     pending = next;
@@ -74,30 +85,37 @@ async function queryIds(queries, fetchImpl, base) {
 async function fetchDetails(ids, fetchImpl, base) {
   const details = new Map();
   let cursor = 0;
+  let failed = false;
   const worker = async () => {
-    while (cursor < ids.length) {
+    while (cursor < ids.length && !failed) {
       const id = ids[cursor++];
-      const body = await request(fetchImpl, `${base}/v1/vulns/${encodeURIComponent(id)}`);
-      details.set(id, body && typeof body === "object" ? body : {});
+      try {
+        const body = await request(fetchImpl, `${base}/v1/vulns/${encodeURIComponent(id)}`);
+        details.set(id, isObject(body) ? body : {});
+      } catch (err) {
+        failed = true;
+        throw err;
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(DETAIL_CONCURRENCY, ids.length) }, worker));
   return details;
 }
 
-const affectedOf = (record) => (Array.isArray(record.affected) ? record.affected : []);
-const rangesOf = (affected) => (Array.isArray(affected.ranges) ? affected.ranges : []);
-const eventsOf = (range) => (Array.isArray(range.events) ? range.events : []);
+// Only the parts of a record in the expected shape are read: an object, string versions, and ranges whose every event is an
+// object of strings. Anything else is left out, so a malformed record can only name fewer versions, never every version.
+const listOf = (v) => (Array.isArray(v) ? v : []);
+const affectedOf = (record) => listOf(record.affected).filter(isObject);
+const isEvent = (e) => isObject(e) && Object.values(e).every((v) => typeof v === "string");
+const readableRanges = (affected) => listOf(affected.ranges).filter((r) => isObject(r) && listOf(r.events).length > 0 && r.events.every(isEvent));
 
 // A record says every version is malicious when a range starts at 0 and never ends.
-const everyVersion = (record) => affectedOf(record).some((a) => rangesOf(a).some((r) => {
-  const events = eventsOf(r);
-  return events.some((e) => e.introduced === "0") && !events.some((e) => e.fixed !== undefined || e.last_affected !== undefined);
-}));
+const everyVersion = (record) => affectedOf(record).some((a) => readableRanges(a).some(({ events }) =>
+  events.some((e) => e.introduced === "0") && !events.some((e) => e.fixed !== undefined || e.last_affected !== undefined)));
 
-function rangeText(range) {
+function rangeText({ events }) {
   const parts = [];
-  for (const e of eventsOf(range)) {
+  for (const e of events) {
     if (e.introduced !== undefined) parts.push(`>=${e.introduced}`);
     if (e.fixed !== undefined) parts.push(`<${e.fixed}`);
     if (e.last_affected !== undefined) parts.push(`<=${e.last_affected}`);
@@ -105,20 +123,22 @@ function rangeText(range) {
   return parts.join(" ");
 }
 
+// The versions a record names, or its ranges when it names none; empty when it has neither in a shape that can be read.
 function affectedVersionsText(record) {
-  const versions = affectedOf(record).flatMap((a) => (Array.isArray(a.versions) ? a.versions : []));
-  const named = versions.length > 0 ? [...new Set(versions)] : affectedOf(record).flatMap((a) => rangesOf(a).map(rangeText));
-  return named.filter(Boolean).join(", ") || "not named in the record";
+  const versions = affectedOf(record).flatMap((a) => listOf(a.versions).filter((v) => typeof v === "string"));
+  const named = versions.length > 0 ? [...new Set(versions)] : affectedOf(record).flatMap((a) => readableRanges(a).map(rangeText));
+  return named.filter(Boolean).join(", ");
 }
 
 function maliciousFinding(pkg, id, record) {
   const finding = (severity, detail) => ({ severity, category: "malicious-package", source: "osv", file: pkg.file, line: pkg.line, detail });
+  const unpinned = "this project does not pin a version";
   if (pkg.version !== null) return finding("critical", `${pkg.name}@${pkg.version} is listed as malicious in OSV (${id})`);
-  if (record && everyVersion(record)) return finding("critical", `${pkg.name} is listed as malicious in OSV, every version (${id})`);
-  if (!record) {
-    return finding("warning", `${pkg.name} has malicious-package records in OSV (${id}); their versions were not fetched, and this project does not pin a version`);
-  }
-  return finding("warning", `${pkg.name} had malicious versions ${affectedVersionsText(record)} (${id}); this project does not pin a version`);
+  if (!record) return finding("warning", `${pkg.name} has malicious-package records in OSV (${id}); their versions were not fetched, and ${unpinned}`);
+  if (everyVersion(record)) return finding("critical", `${pkg.name} is listed as malicious in OSV, every version (${id})`);
+  const versions = affectedVersionsText(record);
+  if (!versions) return finding("warning", `${pkg.name} has malicious-package records in OSV (${id}) that name no versions it can read; ${unpinned}`);
+  return finding("warning", `${pkg.name} had malicious versions ${versions} (${id}); ${unpinned}`);
 }
 
 function highestSeverity(ids, details) {
