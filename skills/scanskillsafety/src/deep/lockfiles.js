@@ -229,6 +229,8 @@ const REQUIREMENTS = { ecosystem: "PyPI", read: readRequirements };
 const NOT_CHECKED = new Set(["Cargo.lock", "go.sum", "Gemfile.lock"]);
 
 const lockfileKind = (p) => LOCKFILES.get(baseName(p)) ?? (/^requirements.*\.txt$/.test(baseName(p)) ? REQUIREMENTS : null);
+// A file that pins packages: read here for OSV, or one it has no support for.
+const isLockfile = (p) => lockfileKind(p) !== null || NOT_CHECKED.has(baseName(p));
 
 function packageJsonNames(text) {
   const json = parseJson(text);
@@ -348,4 +350,4 @@ function readPackages(files, leftOut = []) {
   return result;
 }
 
-module.exports = { readPackages };
+module.exports = { readPackages, isLockfile };

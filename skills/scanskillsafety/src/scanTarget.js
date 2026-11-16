@@ -96,6 +96,12 @@ function formatText(result) {
 }
 
 const EXIT_CODES = { green: 0, yellow: 1, red: 2 };
-const exitCodeFor = (result) => (result.rating === null ? 3 : EXIT_CODES[result.rating]);
+const FLAGGED_BY_CLAUDE = new Set(["malicious", "suspicious"]);
+// 4: the rating is not red, but Claude's reading (--deep) marked a file; a red rating exits 2 whatever Claude found.
+function exitCodeFor(result) {
+  if (result.rating === null) return 3;
+  const flagged = (result.deep?.claude.files ?? []).some((f) => FLAGGED_BY_CLAUDE.has(f.verdict));
+  return result.rating !== "red" && flagged ? 4 : EXIT_CODES[result.rating];
+}
 
 module.exports = { scanTarget, formatText, pushFinding, exitCodeFor };

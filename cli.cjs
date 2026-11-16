@@ -8,7 +8,8 @@
 const { scanTarget, formatText, exitCodeFor } = require("./src/scanTarget");
 const { parseCliArgs, DEFAULT_MODEL } = require("./src/deep/args");
 const { runDeep } = require("./src/deep/runDeep");
-const { formatDeep, formatServices } = require("./src/deep/formatDeep");
+const { formatDeep, formatServices, formatPlan } = require("./src/deep/formatDeep");
+const readline = require("readline");
 
 const { version } = require("./package.json");
 
@@ -54,6 +55,17 @@ Exit codes:
   4  --deep: the rating is not red, but Claude marked a file suspicious or malicious
 `;
 
+function ask(question) {
+  const prompt = readline.createInterface({ input: process.stdin, output: process.stderr });
+  return new Promise((resolve) => {
+    prompt.on("close", () => resolve(""));
+    prompt.question(question, (answer) => {
+      resolve(answer);
+      prompt.close();
+    });
+  });
+}
+
 async function main(argv) {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(HELP);
@@ -70,7 +82,10 @@ async function main(argv) {
   }
   if (args.deep) {
     const onServices = args.json ? undefined : (services) => console.error(formatServices(services));
-    const result = await runDeep(args.target, args.deep, { onServices });
+    // Claude's plan is shown and agreed to in a terminal; with no terminal the plan is printed with the result instead.
+    const interactive = !args.json && Boolean(process.stdin.isTTY && process.stdout.isTTY);
+    const onPlan = (plan) => console.error(`Claude's reading (not checked by a person)\n${formatPlan(plan)}`);
+    const result = await runDeep(args.target, args.deep, { onServices, interactive, onPlan, ask });
     console.log(args.json ? JSON.stringify(result, null, 2) : formatDeep(result));
     return exitCodeFor(result);
   }

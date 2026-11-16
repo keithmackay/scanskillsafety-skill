@@ -1,6 +1,6 @@
 // ABOUTME: Runs a deep scan's stages in order and builds its result: the plain scan's shape plus `deep`, holding the services it
 // ABOUTME: may contact (named before any request), the exact commit, every file's findings, what runs at install and start-up and
-// ABOUTME: what OSV knows about the packages it pulls in.
+// ABOUTME: what OSV knows about the packages it pulls in, and Claude's reading of every file once the person agrees to its plan.
 "use strict";
 
 const { ratingFromFindings } = require("../../lib/ratingFromFindings");
@@ -13,6 +13,10 @@ const { scanEveryFile } = require("./scanEveryFile");
 const { installTimeEntries } = require("./installTime");
 const { readPackages } = require("./lockfiles");
 const { checkPackages, osvUrl } = require("./osv");
+const { findClaude } = require("./runClaude");
+const { chooseForReading, planReading, readEveryFile, quoteLine, printable } = require("./reading");
+const { isDiscoverable } = require("../discover");
+const { formatClaudeUsage } = require("../../lib/deep/claudeUsage");
 
 const isRepository = (target) => (target.kind === "github" || target.kind === "git-host") && !target.isFile;
 
@@ -31,15 +35,73 @@ function commitServices(target) {
 const osvServices = (target, options) =>
   options.osv ? [{ service: new URL(osvUrl()).host, receives: "the names, ecosystems and versions of the packages it uses" }] : [];
 
+// Named whenever Claude's reading may run: the person still agrees to its plan before anything is sent.
+const claudeServices = (target, options, { claudeFound }) =>
+  claudeFound ? [{ service: "Anthropic, through your own claude CLI", receives: "the text of the files Claude reads, only after you agree" }] : [];
+
 // Each stage that contacts a service names it here, with what it receives, so the list is complete before any request.
-const SERVICE_STAGES = [commitServices, osvServices];
-const servicesFor = (target, options) => SERVICE_STAGES.flatMap((stage) => stage(target, options));
+const SERVICE_STAGES = [commitServices, osvServices, claudeServices];
+const servicesFor = (target, options, found) => SERVICE_STAGES.flatMap((stage) => stage(target, options, found));
 
 // The folder to read: a local folder in place, or a repository's exact commit unpacked into a temporary folder.
 async function openTarget(target, options, deps) {
   if (target.kind === "local-dir") return { root: target.path, ...localCommit(target.path), cleanup: () => {} };
   const { commit, root, cleanup } = await fetchCommit(target, options.ref, deps.fetchImpl ?? fetch, deps.limits ?? ARCHIVE_LIMITS);
   return { root, commit, changed: false, changesChecked: true, note: null, cleanup };
+}
+
+// Files that say what runs at install and start-up, and the files of the target their commands name.
+function installPaths(entries, files) {
+  const paths = new Set(files.map((f) => f.path));
+  const named = entries.flatMap((e) => e.command.split(/\s+/).map((word) => word.replace(/^(\.\/|\$\{?\w+\}?\/)/, "")).filter((word) => paths.has(word)));
+  return [...entries.map((e) => e.file), ...named];
+}
+
+// What Claude would read and what it would cost; the plan id is the commit for a repository, the text itself for a local folder.
+function claudePlan(target, files, entries, opened, model) {
+  const agentPaths = files.map((f) => f.path).filter(isDiscoverable);
+  const { reading, leftOut } = chooseForReading(files, { installPaths: installPaths(entries, files), agentPaths });
+  const { calls, estimate, planId } = planReading(reading);
+  const parts = new Map();
+  for (const c of calls.flat()) parts.set(c.path, (parts.get(c.path) ?? 0) + 1);
+  const plan = {
+    id: target.kind === "local-dir" ? planId : opened.commit,
+    model,
+    files: reading.map((f) => ({ path: printable(f.path), parts: parts.get(f.path) })),
+    leftOut: leftOut.map((f) => ({ path: printable(f.path), reason: f.reason })),
+    calls: estimate.calls,
+    inputTokens: estimate.inputTokens,
+    outputTokens: estimate.outputTokens,
+  };
+  return { plan, calls };
+}
+
+const agreed = (answer) => /^\s*(y|yes)\s*$/i.test(answer ?? "");
+
+// Claude's reading: planned only, asked for in a terminal, or run on the plan id the person agreed to.
+async function claudeStage({ plan, calls }, files, options, claudePath, deps) {
+  if (plan.files.length === 0) return { status: "skipped", reason: "no file for Claude to read" };
+  if (!options.claudeOk) {
+    if (!deps.interactive) return { status: "planned", plan };
+    if (deps.onPlan) deps.onPlan(plan);
+    if (!agreed(await deps.ask("Run Claude's reading? [y/N] "))) return { status: "skipped", reason: "you did not agree to it" };
+  }
+  const outcome = await readEveryFile({
+    calls, model: options.model, budget: options.budget, command: claudePath, env: deps.env ?? process.env, timeoutMs: deps.claudeTimeoutMs,
+  });
+  const textOf = new Map(files.map((f) => [f.path, f.text]));
+  return {
+    status: outcome.status,
+    stopReason: outcome.stopReason,
+    plan,
+    files: outcome.files.map((f) => ({ path: printable(f.path), verdict: f.verdict })),
+    findings: outcome.findings.map((f) => ({
+      path: printable(f.path), line: f.line, category: f.category, severity: f.severity, reason: f.reason, quote: quoteLine(textOf.get(f.path), f.line),
+    })),
+    dropped: outcome.dropped,
+    notRead: outcome.notRead.map((f) => ({ path: printable(f.path), reason: f.reason })),
+    usageLine: formatClaudeUsage(outcome.usage),
+  };
 }
 
 // The packages the files pull in, checked against OSV unless the person turned that off.
@@ -56,7 +118,8 @@ async function packageCheck(files, leftOut, options, fetchImpl) {
 
 async function runDeep(input, options, deps = {}) {
   const target = parseTarget(input);
-  const services = target.kind === "local-dir" || isRepository(target) ? servicesFor(target, options) : [];
+  const claudePath = options.claude ? findClaude(deps.env ?? process.env) : null;
+  const services = target.kind === "local-dir" || isRepository(target) ? servicesFor(target, options, { claudeFound: claudePath !== null }) : [];
   const result = {
     target: input,
     rating: null,
@@ -78,7 +141,7 @@ async function runDeep(input, options, deps = {}) {
       launchedTests: [],
       site: { status: "off" },
       packages: { status: "off" },
-      claude: { status: "off" },
+      claude: options.claude && !claudePath ? { status: "skipped", reason: "the claude CLI is not installed" } : { status: "off" },
     },
   };
   if (target.kind !== "local-dir" && !isRepository(target)) {
@@ -86,15 +149,24 @@ async function runDeep(input, options, deps = {}) {
     return result;
   }
   if (deps.onServices) deps.onServices(services);
+  // Agreeing to a repository's plan pins its commit: with no --ref, that commit is the one read.
+  const pinned = claudePath && options.claudeOk && isRepository(target) && !options.ref ? { ...options, ref: options.claudeOk } : options;
   let opened;
   try {
-    opened = await openTarget(target, options, deps);
+    opened = await openTarget(target, pinned, deps);
   } catch (err) {
     result.errors.push(err.message);
     return result;
   }
   try {
     const { files, leftOut } = listEveryFile(opened.root);
+    const entries = installTimeEntries(files);
+    const reading = claudePath && files.length > 0 ? claudePlan(target, files, entries, opened, options.model) : null;
+    if (reading && options.claudeOk && options.claudeOk !== reading.plan.id) {
+      result.deep.commit = opened.commit;
+      result.errors.push(`the target changed since the plan (plan id ${options.claudeOk}, now ${reading.plan.id}); run --deep again without --claude-ok`);
+      return result;
+    }
     const { findings: fileFindings, testFindings, launched } = scanEveryFile(files);
     const { findings: packageFindings, packages } = await packageCheck(files, leftOut, options, deps.fetchImpl ?? fetch);
     const findings = [...fileFindings, ...packageFindings];
@@ -111,11 +183,12 @@ async function runDeep(input, options, deps = {}) {
       changesChecked: opened.changesChecked,
       note: opened.note,
       leftOut,
-      installTime: installTimeEntries(files),
+      installTime: entries,
       testFindings,
       launchedTests: launched,
       packages,
     });
+    if (reading) result.deep.claude = await claudeStage(reading, files, options, claudePath, deps);
     return result;
   } finally {
     opened.cleanup();

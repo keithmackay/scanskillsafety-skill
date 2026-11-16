@@ -1,5 +1,6 @@
 // ABOUTME: The deep scan's text output: the plain scan's text, then the commit, the files read and left out, what runs at
-// ABOUTME: install and start-up, the package check and findings in test files nothing launches; and the services line.
+// ABOUTME: install and start-up, the package check, findings in test files nothing launches and Claude's reading (its plan, or what
+// ABOUTME: it found); and the services line.
 "use strict";
 
 const { formatText, pushFinding } = require("../scanTarget");
@@ -39,6 +40,52 @@ function packageLines(packages, findings) {
   return lines;
 }
 
+const n = (x) => x.toLocaleString("en-US");
+
+// What Claude would read and what it would cost, as shown before the person agrees.
+function formatPlan(plan) {
+  const lines = [
+    `  Plan ${plan.id}: Claude (${plan.model}) would read ${plan.files.length} file(s) in ${plan.calls} call(s), about ${n(plan.inputTokens)} input and ${n(plan.outputTokens)} output tokens (an estimate).`,
+    "  It sends their text to Anthropic, through your own claude CLI.",
+    "  Files to read, in this order:",
+    ...plan.files.map((f) => `    ${f.path}${f.parts > 1 ? ` (${f.parts} parts)` : ""}`),
+  ];
+  if (plan.leftOut.length > 0) lines.push("  Left out:", ...plan.leftOut.map((f) => `    ${f.path}: ${f.reason}`));
+  return lines.join("\n");
+}
+
+function flaggedLines(claude, verdict, heading) {
+  const files = claude.files.filter((f) => f.verdict === verdict);
+  if (files.length === 0) return [];
+  const lines = [`  ${heading}:`];
+  for (const file of files) {
+    lines.push(`    ${file.path}`);
+    for (const f of claude.findings.filter((x) => x.path === file.path)) {
+      lines.push(`      ${f.path}:${f.line} [${f.severity}] ${f.category}: ${f.reason}`);
+      if (f.quote) lines.push(`        > ${f.quote}`);
+    }
+  }
+  return lines;
+}
+
+function claudeLines(claude) {
+  if (claude.status === "off") return ["Claude's reading: not run (--no-claude)"];
+  if (claude.status === "skipped") return [`Claude's reading: skipped: ${claude.reason}`];
+  if (claude.status === "planned") {
+    return ["Claude's reading (not checked by a person): planned, not run", formatPlan(claude.plan), `  To run it, rerun with --claude-ok ${claude.plan.id}.`];
+  }
+  const lines = ["Claude's reading (not checked by a person)", `  Read with ${claude.plan.model}, on plan ${claude.plan.id}.`];
+  if (claude.stopReason) lines.push(`  Stopped: ${claude.stopReason}.`);
+  lines.push(...flaggedLines(claude, "malicious", "Malicious"), ...flaggedLines(claude, "suspicious", "Suspicious"));
+  const benign = claude.files.filter((f) => f.verdict === "benign").length;
+  if (benign > 0) lines.push(`  ${benign} file(s) Claude called benign.`);
+  if (benign === claude.files.length) lines.push("  Claude flagged nothing; a file written to mislead a reviewer can pass.");
+  if (claude.notRead.length > 0) lines.push(`  Not read (${claude.notRead.length}):`, ...claude.notRead.map((f) => `    ${f.path}: ${f.reason}`));
+  if (claude.dropped > 0) lines.push(`  ${claude.dropped} of Claude's findings named lines it was not shown, and were dropped.`);
+  lines.push(`  ${claude.usageLine}`);
+  return lines;
+}
+
 function formatDeep(result) {
   const text = formatText(result);
   if (!result.deep.read) return text;
@@ -54,7 +101,8 @@ function formatDeep(result) {
     lines.push("Findings in test files nothing launches (not counted in the rating):");
     for (const f of deep.testFindings) pushFinding(lines, f, f.severity === "info" ? "note" : f.severity);
   }
+  lines.push(...claudeLines(deep.claude));
   return [text, ...lines].join("\n");
 }
 
-module.exports = { formatDeep, formatServices };
+module.exports = { formatDeep, formatServices, formatPlan };
