@@ -16,15 +16,16 @@ function makeTree(files) {
   return root;
 }
 
-// routes: { url: string | {status, body} | Error }; a string, Buffer or Uint8Array body is sent as is, anything else as JSON.
-// Unlisted URLs return 404. Records each URL in calls and each request's options in options.
+// routes: { url: string | {status, body} | Error | (init) => one of those }; a function answers by the request (its method and
+// body), as for a POST. A string, Buffer or Uint8Array body is sent as is, anything else as JSON. Unlisted URLs return 404.
+// Records each URL in calls and each request's options, its body among them, in options.
 function fakeFetch(routes) {
   const calls = [];
   const options = [];
   const fn = async (url, init = {}) => {
     calls.push(url);
     options.push(init);
-    const route = routes[url];
+    const route = typeof routes[url] === "function" ? routes[url](init) : routes[url];
     if (route instanceof Error) throw route;
     if (route === undefined) return new Response("not found", { status: 404 });
     if (typeof route === "string") return new Response(route, { status: 200 });

@@ -7,6 +7,7 @@ const { scanTarget, formatText } = require("../src/scanTarget");
 const { makeTree, fakeFetch } = require("./helpers");
 
 const CLI = path.join(__dirname, "..", "cli.cjs");
+const OSV_RECEIVES = "the names, ecosystems and versions of the packages it uses";
 const run = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: "utf-8", cwd: require("os").tmpdir() });
 
 test("scans each file separately and attributes findings to the file they came from", async () => {
@@ -188,7 +189,7 @@ test("--deep on a local folder prints a Deep scan section, names the services fi
   assert.equal(out.status, 0);
   assert.match(out.stdout, /Rating: GREEN/);
   assert.match(out.stdout, /\nDeep scan\n/);
-  assert.equal(out.stderr, "Deep scan will contact no service.\n");
+  assert.equal(out.stderr, `Deep scan will contact: api.osv.dev (${OSV_RECEIVES}).\n`);
   assert.equal(run("--deep", "--no-osv", "--no-claude", red).status, 2);
   assert.equal(run("--deep", "--no-osv", "--no-claude", red).stderr, "Deep scan will contact no service.\n");
 });
@@ -198,7 +199,8 @@ test("--deep --json puts the deep results and the services under deep, and print
   const parsed = JSON.parse(out.stdout);
   assert.equal(out.stderr, "");
   assert.equal(parsed.rating, "green");
-  assert.deepEqual(parsed.deep.services, []);
+  assert.deepEqual(parsed.deep.services, [{ service: "api.osv.dev", receives: OSV_RECEIVES }]);
+  assert.deepEqual(parsed.deep.packages, { status: "done", checked: 0, namesOnly: [], couldNotRead: [], notChecked: [], vulnerabilities: [], detailsLeft: 0, reason: null });
   assert.equal(out.status, 0);
 });
 
