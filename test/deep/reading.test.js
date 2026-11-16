@@ -88,7 +88,7 @@ test("runClaude: the claude program does not inherit the marks of a Claude Code 
 test("a call that could not be made or whose reply was too large leaves its files not read", async () => {
   const run = async () => ({ stdout: "", exitCode: null, timedOut: false, error: "the reply was too large" });
   const outcome = await read(planReading([{ path: "a.md", text: "x" }], "haiku").calls, process.env, { run });
-  assert.deepEqual(outcome.notRead, [{ path: "a.md", reason: "the call failed" }]);
+  assert.deepEqual(outcome.notRead, [{ path: "a.md", reason: "the call failed: the reply was too large" }]);
 });
 
 test("findClaude: an executable claude on PATH or CLAUDE_BIN, found without running it", () => {
@@ -152,7 +152,8 @@ test("leaves out vendored copies, build output, lockfiles, minified or generated
     { path: "build", text: "#!/bin/sh\necho build" },
     { path: "package-lock.json", text: "{}" },
     { path: "sub/yarn.lock", text: "x" },
-    { path: "requirements.txt", text: "requests==2.0.0" },
+    { path: "requirements.txt", text: "--index-url https://pkgs.example/simple\ngit+https://example.com/x.git\nrequests==2.0.0" },
+    { path: "requirements-dev.txt", text: "pytest==8.0.0" },
     { path: "Cargo.lock", text: "x" },
     { path: "min.js", text: `${"a".repeat(1001)}\n` },
     { path: "late-long.js", text: `${"ok\n".repeat(50)}${"a".repeat(1001)}\n` },
@@ -165,7 +166,7 @@ test("leaves out vendored copies, build output, lockfiles, minified or generated
     { path: "README.md", text: "hello" },
   ];
   const { reading, leftOut } = chooseForReading(files, NO_PLACES);
-  assert.deepEqual(reading.map((f) => f.path), ["README.md", "build", "late-long.js", "late-marker.md"]);
+  assert.deepEqual(reading.map((f) => f.path), ["README.md", "build", "late-long.js", "late-marker.md", "requirements-dev.txt", "requirements.txt"]);
   assert.deepEqual(leftOut, [
     { path: "Cargo.lock", reason: "lockfile, checked against OSV instead" },
     { path: "dist/c.js", reason: "vendored or build output" },
@@ -178,7 +179,6 @@ test("leaves out vendored copies, build output, lockfiles, minified or generated
     { path: "node_modules/a/index.js", reason: "vendored or build output" },
     { path: "package-lock.json", reason: "lockfile, checked against OSV instead" },
     { path: "pkg/build/d.js", reason: "vendored or build output" },
-    { path: "requirements.txt", reason: "lockfile, checked against OSV instead" },
     { path: "src/vendor/b.py", reason: "vendored or build output" },
     { path: "sub/yarn.lock", reason: "lockfile, checked against OSV instead" },
   ]);
@@ -283,14 +283,14 @@ test("a usage limit stops the reading", { skip }, async () => {
   ]);
 });
 
-test("two failed calls in a row stop the reading", { skip }, async () => {
+test("two failed calls in a row stop the reading, saying what the first one answered", { skip }, async () => {
   const { env, log } = fakeEnv({ FAKE_CLAUDE_MODE: "garbage" });
   const outcome = await read(threeCalls(), env);
-  assert.equal(outcome.stopReason, "two calls failed in a row");
+  assert.equal(outcome.stopReason, "two calls failed in a row: not JSON: this is not JSON");
   assert.equal(fakeClaudeCalls(log).length, 2);
   assert.deepEqual(outcome.notRead, [
-    { path: "a.md", reason: "the call failed" },
-    { path: "b.md", reason: "the call failed" },
+    { path: "a.md", reason: "the call failed: not JSON: this is not JSON" },
+    { path: "b.md", reason: "the call failed: not JSON: this is not JSON" },
     { path: "c.md", reason: "not reached: the reading stopped" },
   ]);
   assert.equal(outcome.usage.calls, 2);
@@ -301,7 +301,22 @@ test("a call past its time limit leaves its files not read and the reading goes 
   const { env } = fakeEnv({ FAKE_CLAUDE_MODE: "sleep" });
   const outcome = await read(planReading([{ path: "a.md", text: "x" }], "haiku").calls, env, { timeoutMs: 300 });
   assert.equal(outcome.status, "done");
-  assert.deepEqual(outcome.notRead, [{ path: "a.md", reason: "the call failed" }]);
+  assert.deepEqual(outcome.notRead, [{ path: "a.md", reason: "the call failed: timed out" }]);
+});
+
+test("a reply that is not JSON is named by the first line claude wrote on stderr, made printable and cut to 200", { skip }, async () => {
+  const said = `\n\u001b[31mError: ${"no auth ".repeat(40)}\u0007\nmore detail\n`;
+  const { env } = fakeEnv({ FAKE_CLAUDE_MODE: "garbage", FAKE_CLAUDE_STDERR: said });
+  const outcome = await read(threeCalls(), env);
+  const first = `?[31mError: ${"no auth ".repeat(40)}`.slice(0, 200);
+  assert.equal(outcome.stopReason, `two calls failed in a row: ${first}`);
+  assert.equal(outcome.notRead[0].reason, `the call failed: ${first}`);
+});
+
+test("runClaude: what claude writes on stderr is kept, up to 64 KB", { skip }, async () => {
+  const { env } = fakeEnv({ FAKE_CLAUDE_MODE: "garbage", FAKE_CLAUDE_STDERR: "e".repeat(100_000) });
+  const run = await runClaude({ args: [], prompt: "x", timeoutMs: 5000, command: FAKE, env });
+  assert.equal(run.stderr.length, 64 * 1024);
 });
 
 test("the budget stops the reading before a call whose estimate would pass it", { skip }, async () => {

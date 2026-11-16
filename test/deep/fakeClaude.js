@@ -8,7 +8,7 @@ const path = require("path");
 
 // FAKE_CLAUDE_REPLY: a JSON file holding the structured output to give. FAKE_CLAUDE_MODE: refuse, limit, garbage, sleep,
 // stubborn (keeps running through SIGTERM) or huge (a reply over 16 MB); with neither, it gives every part it was sent the verdict FAKE_CLAUDE_VERDICT (benign by default). FAKE_CLAUDE_TOKENS: the input
-// tokens it reports for each call (100 by default).
+// tokens it reports for each call (100 by default). FAKE_CLAUDE_STDERR: text it writes on stderr first.
 const SCRIPT = String.raw`
 const fs = require("fs");
 const env = process.env;
@@ -22,6 +22,7 @@ process.stdin.on("end", () => {
   }
   const usage = { input_tokens: Number(env.FAKE_CLAUDE_TOKENS || 100), output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
   const reply = (fields) => process.stdout.write(JSON.stringify({ type: "result", is_error: false, usage, total_cost_usd: 0.01, ...fields }));
+  if (env.FAKE_CLAUDE_STDERR) process.stderr.write(env.FAKE_CLAUDE_STDERR);
   const mode = env.FAKE_CLAUDE_MODE;
   if (mode === "sleep") return setTimeout(() => {}, 600000);
   if (mode === "stubborn") {

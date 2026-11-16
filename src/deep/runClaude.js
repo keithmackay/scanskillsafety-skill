@@ -10,6 +10,7 @@ const { spawn } = require("child_process");
 const CLAUDE_TIMEOUT_MS = 10 * 60_000;
 const KILL_AFTER_MS = 5000;
 const MAX_REPLY_BYTES = 16 * 1024 * 1024;
+const MAX_STDERR_BYTES = 64 * 1024;
 const NOT_INSTALLED = "the claude CLI is not installed";
 const ONLY_CMD = "the claude CLI is installed as claude.cmd, which this tool cannot start safely without a shell (Windows)";
 // Variables that mark a process as running inside a Claude Code session; the reading is its own session.
@@ -54,7 +55,7 @@ function findClaude(env = process.env, platform = process.platform) {
   return { reason: NOT_INSTALLED };
 }
 
-// Resolves { stdout, exitCode, timedOut }, with error when the call failed for another reason, or { missing: true } when the
+// Resolves { stdout, stderr, exitCode, timedOut }, with error when the call failed for another reason, or { missing: true } when the
 // program is not there. A call past its time limit is sent SIGTERM, then SIGKILL if it is still running killAfterMs later; it
 // settles at once, and anything the child does after is ignored.
 function runClaude({
@@ -81,10 +82,12 @@ function runClaude({
     try {
       child = spawn(command, args, { cwd: folder, env: childEnv, stdio: ["pipe", "pipe", "pipe"] });
     } catch (err) {
-      return finish({ stdout: "", exitCode: null, timedOut: false, error: err.message });
+      return finish({ stdout: "", stderr: "", exitCode: null, timedOut: false, error: err.message });
     }
     const chunks = [];
     let bytes = 0;
+    let stderr = Buffer.alloc(0);
+    const outcome = (fields) => ({ stdout: Buffer.concat(chunks).toString("utf-8"), stderr: stderr.toString("utf-8"), exitCode: null, timedOut: false, ...fields });
     const stop = () => {
       child.stdout.destroy();
       child.stderr.destroy();
@@ -96,22 +99,24 @@ function runClaude({
     };
     timer = setTimeout(() => {
       stop();
-      finish({ stdout: Buffer.concat(chunks).toString("utf-8"), exitCode: null, timedOut: true });
+      finish(outcome({ timedOut: true }));
     }, timeoutMs);
     child.stdout.on("data", (d) => {
       if (settled) return;
       bytes += d.length;
       if (bytes > MAX_REPLY_BYTES) {
         stop();
-        return finish({ stdout: "", exitCode: null, timedOut: false, error: "the reply was too large" });
+        return finish(outcome({ stdout: "", error: "the reply was too large" }));
       }
       chunks.push(d);
     });
-    child.stderr.resume();
+    child.stderr.on("data", (d) => {
+      if (stderr.length < MAX_STDERR_BYTES) stderr = Buffer.concat([stderr, d]).subarray(0, MAX_STDERR_BYTES);
+    });
     // A child that ends before reading all of its stdin closes the pipe; that is not an error of the call.
     child.stdin.on("error", () => {});
-    child.on("error", (err) => finish(err.code === "ENOENT" ? { missing: true } : { stdout: "", exitCode: null, timedOut: false, error: err.message }));
-    child.on("close", (exitCode) => finish({ stdout: Buffer.concat(chunks).toString("utf-8"), exitCode, timedOut: false }));
+    child.on("error", (err) => finish(err.code === "ENOENT" ? { missing: true } : outcome({ stdout: "", error: err.message })));
+    child.on("close", (exitCode) => finish(outcome({ exitCode })));
     child.stdin.end(prompt);
   });
 }
