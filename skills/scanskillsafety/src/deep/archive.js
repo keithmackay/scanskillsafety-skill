@@ -1,5 +1,6 @@
 // ABOUTME: Fetches the exact commit a deep scan reads: resolves a ref to a full commit id on GitHub, Gitea or Forgejo, downloads
-// ABOUTME: that commit's archive within limits, checks it before unpacking, and unpacks it into a temporary folder it removes.
+// ABOUTME: that commit's archive within limits, checks it before unpacking, unpacks it into a temporary folder it removes, and
+// ABOUTME: fetches any file of the commit the archive leaves out.
 "use strict";
 
 const fs = require("fs");
@@ -8,9 +9,10 @@ const path = require("path");
 const zlib = require("zlib");
 const { Readable, Transform, Writable } = require("stream");
 const { pipeline } = require("stream/promises");
-const { fetchResponse, fetchText, describeFailure } = require("../fetchRemote");
+const { fetchResponse, fetchText, describeFailure, repoPath } = require("../fetchRemote");
 const { runTool, describeDuration } = require("./runTool");
 const { printableCut } = require("../printable");
+const { fillArchiveGaps } = require("./archiveGaps");
 
 // Endpoint shapes, checked with curl on 2026-11-15:
 // - GitHub: GET api.github.com/repos/<o>/<r>/commits/<ref or HEAD> with "Accept: application/vnd.github.sha" answers the full
@@ -31,9 +33,6 @@ const GITEA_COMMIT_QUERY = "limit=1&stat=false&verification=false&files=false";
 const describeLimit = (bytes) =>
   bytes % 1024 ** 3 === 0 ? `${bytes / 1024 ** 3} GB` : bytes % 1024 ** 2 === 0 ? `${bytes / 1024 ** 2} MB` : `${bytes} bytes`;
 const tooLarge = (what) => new Error(`too large to check deeply: ${what}`);
-
-// The repository's owner and name as one escaped path, so neither can reach another path or a query.
-const repoPath = (target) => `${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
 
 function endpoints(target, ref) {
   const ownerRepo = repoPath(target);
@@ -187,13 +186,15 @@ async function fetchCommit(target, ref, fetchImpl, givenLimits = ARCHIVE_LIMITS)
     fs.mkdirSync(tree);
     runTar(["-xzf", archive, "-C", tree, "--strip-components=1", "--no-same-owner"]);
     fs.rmSync(archive);
+    // An archive leaves out every path .gitattributes marks export-ignore, which a clone still delivers.
+    const { fetched, leftOut } = await fillArchiveGaps(target, commit, tree, fetchImpl);
     const root = folderWithin(tree, target.subpath);
     if (!root) throw new Error(`no folder ${target.subpath} in ${target.owner}/${target.repo} at ${commit.slice(0, 7)}`);
-    return { commit, root, cleanup };
+    return { commit, root, cleanup, fetchedSeparately: fetched, leftOut };
   } catch (err) {
     cleanup();
     throw err;
   }
 }
 
-module.exports = { fetchCommit, ARCHIVE_LIMITS, describeLimit, repoPath };
+module.exports = { fetchCommit, ARCHIVE_LIMITS, describeLimit };

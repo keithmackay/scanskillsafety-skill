@@ -64,7 +64,7 @@ Before the first run, tell the user what it contacts: the target's host (`api.gi
 node "<this skill's own directory>/cli.cjs" --deep --json <target>
 ```
 
-It downloads and reads the whole commit, so allow it several minutes. The JSON is the plain scan's, plus `deep`: `services` (each service contacted and what it received), `commit`, `changed` and `note` (for a local folder: uncommitted changes, or why no commit can be named), `leftOut` (files not read, with reasons), `installTime` (`file`, `when`, `command`), `testFindings` (in test files nothing launches; not counted in the rating), `launchedTests`, `packages`, `site` and `claude`.
+It downloads and reads the whole commit, so allow it several minutes. The JSON is the plain scan's, plus `deep`: `services` (each service contacted and what it received), `commit`, `changed` and `note` (for a local folder: uncommitted changes, or why no commit can be named), `leftOut` (files not read, with reasons), `fetchedSeparately` (files the archive left out because of `.gitattributes`, fetched one by one), `installTime` (`file`, `when`, `command`), `testFindings` (in test files nothing launches; not counted in the rating), `launchedTests`, `packages`, `site` and `claude`.
 
 ### Report the deep result
 

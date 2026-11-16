@@ -135,6 +135,7 @@ function formatDeep(result) {
   const { deep } = result;
   const lines = ["", "Deep scan", commitLine(deep), `Read ${result.scannedFiles.length} file(s); left out ${deep.leftOut.length}${deep.leftOut.length ? ":" : "."}`];
   for (const f of deep.leftOut) lines.push(`  ${printable(f.path)}: ${f.reason}`);
+  if (deep.fetchedSeparately.length > 0) lines.push(`Left out of the archive by .gitattributes; fetched separately: ${pathList(deep.fetchedSeparately)}`);
   lines.push("What runs at install and start-up:");
   if (deep.installTime.length === 0) lines.push("  nothing found");
   for (const e of deep.installTime) lines.push(`  ${printable(e.file)}: ${printable(e.when)}: ${printableCut(e.command, COMMAND_MAX)}`);

@@ -2,8 +2,8 @@
 // ABOUTME: address, then GitHub's compare call how each scanned commit relates to this one; out of reach is never "not listed".
 "use strict";
 
-const { fetchResponse, readTextWithin, describeFailure } = require("../fetchRemote");
-const { repoPath, describeLimit } = require("./archive");
+const { fetchResponse, readTextWithin, describeFailure, repoPath } = require("../fetchRemote");
+const { describeLimit } = require("./archive");
 
 // Shapes observed 2026-11-16:
 // - GET <site>/api/listings/lookup?repo=<repository URL> -> {"listings":[{"slug","url","rating","scannedAt","scanCommit",

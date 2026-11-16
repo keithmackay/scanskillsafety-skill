@@ -26,9 +26,37 @@ function makeTarball(files, extraEntries = []) {
   return fs.readFileSync(out);
 }
 
-const githubRoutes = (tgz, ref = "main", sha = SHA) => ({
+// The commit's file list is empty unless given, so nothing counts as left out of the archive.
+const githubRoutes = (tgz, ref = "main", sha = SHA, tree = []) => ({
   [`https://api.github.com/repos/o/r/commits/${ref}`]: sha,
   [`https://codeload.github.com/o/r/tar.gz/${sha}`]: { body: tgz },
+  [`https://api.github.com/repos/o/r/git/trees/${sha}?recursive=1`]: { body: { sha, truncated: false, tree } },
+});
+
+test("a file .gitattributes keeps out of the archive is fetched at that commit, and named", async () => {
+  const tgz = makeTarball({ "r-abc/SKILL.md": "hi" });
+  const hooks = '{"hooks":{}}';
+  const fetchImpl = fakeFetch({
+    ...githubRoutes(tgz, "main", SHA, [{ path: "SKILL.md", type: "blob", mode: "100644", sha: OTHER_SHA, size: 2 }, { path: "hooks/hooks.json", type: "blob", mode: "100644", sha: "d".repeat(40), size: 12 }]),
+    [`https://api.github.com/repos/o/r/git/blobs/${"d".repeat(40)}`]: { body: { encoding: "base64", content: Buffer.from(hooks).toString("base64") } },
+  });
+  const got = await fetchCommit(github, "main", fetchImpl);
+  try {
+    assert.deepEqual(got.fetchedSeparately, ["hooks/hooks.json"]);
+    assert.deepEqual(got.leftOut, []);
+    assert.equal(fs.readFileSync(path.join(got.root, "hooks", "hooks.json"), "utf-8"), hooks);
+  } finally {
+    got.cleanup();
+  }
+});
+
+test("a commit file list the host cut short leaves no temporary folder and no result", async () => {
+  const tgz = makeTarball({ "r-abc/SKILL.md": "hi" });
+  const fetchImpl = fakeFetch({
+    ...githubRoutes(tgz),
+    [`https://api.github.com/repos/o/r/git/trees/${SHA}?recursive=1`]: { body: { sha: SHA, truncated: true, tree: [] } },
+  });
+  await allRemoved(() => assert.rejects(fetchCommit(github, "main", fetchImpl), /could not list every file of the commit: the host cut its file list short/));
 });
 
 test("resolves a GitHub ref to a commit and unpacks that commit's archive without its top folder", async () => {
@@ -94,6 +122,8 @@ test("Gitea and Forgejo use their own commit and archive endpoints", async () =>
     [`${api}/commits?${query}`]: { body: [{ sha: OTHER_SHA }] },
     [`${api}/archive/${SHA}.tar.gz`]: { body: tgz },
     [`${api}/archive/${OTHER_SHA}.tar.gz`]: { body: tgz },
+    [`${api}/git/trees/${SHA}?recursive=true&per_page=10000&page=1`]: { body: { truncated: false, page: 1, tree: [] } },
+    [`${api}/git/trees/${OTHER_SHA}?recursive=true&per_page=10000&page=1`]: { body: { truncated: false, page: 1, tree: [] } },
   });
   const pinned = await fetchCommit(forgejo, "dev", fetchImpl);
   pinned.cleanup();
@@ -116,8 +146,10 @@ test("an owner or repository name is encoded in every address, so it cannot reac
   const archived = fakeFetch({
     "https://api.github.com/repos/o%3Fx%3D1/r%23%2F..%2Fy/commits/main": SHA,
     [`https://codeload.github.com/o%3Fx%3D1/r%23%2F..%2Fy/tar.gz/${SHA}`]: { body: tgz },
+    [`https://api.github.com/repos/o%3Fx%3D1/r%23%2F..%2Fy/git/trees/${SHA}?recursive=1`]: { body: { truncated: false, tree: [] } },
   });
   (await fetchCommit({ ...github, ...odd }, "main", archived)).cleanup();
+  assert.equal(archived.calls.length, 3);
   const giteaCalls = fakeFetch({});
   await assert.rejects(fetchCommit({ ...forgejo, ...odd }, "main", giteaCalls));
   assert.ok(giteaCalls.calls.length > 0);

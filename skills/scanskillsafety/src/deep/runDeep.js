@@ -28,11 +28,11 @@ const isRepository = (target) => (target.kind === "github" || target.kind === "g
 function commitServices(target) {
   if (target.kind === "github") {
     return [
-      { service: "api.github.com", receives: "a request for this repository's commit id" },
+      { service: "api.github.com", receives: "requests for this repository's commit id and file list, and for any file the archive leaves out" },
       { service: "codeload.github.com", receives: "a request for that commit's archive" },
     ];
   }
-  if (target.kind === "git-host") return [{ service: new URL(target.origin).host, receives: "requests for this repository, its commit id and its archive" }];
+  if (target.kind === "git-host") return [{ service: new URL(target.origin).host, receives: "requests for this repository, its commit id, file list and archive, and any file the archive leaves out" }];
   return [];
 }
 
@@ -75,9 +75,9 @@ const servicesFor = (target, options, found) => SERVICE_STAGES.flatMap((stage) =
 
 // The folder to read: a local folder in place, or a repository's exact commit unpacked into a temporary folder.
 async function openTarget(target, options, deps) {
-  if (target.kind === "local-dir") return { root: target.path, ...localCommit(target.path), cleanup: () => {} };
-  const { commit, root, cleanup } = await fetchCommit(target, options.ref, deps.fetchImpl ?? fetch, deps.limits ?? ARCHIVE_LIMITS);
-  return { root, commit, changed: false, changesChecked: true, note: null, cleanup };
+  if (target.kind === "local-dir") return { root: target.path, ...localCommit(target.path), fetchedSeparately: [], leftOut: [], cleanup: () => {} };
+  const { commit, root, cleanup, fetchedSeparately, leftOut } = await fetchCommit(target, options.ref, deps.fetchImpl ?? fetch, deps.limits ?? ARCHIVE_LIMITS);
+  return { root, commit, changed: false, changesChecked: true, note: null, fetchedSeparately, leftOut, cleanup };
 }
 
 // The folders a command's relative path may start from: the folder of the file naming it, each folder above it (a plugin's
@@ -187,6 +187,7 @@ async function runDeep(input, options, deps = {}) {
       changesChecked: false,
       note: null,
       leftOut: [],
+      fetchedSeparately: [],
       installTime: [],
       testFindings: [],
       launchedTests: [],
@@ -220,7 +221,10 @@ async function runDeep(input, options, deps = {}) {
     return result;
   }
   try {
-    const { files, leftOut } = listEveryFile(opened.root);
+    const listed = listEveryFile(opened.root);
+    const { files } = listed;
+    // Submodules and links the archive left out are known only from the commit's file list.
+    const leftOut = [...listed.leftOut, ...opened.leftOut].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
     const entries = installTimeEntries(files);
     const reading = claudePath && files.length > 0 ? claudePlan(target, files, entries, opened, options.model) : null;
     if (reading && options.claudeOk && options.claudeOk !== reading.plan.id) {
@@ -245,6 +249,7 @@ async function runDeep(input, options, deps = {}) {
       changesChecked: opened.changesChecked,
       note: opened.note,
       leftOut,
+      fetchedSeparately: opened.fetchedSeparately,
       installTime: entries,
       testFindings,
       launchedTests: launched,

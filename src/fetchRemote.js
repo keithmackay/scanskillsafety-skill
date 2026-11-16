@@ -85,6 +85,9 @@ async function fetchJson(fetchImpl, url) {
   }
 }
 
+// The repository's owner and name as one escaped path, so neither can reach another path or a query.
+const repoPath = (target) => `${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
+
 function describeFailure(result) {
   switch (result.reason) {
     case "not-found": return `not found: ${result.url}`;
@@ -244,4 +247,4 @@ async function gatherRawUrl(url, fetchImpl) {
   return { files: [{ path: name, text: result.text }], errors: [], notices: [] };
 }
 
-module.exports = { fetchResponse, fetchText, readTextWithin, failureOf, describeFailure, gatherGithub, gatherGitHost, gatherRawUrl };
+module.exports = { fetchResponse, fetchText, readTextWithin, failureOf, describeFailure, repoPath, gatherGithub, gatherGitHost, gatherRawUrl };
