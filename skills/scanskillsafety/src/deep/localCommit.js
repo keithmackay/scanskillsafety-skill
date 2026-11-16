@@ -25,8 +25,14 @@ function localCommit(folder, { timeoutMs = GIT_TIMEOUT_MS } = {}) {
   const config = git(["config", "--local", "--includes", "--get-regexp", RUNS_COMMANDS]);
   if (config.status === 0) return unchecked(commit, CONFIG_NAMES_COMMANDS);
   if (config.status !== 1) return unchecked(commit, CHANGES_UNCHECKED);
-  // Submodules are left out: each has its own configuration, which `git status` would follow.
-  const status = git(["-c", "core.fsmonitor=false", "--no-optional-locks", "status", "--porcelain", "--ignore-submodules=all", "--", "."]);
+  // Submodules are left out: each has its own configuration, which `git status` would follow. A status that runs past its time
+  // limit (a very large checkout) leaves changes unchecked rather than stopping the scan.
+  let status;
+  try {
+    status = git(["-c", "core.fsmonitor=false", "--no-optional-locks", "status", "--porcelain", "--ignore-submodules=all", "--", "."]);
+  } catch {
+    return unchecked(commit, CHANGES_UNCHECKED);
+  }
   if (status.status !== 0) return unchecked(commit, CHANGES_UNCHECKED);
   return { commit, changed: status.stdout.trim() !== "", changesChecked: true, note: null };
 }
