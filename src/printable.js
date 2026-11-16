@@ -7,6 +7,10 @@ const printable = (text) => String(text).replace(/[\p{Cc}\p{Cf}]/gu, "?");
 // printable, cut to max characters (code points).
 const printableCut = (text, max) => Array.from(printable(text)).slice(0, max).join("");
 
+// Lines of output joined, each made printable as a whole, so a string from the target or a service anywhere in a line (a line
+// break in it included) cannot write a terminal escape or start a line of its own.
+const printableLines = (lines) => lines.map(printable).join("\n");
+
 // A copy of a result with every string in it made printable, for --json.
 function printableStrings(value) {
   if (typeof value === "string") return printable(value);
@@ -15,4 +19,4 @@ function printableStrings(value) {
   return value;
 }
 
-module.exports = { printable, printableCut, printableStrings };
+module.exports = { printable, printableCut, printableLines, printableStrings };

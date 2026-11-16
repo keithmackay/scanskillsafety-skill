@@ -4,7 +4,7 @@
 "use strict";
 
 const { formatText, pushFinding } = require("../scanTarget");
-const { printable, printableCut } = require("../printable");
+const { printable, printableCut, printableLines } = require("../printable");
 
 const COMMAND_MAX = 300;
 const SITE_TEXT_MAX = 300;
@@ -13,7 +13,7 @@ const pathList = (paths) => paths.map(printable).join(", ");
 
 function formatServices(services) {
   if (services.length === 0) return "Deep scan will contact no service.";
-  return `Deep scan will contact: ${services.map((s) => `${s.service} (${s.receives})`).join("; ")}.`;
+  return printable(`Deep scan will contact: ${services.map((s) => `${s.service} (${s.receives})`).join("; ")}.`);
 }
 
 function commitLine(deep) {
@@ -85,7 +85,7 @@ function siteLines(site) {
 }
 
 // What Claude would read and what it would cost, as shown before the person agrees.
-function formatPlan(plan) {
+function planLines(plan) {
   const lines = [
     `  Plan ${plan.id}: Claude (${plan.model}) would read ${plan.files.length} file(s) in ${plan.calls} call(s), about ${n(plan.inputTokens)} input and ${n(plan.outputTokens)} output tokens (an estimate).`,
     "  It sends their text to Anthropic, through your own claude CLI.",
@@ -93,8 +93,10 @@ function formatPlan(plan) {
     ...plan.files.map((f) => `    ${f.path}${f.parts > 1 ? ` (${f.parts} parts)` : ""}`),
   ];
   if (plan.leftOut.length > 0) lines.push("  Left out:", ...plan.leftOut.map((f) => `    ${f.path}: ${f.reason}`));
-  return lines.join("\n");
+  return lines;
 }
+
+const formatPlan = (plan) => printableLines(planLines(plan));
 
 function flaggedLines(claude, verdict, heading) {
   const files = claude.files.filter((f) => f.verdict === verdict);
@@ -114,7 +116,7 @@ function claudeLines(claude) {
   if (claude.status === "off") return ["Claude's reading: not run (--no-claude)"];
   if (claude.status === "skipped") return [`Claude's reading: skipped: ${claude.reason}`];
   if (claude.status === "planned") {
-    return ["Claude's reading (not checked by a person): planned, not run", formatPlan(claude.plan), `  To run it, ask the person first; if they agree, rerun with --claude-ok ${claude.plan.id}. Never pass --claude-ok without their yes.`];
+    return ["Claude's reading (not checked by a person): planned, not run", ...planLines(claude.plan), `  To run it, ask the person first; if they agree, rerun with --claude-ok ${claude.plan.id}. Never pass --claude-ok without their yes.`];
   }
   const lines = ["Claude's reading (not checked by a person)", `  Read with ${claude.plan.model}, on plan ${claude.plan.id}.`];
   if (claude.stopReason) lines.push(`  Stopped: ${claude.stopReason}.`);
@@ -147,7 +149,7 @@ function formatDeep(result) {
     for (const f of deep.testFindings) pushFinding(lines, f, f.severity === "info" ? "note" : f.severity);
   }
   lines.push(...claudeLines(deep.claude));
-  return [text, ...lines].join("\n");
+  return [text, printableLines(lines)].join("\n");
 }
 
 module.exports = { formatDeep, formatServices, formatPlan };

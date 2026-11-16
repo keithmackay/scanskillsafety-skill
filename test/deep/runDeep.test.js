@@ -301,6 +301,26 @@ test("FINDSAFESKILLS_URL and OSV_URL lose a trailing slash; one that is not an h
   }
 });
 
+test("a hostile lockfile cannot write terminal escapes into the text output", async () => {
+  const esc = "\u001b[2J\u001b]0;owned\u0007";
+  const root = makeTree({
+    "SKILL.md": "Formats tables.",
+    "pnpm-lock.yaml": `lockfileVersion: ${esc}5.4\n`,
+    "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": {}, [`node_modules/x${esc}`]: { version: `1.0.0${esc}` } } }),
+  });
+  const fetchImpl = fakeFetch({
+    [OSV_BATCH]: () => ({ body: { results: [{ vulns: [{ id: `GHSA-${esc}` }] }] } }),
+    [`https://api.osv.dev/v1/vulns/GHSA-${encodeURIComponent(esc)}`]: { body: { id: `GHSA-${esc}`, database_specific: { severity: `HIGH${esc}` } } },
+  });
+  const result = await runDeep(root, { ...ALL_OFF, osv: true }, { fetchImpl });
+  assert.ok(result.deep.packages.couldNotRead.length > 0);
+  assert.ok(result.deep.packages.vulnerabilities.length > 0, JSON.stringify(result.deep.packages));
+  result.findings.push({ severity: "critical", category: "malicious-package", source: "osv", file: "package-lock.json", line: 1, detail: `x${esc} is listed as malicious` });
+  const out = formatDeep(result);
+  assert.doesNotMatch(out, /[\u001b\u0007]/);
+  assert.doesNotMatch(out.replace(/\n/g, ""), /[\p{Cc}\p{Cf}]/u);
+});
+
 test("the text output's findsafeskills section: each listing's rating, page and how its scans relate to this commit", () => {
   const base = { target: "x", rating: "green", scannedFiles: [], findings: [], notices: [], errors: [], nonGoals: [] };
   const deep = { read: true, commit: SHA, changed: false, changesChecked: true, note: null, leftOut: [], fetchedSeparately: [], installTime: [], testFindings: [], launchedTests: [], packages: { status: "off" }, claude: { status: "off" } };

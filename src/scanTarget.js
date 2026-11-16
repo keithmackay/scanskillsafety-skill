@@ -13,7 +13,7 @@ const { SAFETY_SCANNER_NON_GOALS } = require("../lib/nonGoals");
 const { parseTarget } = require("./parseTarget");
 const { discoverLocal, discoverLocalScripts, MAX_FILE_BYTES } = require("./discover");
 const { gatherGithub, gatherGitHost, gatherRawUrl } = require("./fetchRemote");
-const { printable } = require("./printable");
+const { printable, printableLines } = require("./printable");
 
 // One file per path: a config that is also loaded as text (hooks.json, .mcp.json) is scanned as a script, at full weight.
 function mergeByPath(textFiles, scriptFiles) {
@@ -80,7 +80,7 @@ function formatText(result) {
   if (result.rating === null) {
     lines.push("Rating: COULD NOT SCAN — no result. This is not a clean bill of health.");
     for (const e of result.errors) lines.push(`  error: ${e}`);
-    return lines.join("\n");
+    return printableLines(lines);
   }
   lines.push(`Scanned ${result.scannedFiles.length} file(s): ${result.scannedFiles.map(printable).join(", ")}`);
   for (const e of result.errors) lines.push(`  warning: could not fetch — ${e}`);
@@ -93,7 +93,7 @@ function formatText(result) {
     lines.push("", "Notes (these don't change the rating):");
     for (const f of notes) pushFinding(lines, f, "note");
   }
-  return lines.join("\n");
+  return printableLines(lines);
 }
 
 const EXIT_CODES = { green: 0, yellow: 1, red: 2 };
