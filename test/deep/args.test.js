@@ -34,3 +34,11 @@ test("deep options without --deep, a bad budget, or two targets are errors", () 
   assert.equal(parseCliArgs(["--bogus", "x"]).ok, false);
   assert.equal(parseCliArgs([]).ok, false);
 });
+
+test("--budget takes a positive whole number no larger than JavaScript counts exactly", () => {
+  assert.equal(parseCliArgs(["--deep", "--budget", "0", "x"]).ok, false);
+  assert.equal(parseCliArgs(["--deep", "--budget", "-5", "x"]).ok, false);
+  assert.equal(parseCliArgs(["--deep", "--budget", String(Number.MAX_SAFE_INTEGER) + "0", "x"]).ok, false);
+  assert.equal(parseCliArgs(["--deep", "--budget", String(Number.MAX_SAFE_INTEGER), "x"]).deep.budget, Number.MAX_SAFE_INTEGER);
+  assert.equal(parseCliArgs(["--deep", "--budget", "1", "x"]).deep.budget, 1);
+});

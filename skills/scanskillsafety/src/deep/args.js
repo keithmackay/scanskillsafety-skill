@@ -34,8 +34,8 @@ function parseCliArgs(argv) {
   }
   let budget = null;
   if (values.budget !== undefined) {
-    if (!/^\d+$/.test(values.budget)) return { ok: false, error: "--budget takes a whole number of tokens" };
-    budget = Number(values.budget);
+    budget = /^\d+$/.test(values.budget) ? Number(values.budget) : NaN;
+    if (!Number.isSafeInteger(budget) || budget < 1) return { ok: false, error: "--budget takes a positive whole number of tokens" };
   }
   return {
     ok: true,
