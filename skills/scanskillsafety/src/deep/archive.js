@@ -18,7 +18,8 @@ const { runTool, describeDuration } = require("./runTool");
 //   "<repo>-<sha>/"; an unknown commit answers 404.
 // - Gitea and Forgejo (codeberg.org): GET <origin>/api/v1/repos/<o>/<r>/commits?sha=<ref>&limit=1&stat=false&verification=false
 //   &files=false answers [{ "sha": "<40 hex>", ... }], the default branch's head without sha=; an unknown ref or repository
-//   answers 404. <origin>/api/v1/repos/<o>/<r>/archive/<sha>.tar.gz answers application/gzip whose one top folder is the
+//   answers 404 (on codeberg.org, 2026-11-15: body "null" for an unknown ref, a JSON message for an unknown repository), and
+//   <origin>/api/v1/repos/<o>/<r> answers 404 only for an unknown or private repository. <origin>/api/v1/repos/<o>/<r>/archive/<sha>.tar.gz answers application/gzip whose one top folder is the
 //   repository's name in lower case.
 const ARCHIVE_LIMITS = { downloadBytes: 200 * 1024 ** 2, unpackedBytes: 1024 ** 3, files: 100_000, downloadMs: 10 * 60 * 1000 };
 const TAR_TIMEOUT_MS = 5 * 60 * 1000;
@@ -54,10 +55,21 @@ function commitIdOf(target, text) {
   }
 }
 
+// GitHub answers 404 only for a repository it does not show (422 is an unknown ref); Gitea and Forgejo answer 404 for both, so
+// the repository itself is looked up to tell them apart.
+async function repositoryShown(target, fetchImpl) {
+  if (target.kind === "github") return false;
+  const result = await fetchText(fetchImpl, `${target.origin}/api/v1/repos/${target.owner}/${target.repo}`);
+  return result.ok || result.status !== 404;
+}
+
 async function resolveCommit(target, ref, commitUrl, fetchImpl) {
   const noCommit = new Error(`no commit ${ref ?? "HEAD"} in ${target.owner}/${target.repo}`);
   const result = await fetchText(fetchImpl, commitUrl, { headers: target.kind === "github" ? { Accept: "application/vnd.github.sha" } : {} });
   if (!result.ok) {
+    if (result.status === 404 && !(await repositoryShown(target, fetchImpl))) {
+      throw new Error(`no repository ${target.owner}/${target.repo}, or it is private (the deep scan reads public repositories only)`);
+    }
     if (result.status === 404 || result.status === 422) throw noCommit;
     throw new Error(describeFailure(result));
   }

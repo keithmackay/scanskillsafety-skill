@@ -292,3 +292,10 @@ test("the text output's Packages section: how many were checked, the malicious o
   assert.match(formatDeep({ ...base, rating: "green", findings: [], deep: { ...deep, packages: none } }), /Packages:\n {2}No package found in a lockfile or manifest\.$/);
   assert.match(formatDeep({ ...base, rating: "green", findings: [], deep: { ...deep, packages: { status: "off" } } }), /Packages: not checked \(--no-osv\)/);
 });
+
+test("a lockfile over 5 MB is listed as not checked in the Packages section", async () => {
+  const root = makeTree({ "SKILL.md": "Formats tables.", "package-lock.json": `{"pad":"${"x".repeat(5 * 1024 * 1024)}"}` });
+  const result = await runDeep(root, { ...ALL_OFF, osv: true }, { fetchImpl: fakeFetch({}) });
+  assert.deepEqual(result.deep.packages.couldNotRead, [{ file: "package-lock.json", reason: "larger than 5 MB, not checked" }]);
+  assert.match(formatDeep(result), /Could not read: package-lock\.json: larger than 5 MB, not checked/);
+});

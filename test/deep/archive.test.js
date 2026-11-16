@@ -128,10 +128,19 @@ test("a subpath the commit does not hold, or one that leaves the repository, is 
 test("a ref the host does not know is a clear error", async () => {
   const unknown = fakeFetch({ "https://api.github.com/repos/o/r/commits/nope": { status: 422, body: { message: "No commit found for SHA: nope" } } });
   await assert.rejects(fetchCommit(github, "nope", unknown), /^Error: no commit nope in o\/r$/);
-  await assert.rejects(fetchCommit(github, "gone", fakeFetch({})), /^Error: no commit gone in o\/r$/);
-  await assert.rejects(fetchCommit(forgejo, "nope", fakeFetch({})), /^Error: no commit nope in o\/r$/);
+  const repository = fakeFetch({ "https://code.example/api/v1/repos/o/r": { body: { name: "r" } } });
+  await assert.rejects(fetchCommit(forgejo, "nope", repository), /^Error: no commit nope in o\/r$/);
   const empty = fakeFetch({ "https://code.example/api/v1/repos/o/r/commits?sha=nope&limit=1&stat=false&verification=false&files=false": { body: [] } });
   await assert.rejects(fetchCommit(forgejo, "nope", empty), /^Error: no commit nope in o\/r$/);
+});
+
+test("a repository the host does not show is missing or private, which the deep scan cannot read", async () => {
+  const missing = /^Error: no repository o\/r, or it is private \(the deep scan reads public repositories only\)$/;
+  await assert.rejects(fetchCommit(github, null, fakeFetch({})), missing);
+  await assert.rejects(fetchCommit(github, "main", fakeFetch({})), missing);
+  const gone = fakeFetch({});
+  await assert.rejects(fetchCommit(forgejo, "main", gone), missing);
+  assert.deepEqual(gone.calls.slice(1), ["https://code.example/api/v1/repos/o/r"]);
 });
 
 test("a reply that is not a commit id is an error naming the address", async () => {

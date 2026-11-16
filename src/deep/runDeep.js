@@ -43,9 +43,9 @@ async function openTarget(target, options, deps) {
 }
 
 // The packages the files pull in, checked against OSV unless the person turned that off.
-async function packageCheck(files, options, fetchImpl) {
+async function packageCheck(files, leftOut, options, fetchImpl) {
   if (!options.osv) return { findings: [], packages: { status: "off" } };
-  const { packages, namesOnly, couldNotRead, notChecked } = readPackages(files);
+  const { packages, namesOnly, couldNotRead, notChecked } = readPackages(files, leftOut);
   const checked = await checkPackages(packages, fetchImpl);
   const { findings = [], vulnerabilities = [], detailsLeft = 0, reason = null } = checked;
   return {
@@ -96,7 +96,7 @@ async function runDeep(input, options, deps = {}) {
   try {
     const { files, leftOut } = listEveryFile(opened.root);
     const { findings: fileFindings, testFindings, launched } = scanEveryFile(files);
-    const { findings: packageFindings, packages } = await packageCheck(files, options, deps.fetchImpl ?? fetch);
+    const { findings: packageFindings, packages } = await packageCheck(files, leftOut, options, deps.fetchImpl ?? fetch);
     const findings = [...fileFindings, ...packageFindings];
     Object.assign(result, {
       rating: files.length > 0 ? ratingFromFindings(findings) : null,

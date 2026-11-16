@@ -221,7 +221,9 @@ const MANIFESTS = {
   "pyproject.toml": { ecosystem: "PyPI", names: pyprojectNames },
 };
 
-function readPackages(files) {
+// files: the text files read; leftOut: the files left out of that list with the reason, so a lockfile among them is said to be
+// unchecked rather than missed.
+function readPackages(files, leftOut = []) {
   const result = { packages: [], namesOnly: [], couldNotRead: [], notChecked: [] };
   const seen = new Set();
   const add = (ecosystem, file, { name, version, line }) => {
@@ -244,6 +246,10 @@ function readPackages(files) {
       if (!(err instanceof Unreadable)) throw err;
       result.couldNotRead.push({ file: f.path, reason: err.message });
     }
+  }
+  for (const f of leftOut.filter((l) => !isVendored(l.path) && lockfileKind(l.path))) {
+    locked.add(lockfileKind(f.path).ecosystem);
+    result.couldNotRead.push({ file: f.path, reason: `${f.reason}, not checked` });
   }
   for (const f of ownFiles) {
     const manifest = MANIFESTS[baseName(f.path)];
