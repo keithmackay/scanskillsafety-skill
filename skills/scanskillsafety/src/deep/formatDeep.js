@@ -7,6 +7,7 @@ const { formatText, pushFinding } = require("../scanTarget");
 const { printable, printableCut } = require("../printable");
 
 const COMMAND_MAX = 300;
+const SITE_TEXT_MAX = 300;
 
 const pathList = (paths) => paths.map(printable).join(", ");
 
@@ -56,19 +57,21 @@ function relationLine(scan, scannedAt) {
   if (scan.relation === "newer") return `${scanned}; this commit is ${commits(scan.by)} newer`;
   if (scan.relation === "older") return `${scanned}; this commit is ${commits(scan.by)} older`;
   if (scan.relation === "diverged") {
-    return `${scanned}; the two have diverged (this commit has ${commits(scan.newerBy)} the scanned one lacks, and lacks ${n(scan.olderBy)} of its)`;
+    return `${scanned}; the two have diverged (this commit has ${commits(scan.newerBy)} the scanned one lacks, and the scanned one has ${n(scan.olderBy)} this commit lacks)`;
   }
-  return `${scanned} (not compared: ${printable(scan.reason)})`;
+  return `${scanned} (not compared: ${printableCut(scan.reason, SITE_TEXT_MAX)})`;
 }
 
 function siteLines(site) {
   if (site.status === "off") return ["findsafeskills: not compared (--no-site)"];
   if (site.status === "local") return ["findsafeskills: not compared (a local folder has no repository address)"];
-  if (site.status === "unreachable") return [`findsafeskills: could not reach findsafeskills (${printable(site.reason)})`];
+  if (site.status === "unreachable") return [`findsafeskills: could not reach findsafeskills (${printableCut(site.reason, SITE_TEXT_MAX)})`];
+  if (site.status === "refused") return [`findsafeskills: ${printableCut(site.reason, SITE_TEXT_MAX)}`];
   if (site.status === "not-listed") return ["findsafeskills: not listed on findsafeskills"];
   const lines = ["findsafeskills:"];
   for (const listing of site.listings) {
-    lines.push(`  ${printable(listing.url ?? "a listing with no page address")} (${listing.rating === null ? "no rating" : `rating: ${printable(listing.rating)}`})`);
+    const rating = listing.rating === null ? "no rating" : `rating: ${printableCut(listing.rating, SITE_TEXT_MAX)}`;
+    lines.push(`  ${listing.url === null ? "a listing with no page address" : printableCut(listing.url, SITE_TEXT_MAX)} (${rating})`);
     if (listing.text && listing.scripts && listing.text.commit === listing.scripts.commit) {
       lines.push(`    Text and script scans: ${relationLine(listing.text, listing.scannedAt)}`);
       continue;
@@ -77,6 +80,7 @@ function siteLines(site) {
     if (listing.scripts) lines.push(`    Script scan: ${relationLine(listing.scripts)}`);
     if (!listing.text && !listing.scripts) lines.push(`    Scanned on ${dayOf(listing.scannedAt)}, with no commit recorded to compare`);
   }
+  if (site.more > 0) lines.push(`  ${n(site.more)} more listing(s) not shown`);
   return lines;
 }
 

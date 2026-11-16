@@ -17,7 +17,7 @@ const LOOKUP = lookupUrl("https://github.com/o/r");
 const compareUrl = (scanned) => `https://api.github.com/repos/o/r/compare/${scanned}...${COMMIT}?per_page=1`;
 const listing = (extra = {}) => ({
   slug: "o-r",
-  url: "https://findsafeskills.com/listings/o-r",
+  url: `${BASE}/listings/o-r`,
   rating: "yellow",
   scannedAt: "2026-10-30T10:00:00.000Z",
   scanCommit: null,
@@ -26,7 +26,7 @@ const listing = (extra = {}) => ({
   scriptsScan: "full",
   ...extra,
 });
-const page = { url: "https://findsafeskills.com/listings/o-r", rating: "yellow", scannedAt: "2026-10-30T10:00:00.000Z" };
+const page = { url: `${BASE}/listings/o-r`, rating: "yellow", scannedAt: "2026-10-30T10:00:00.000Z" };
 const compareAnswer = (status, aheadBy, behindBy) => ({ body: { status, ahead_by: aheadBy, behind_by: behindBy, commits: [] } });
 
 test("a local folder is not compared and nothing is sent", async () => {
@@ -51,7 +51,9 @@ test("out of reach is never read as not listed: a network error, a failed answer
   const cases = [
     [new Error("getaddrinfo ENOTFOUND site.test"), `network error (getaddrinfo ENOTFOUND site.test): ${LOOKUP}`],
     [{ status: 500, body: "oops" }, `HTTP 500: ${LOOKUP}`],
-    [{ status: 429, body: { error: "slow down" } }, "rate limited"],
+    [{ status: 429, body: { error: "slow down" } }, `rate limited (HTTP 429): ${LOOKUP}`],
+    [{ status: 403, body: "forbidden" }, `rate limited (HTTP 403): ${LOOKUP}`],
+    [{ body: `{"listings":[],"pad":"${"x".repeat(1024 * 1024)}"}` }, `answered more than 1 MB: ${LOOKUP}`],
     ["not json", `did not answer a list of listings: ${LOOKUP}`],
     [{ body: { listings: "none" } }, `did not answer a list of listings: ${LOOKUP}`],
     [{ body: { listings: [null] } }, `did not answer a list of listings: ${LOOKUP}`],
@@ -67,6 +69,7 @@ test("the text scan and the script scan at this commit: scanned this commit, wit
   assert.deepEqual(await compareWithSite(GITHUB, COMMIT, fetchImpl, BASE), {
     status: "listed",
     listings: [{ ...page, text: { commit: COMMIT, relation: "same" }, scripts: { commit: COMMIT, relation: "same" } }],
+    more: 0,
   });
   assert.deepEqual(fetchImpl.calls, [LOOKUP]);
 });
@@ -84,6 +87,51 @@ test("each relation GitHub's compare call gives: newer, older, diverged, identic
     assert.deepEqual(result.listings, [{ ...page, text: null, scripts: { commit: OLD, ...relation } }]);
     assert.deepEqual(fetchImpl.calls, [LOOKUP, compareUrl(OLD)]);
   }
+});
+
+test("a 400 means the site could not use the address, which is not \"not listed\"", async () => {
+  const result = await compareWithSite(GITHUB, COMMIT, fakeFetch({ [LOOKUP]: { status: 400, body: { error: "repo must be a repository URL" } } }), BASE);
+  assert.deepEqual(result, { status: "refused", reason: "findsafeskills could not use this repository address (HTTP 400)" });
+});
+
+test("at most 10 listings are compared; the rest are counted", async () => {
+  const commits = Array.from({ length: 12 }, (_, i) => i.toString(16).padStart(40, "0"));
+  const routes = { [LOOKUP]: { body: { listings: commits.map((c) => listing({ scanCommit: c })) } } };
+  for (const c of commits) routes[compareUrl(c)] = compareAnswer("ahead", 1, 0);
+  const fetchImpl = fakeFetch(routes);
+  const result = await compareWithSite(GITHUB, COMMIT, fetchImpl, BASE);
+  assert.equal(result.listings.length, 10);
+  assert.equal(result.more, 2);
+  assert.equal(fetchImpl.calls.length, 11);
+});
+
+test("once GitHub's compare call is rate limited, no other commit is asked about", async () => {
+  const third = "d".repeat(40);
+  const fetchImpl = fakeFetch({
+    [LOOKUP]: { body: { listings: [listing({ scanCommit: OLD }), listing({ scanCommit: OTHER, scriptsCommit: third })] } },
+    [compareUrl(OLD)]: compareAnswer("ahead", 1, 0),
+    [compareUrl(OTHER)]: { status: 429, body: "slow down" },
+    [compareUrl(third)]: compareAnswer("ahead", 1, 0),
+  });
+  const result = await compareWithSite(GITHUB, COMMIT, fetchImpl, BASE);
+  const reason = `GitHub's compare call was rate limited (HTTP 429): ${compareUrl(OTHER)}`;
+  assert.deepEqual(result.listings[1].text, { commit: OTHER, relation: "not-compared", reason });
+  assert.deepEqual(result.listings[1].scripts, { commit: third, relation: "not-compared", reason });
+  assert.deepEqual(fetchImpl.calls, [LOOKUP, compareUrl(OLD), compareUrl(OTHER)]);
+});
+
+test("a page address off the site's own origin is replaced by the slug's page, or dropped; an unknown rating is \"unknown\"", async () => {
+  const fetchImpl = fakeFetch({ [LOOKUP]: { body: { listings: [
+    listing({ url: "https://evil.example/listings/o-r", rating: "purple" }),
+    listing({ url: "https://site.test.evil.example/x", slug: "a b", rating: null }),
+    listing({ url: "not a url", slug: 7 }),
+  ] } } });
+  const result = await compareWithSite(GITHUB, COMMIT, fetchImpl, BASE);
+  assert.deepEqual(result.listings.map((l) => [l.url, l.rating]), [
+    [`${BASE}/listings/o-r`, "unknown"],
+    [`${BASE}/listings/a%20b`, null],
+    [null, "yellow"],
+  ]);
 });
 
 test("a text scan and a script scan at different commits are each compared", async () => {
@@ -111,7 +159,8 @@ test("a value that is not a commit id is never put in a request", async () => {
 test("a failed compare call gives the scan date only, with the reason", async () => {
   const cases = [
     [undefined, "GitHub does not know the scanned commit"],
-    [{ status: 403, body: "rate limit" }, "GitHub's compare call was rate limited"],
+    [{ status: 403, body: "rate limit" }, `GitHub's compare call was rate limited (HTTP 403): ${compareUrl(OLD)}`],
+    [{ body: `{"status":"ahead","ahead_by":1,"behind_by":0,"pad":"${"x".repeat(5 * 1024 * 1024)}"}` }, `answered more than 5 MB: ${compareUrl(OLD)}`],
     [{ status: 502, body: "bad" }, `HTTP 502: ${compareUrl(OLD)}`],
     [{ body: { status: "sideways" } }, `GitHub's compare call answered an unexpected shape: ${compareUrl(OLD)}`],
   ];
@@ -124,7 +173,7 @@ test("a failed compare call gives the scan date only, with the reason", async ()
 });
 
 test("two listings, each reported; a commit both name is compared once", async () => {
-  const second = listing({ slug: "o-r-2", url: "https://findsafeskills.com/listings/o-r-2", rating: "green", scanCommit: OLD, scriptsCommit: OTHER });
+  const second = listing({ slug: "o-r-2", url: `${BASE}/listings/o-r-2`, rating: "green", scanCommit: OLD, scriptsCommit: OTHER });
   const fetchImpl = fakeFetch({
     [LOOKUP]: { body: { listings: [listing({ scanCommit: OLD }), second] } },
     [compareUrl(OLD)]: compareAnswer("ahead", 1, 0),
@@ -135,7 +184,7 @@ test("two listings, each reported; a commit both name is compared once", async (
   assert.deepEqual(result.listings, [
     { ...page, text: { commit: OLD, relation: "newer", by: 1 }, scripts: null },
     {
-      url: "https://findsafeskills.com/listings/o-r-2", rating: "green", scannedAt: page.scannedAt,
+      url: `${BASE}/listings/o-r-2`, rating: "green", scannedAt: page.scannedAt,
       text: { commit: OLD, relation: "newer", by: 1 }, scripts: { commit: OTHER, relation: "older", by: 2 },
     },
   ]);

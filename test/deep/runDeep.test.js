@@ -182,6 +182,7 @@ test("a repository URL is compared with what findsafeskills scanned; --no-site s
       url: "https://findsafeskills.com/listings/o-r", rating: "yellow", scannedAt: "2026-10-30T10:00:00.000Z",
       text: { commit: SHA, relation: "same" }, scripts: { commit: OLD, relation: "newer", by: 14 },
     }],
+    more: 0,
   });
   const off = fakeFetch(routes);
   const quiet = await runDeep("https://github.com/o/r", ALL_OFF, { fetchImpl: off });
@@ -209,6 +210,45 @@ test("the site is named by the address FINDSAFESKILLS_URL gives", async () => {
   }
 });
 
+test("FINDSAFESKILLS_URL and OSV_URL lose a trailing slash; one that is not an http or https address is a run error, sent nowhere", async () => {
+  const saved = { site: process.env.FINDSAFESKILLS_URL, osv: process.env.OSV_URL };
+  const restore = () => {
+    for (const [name, value] of [["FINDSAFESKILLS_URL", saved.site], ["OSV_URL", saved.osv]]) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  };
+  try {
+    process.env.FINDSAFESKILLS_URL = "http://localhost:3000/";
+    process.env.OSV_URL = "http://osv.test:8080//";
+    const fetchImpl = fakeFetch({ "https://code.example/api/v1/repos/o/r/commits?limit=1&stat=false&verification=false&files=false": { status: 500, body: "x" } });
+    const slashed = await runDeep("https://code.example/o/r", { ...ALL_OFF, site: true, osv: true }, { fetchImpl });
+    assert.deepEqual(slashed.deep.services.slice(1).map((s) => s.service), ["localhost:3000", "osv.test:8080"]);
+    const { compareWithSite } = require("../../src/deep/siteCompare");
+    const siteCalls = fakeFetch({});
+    await compareWithSite({ kind: "github", owner: "o", repo: "r" }, SHA, siteCalls);
+    assert.deepEqual(siteCalls.calls, [`http://localhost:3000/api/listings/lookup?repo=${encodeURIComponent("https://github.com/o/r")}`]);
+    const osvCalls = fakeFetch({});
+    await runDeep(makeTree({ "SKILL.md": "hi", "package-lock.json": LOCK }), { ...ALL_OFF, osv: true }, { fetchImpl: osvCalls });
+    assert.deepEqual(osvCalls.calls, ["http://osv.test:8080/v1/querybatch"]);
+    for (const [name, other] of [["FINDSAFESKILLS_URL", "OSV_URL"], ["OSV_URL", "FINDSAFESKILLS_URL"]]) {
+      process.env[other] = "https://fine.example";
+      for (const bad of ["not a url", "ftp://x.example"]) {
+        process.env[name] = bad;
+        const calls = fakeFetch({});
+        const events = [];
+        const result = await runDeep("https://github.com/o/r", { ...ALL_OFF, site: true, osv: true }, { fetchImpl: calls, onServices: (s) => events.push(s) });
+        assert.equal(result.rating, null);
+        assert.deepEqual(result.errors, [`${name} is not an http or https address: ${bad}`]);
+        assert.deepEqual(calls.calls, []);
+        assert.deepEqual(events, []);
+      }
+    }
+  } finally {
+    restore();
+  }
+});
+
 test("the text output's findsafeskills section: each listing's rating, page and how its scans relate to this commit", () => {
   const base = { target: "x", rating: "green", scannedFiles: [], findings: [], notices: [], errors: [], nonGoals: [] };
   const deep = { read: true, commit: SHA, changed: false, changesChecked: true, note: null, leftOut: [], installTime: [], testFindings: [], launchedTests: [], packages: { status: "off" }, claude: { status: "off" } };
@@ -217,9 +257,11 @@ test("the text output's findsafeskills section: each listing's rating, page and 
   assert.match(out({ status: "off" }), /\nfindsafeskills: not compared \(--no-site\)\n/);
   assert.match(out({ status: "local" }), /\nfindsafeskills: not compared \(a local folder has no repository address\)\n/);
   assert.match(out({ status: "unreachable", reason: "rate limited" }), /\nfindsafeskills: could not reach findsafeskills \(rate limited\)\n/);
+  assert.match(out({ status: "refused", reason: "findsafeskills could not use this repository address (HTTP 400)" }), /\nfindsafeskills: findsafeskills could not use this repository address \(HTTP 400\)\n/);
   assert.match(out({ status: "not-listed", listings: [] }), /\nfindsafeskills: not listed on findsafeskills\n/);
   const listed = out({
     status: "listed",
+    more: 2,
     listings: [
       { ...page, text: { commit: SHA, relation: "same" }, scripts: { commit: OLD, relation: "newer", by: 14 } },
       { ...page, rating: null, url: "https://findsafeskills.com/listings/o-r-2", text: { commit: "b".repeat(40), relation: "older", by: 1 }, scripts: { commit: OLD, relation: "diverged", newerBy: 2, olderBy: 5 } },
@@ -237,7 +279,7 @@ test("the text output's findsafeskills section: each listing's rating, page and 
     "    Script scan: findsafeskills scanned aaaaaaa; this commit is 14 commits newer",
     "  https://findsafeskills\\.com/listings/o-r-2 \\(no rating\\)",
     "    Text scan: findsafeskills scanned bbbbbbb on 2026-10-30; this commit is 1 commit older",
-    "    Script scan: findsafeskills scanned aaaaaaa; the two have diverged \\(this commit has 2 commits the scanned one lacks, and lacks 5 of its\\)",
+    "    Script scan: findsafeskills scanned aaaaaaa; the two have diverged \\(this commit has 2 commits the scanned one lacks, and the scanned one has 5 this commit lacks\\)",
     "  https://findsafeskills\\.com/listings/o-r \\(rating: yellow\\)",
     "    Text scan: findsafeskills scanned aaaaaaa on 2026-10-30 \\(not compared: GitHub's compare call was rate limited\\)",
     "  https://findsafeskills\\.com/listings/o-r \\(rating: yellow\\)",
@@ -247,10 +289,14 @@ test("the text output's findsafeskills section: each listing's rating, page and 
     "  https://findsafeskills\\.com/listings/o-r \\(rating: yellow\\)",
     "    Text and script scans: findsafeskills scanned this commit",
     "  https://findsafeskills\\.com/listings/o-r \\(rating: yellow\\)",
-    "    Scanned on 2026-10-30, with no commit recorded to compare\\n",
+    "    Scanned on 2026-10-30, with no commit recorded to compare",
+    "  2 more listing\\(s\\) not shown\\n",
   ].join("\n")));
-  const hostile = out({ status: "listed", listings: [{ url: "https://x\u202e/\u0007", rating: "red\u0007", scannedAt: "2026\u202e", text: { commit: OLD, relation: "not-compared", reason: "bad\u0007" }, scripts: null }] });
+  const hostile = out({ status: "listed", more: 0, listings: [{ url: `https://x\u202e/\u0007${"y".repeat(1000)}`, rating: "unknown", scannedAt: "2026\u202e", text: { commit: OLD, relation: "not-compared", reason: `bad\u0007${"z".repeat(1000)}` }, scripts: null }] });
   assert.doesNotMatch(hostile.replace(/\n/g, ""), /[\p{Cc}\p{Cf}]/u);
+  assert.match(hostile, /\(rating: unknown\)/);
+  assert.ok(hostile.split("\n").every((line) => line.length < 400));
+  assert.match(out({ status: "listed", more: 0, listings: [{ ...page, url: null, text: null, scripts: null }] }), /\n {2}a listing with no page address \(rating: yellow\)\n/);
 });
 
 test("a malicious package in package-lock.json is a critical finding and makes the rating red", async () => {

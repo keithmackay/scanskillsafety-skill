@@ -21,7 +21,7 @@ const DETAIL_CONCURRENCY = 8;
 const TIMEOUT_MS = 30_000;
 const SEVERITY_ORDER = ["LOW", "MODERATE", "HIGH", "CRITICAL"];
 
-const osvUrl = () => process.env.OSV_URL ?? DEFAULT_OSV_URL;
+const osvUrl = () => (process.env.OSV_URL ?? DEFAULT_OSV_URL).replace(/\/+$/, "");
 const isMalicious = (id) => id.startsWith("MAL-");
 
 class OsvFailure extends Error {}

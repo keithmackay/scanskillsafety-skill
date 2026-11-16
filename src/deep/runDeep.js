@@ -18,7 +18,7 @@ const { checkPackages, osvUrl } = require("./osv");
 const { compareWithSite, siteUrl } = require("./siteCompare");
 const { findClaude } = require("./runClaude");
 const { chooseForReading, planReading, readEveryFile, quoteLine } = require("./reading");
-const { printable } = require("../printable");
+const { printable, printableCut } = require("../printable");
 const { isDiscoverable } = require("../discover");
 const { formatClaudeUsage } = require("../../lib/deep/claudeUsage");
 
@@ -50,6 +50,24 @@ const osvServices = (target, options) =>
 // Named whenever Claude's reading may run: the person still agrees to its plan before anything is sent.
 const claudeServices = (target, options, { claudeFound }) =>
   claudeFound ? [{ service: "Anthropic, through your own claude CLI", receives: "the text of the files Claude reads, only after you agree" }] : [];
+
+const ADDRESS_SHOWN_MAX = 200;
+
+const isWebAddress = (value) => {
+  try {
+    return ["http:", "https:"].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+};
+
+// The addresses the environment gives the services this run would contact, each of which must be an http or https address.
+function addressErrors(target, options) {
+  const given = [];
+  if (options.site && isRepository(target)) given.push(["FINDSAFESKILLS_URL", siteUrl()]);
+  if (options.osv) given.push(["OSV_URL", osvUrl()]);
+  return given.filter(([, value]) => !isWebAddress(value)).map(([name, value]) => `${name} is not an http or https address: ${printableCut(value, ADDRESS_SHOWN_MAX)}`);
+}
 
 // Each stage that contacts a service names it here, with what it receives, so the list is complete before any request.
 const SERVICE_STAGES = [commitServices, siteServices, osvServices, claudeServices];
@@ -149,7 +167,9 @@ async function runDeep(input, options, deps = {}) {
   const target = parseTarget(input);
   const found = options.claude ? findClaude(deps.env ?? process.env) : null;
   const claudePath = found?.path ?? null;
-  const services = target.kind === "local-dir" || isRepository(target) ? servicesFor(target, options, { claudeFound: claudePath !== null }) : [];
+  const badAddresses = addressErrors(target, options);
+  const readable = target.kind === "local-dir" || isRepository(target);
+  const services = readable && badAddresses.length === 0 ? servicesFor(target, options, { claudeFound: claudePath !== null }) : [];
   const result = {
     target: input,
     rating: null,
@@ -176,6 +196,10 @@ async function runDeep(input, options, deps = {}) {
   };
   if (target.kind !== "local-dir" && !isRepository(target)) {
     result.errors.push("--deep needs a repository URL or a local folder");
+    return result;
+  }
+  if (badAddresses.length > 0) {
+    result.errors.push(...badAddresses);
     return result;
   }
   if (deps.onServices) deps.onServices(services);
