@@ -26,7 +26,7 @@ test("lists npm install scripts, setup.py, the build backend, MCP servers, hooks
     { file: "package.json", when: "npm postinstall", command: "node setup.js" },
     { file: "pyproject.toml", when: "pip install (build backend)", command: "hatchling.build" },
     { file: "setup.py", when: "pip install", command: "setup.py runs as Python code" },
-    { file: "skills/s/SKILL.md", when: "the skill tells the agent to run it", command: "skills/s/scripts/go.py" },
+    { file: "skills/s/SKILL.md", when: "the skill names it", command: "skills/s/scripts/go.py" },
   ]);
 });
 
@@ -42,4 +42,41 @@ test("a file that is not valid JSON lists nothing and does not throw", () => {
   assert.deepEqual(installTimeEntries([file(".mcp.json", "{oops")]), []);
   assert.deepEqual(installTimeEntries([file("package.json", "{oops")]), []);
   assert.deepEqual(installTimeEntries([file("hooks/hooks.json", "null")]), []);
+});
+
+test("a SKILL.md names a script only by its whole path, not as part of a longer name", () => {
+  const entries = installTimeEntries([
+    file("SKILL.md", "Run `python ergo.py`, then (scripts/go.py), then ./tools/a.sh."),
+    file("go.py", "print(1)"),
+    file("ergo.py", "print(1)"),
+    file("scripts/go.py", "print(1)"),
+    file("tools/a.sh", "echo"),
+    file("a.sh", "echo"),
+  ]);
+  assert.deepEqual(entries.map((e) => e.command), ["ergo.py", "scripts/go.py", "tools/a.sh"]);
+});
+
+test("entries for the same file and command are ordered by when", () => {
+  const entries = installTimeEntries([file("package.json", JSON.stringify({ scripts: { preinstall: "x", install: "x" } }))]);
+  assert.deepEqual(entries.map((e) => e.when), ["npm install", "npm preinstall"]);
+});
+
+test("follows a plugin manifest's hooks and mcpServers given as paths from the plugin's folder", () => {
+  const entries = installTimeEntries([
+    file("p/.claude-plugin/plugin.json", JSON.stringify({ hooks: "./config/hooks.json", mcpServers: ["./servers.json"] })),
+    file("p/config/hooks.json", JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "echo bye" }] }] } })),
+    file("p/servers.json", JSON.stringify({ mcpServers: { a: { command: "uvx", args: ["a"] } } })),
+  ]);
+  assert.deepEqual(entries, [
+    { file: "p/config/hooks.json", when: "hook Stop", command: "echo bye" },
+    { file: "p/servers.json", when: "MCP server a starts", command: "uvx a" },
+  ]);
+});
+
+test("a manifest path that names the default hooks file lists its hooks once", () => {
+  const entries = installTimeEntries([
+    file(".claude-plugin/plugin.json", JSON.stringify({ hooks: "./hooks/hooks.json" })),
+    file("hooks/hooks.json", JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "echo bye" }] }] } })),
+  ]);
+  assert.deepEqual(entries, [{ file: "hooks/hooks.json", when: "hook Stop", command: "echo bye" }]);
 });

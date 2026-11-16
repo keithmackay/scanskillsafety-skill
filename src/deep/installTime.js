@@ -1,7 +1,8 @@
 // ABOUTME: Lists what a target runs when it is installed or starts: npm install scripts, setup.py and Python build backends, MCP
-// ABOUTME: server commands, hooks, plugin commands and agents, and scripts a SKILL.md tells the agent to run. Facts, not findings.
+// ABOUTME: server commands, hooks, plugin commands and agents, and scripts a SKILL.md names. Facts, not findings.
 "use strict";
 
+const { posix } = require("path");
 const { isScriptPath } = require("../../lib/scriptFiles");
 
 const NPM_HOOKS = ["preinstall", "install", "postinstall", "prepare"];
@@ -10,6 +11,8 @@ const VENDORED = new Set(["node_modules", "vendor"]);
 const baseName = (p) => p.slice(p.lastIndexOf("/") + 1);
 const folderOf = (p) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
 const isVendored = (p) => p.split("/").slice(0, -1).some((s) => VENDORED.has(s));
+const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const byFileCommandWhen = (a, b) => compare(a.file, b.file) || compare(a.command, b.command) || compare(a.when, b.when);
 
 function parseJson(text) {
   try {
@@ -46,19 +49,51 @@ function serverPackageEntries(file, json) {
     .map((p) => ({ file, when: "MCP server starts", command: `${p.registryType ?? p.registry_type ?? "package"} package ${p.identifier}` }));
 }
 
-// Paths in a SKILL.md that name a script the target ships, relative to the skill's folder or the root.
+const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// A path named as a whole: after the start, a space, a quote, a backtick or "(", with at most a "./" or "${VAR}/" in front, and
+// followed by the end, a space, a quote, a backtick, ")" or punctuation. So go.py is not named by ergo.py or tools/go.py.
+const namesPath = (text, p) =>
+  new RegExp(String.raw`(?:^|[\s"'\x60(])(?:\./|\$\{?\w+\}?/)?${escape(p)}(?=$|[\s"'\x60).,;:!?])`, "m").test(text);
+
+// Scripts the target ships that a SKILL.md names, by their path from the skill's folder or from the root. Naming is not proof the
+// agent runs them.
 function skillScriptEntries(file, text, scripts) {
   const folder = folderOf(file);
   return scripts
-    .filter((p) => {
-      const relative = folder && p.startsWith(`${folder}/`) ? p.slice(folder.length + 1) : p;
-      return text.includes(relative);
-    })
-    .map((p) => ({ file, when: "the skill tells the agent to run it", command: p }));
+    .filter((p) => namesPath(text, p) || (folder && p.startsWith(`${folder}/`) && namesPath(text, p.slice(folder.length + 1))))
+    .map((p) => ({ file, when: "the skill names it", command: p }));
+}
+
+// A plugin manifest's hooks and mcpServers are either written in it or name config files by their path from the plugin's folder
+// (the one holding .claude-plugin): those files' hooks and servers are listed under their own names.
+function pluginManifestEntries(file, json, textByPath) {
+  const pluginFolder = folderOf(folderOf(file));
+  const named = (value) =>
+    (typeof value === "string" ? [value] : Array.isArray(value) ? value.filter((v) => typeof v === "string") : [])
+      .map((ref) => posix.normalize(posix.join(pluginFolder, ref)))
+      .filter((p) => textByPath.has(p));
+  return [
+    ...hookEntries(file, json),
+    ...mcpServerEntries(file, json),
+    ...named(json && json.hooks).flatMap((p) => hookEntries(p, parseJson(textByPath.get(p)))),
+    ...named(json && json.mcpServers).flatMap((p) => mcpServerEntries(p, parseJson(textByPath.get(p)))),
+  ];
+}
+
+// The same config can be listed twice: named by a manifest and found by its own name.
+function withoutRepeats(entries) {
+  const seen = new Set();
+  return entries.filter((e) => {
+    const key = JSON.stringify([e.file, e.when, e.command]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function installTimeEntries(files) {
   const scripts = files.map((f) => f.path).filter((p) => isScriptPath(p) && !isVendored(p));
+  const textByPath = new Map(files.filter((f) => !isVendored(f.path)).map((f) => [f.path, f.text]));
   const entries = [];
   for (const { path, text } of files) {
     if (isVendored(path)) continue;
@@ -72,15 +107,13 @@ function installTimeEntries(files) {
       if (backend) entries.push({ file: path, when: "pip install (build backend)", command: backend[1] });
     } else if (name === ".mcp.json") entries.push(...mcpServerEntries(path, parseJson(text)));
     else if (name === "server.json") entries.push(...serverPackageEntries(path, parseJson(text)));
-    else if (path.endsWith(".claude-plugin/plugin.json")) {
-      const json = parseJson(text);
-      entries.push(...hookEntries(path, json), ...mcpServerEntries(path, json));
-    } else if (/(^|\/)hooks\/hooks\.json$/.test(path)) entries.push(...hookEntries(path, parseJson(text)));
+    else if (path.endsWith(".claude-plugin/plugin.json")) entries.push(...pluginManifestEntries(path, parseJson(text), textByPath));
+    else if (/(^|\/)hooks\/hooks\.json$/.test(path)) entries.push(...hookEntries(path, parseJson(text)));
     else if (/(^|\/)(commands|agents)\/[^/]+\.md$/.test(path)) {
       entries.push({ file: path, when: "plugin command or agent, given to the agent when used", command: "(its text)" });
     } else if (name === "SKILL.md") entries.push(...skillScriptEntries(path, text, scripts));
   }
-  return entries.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.command < b.command ? -1 : 1));
+  return withoutRepeats(entries.sort(byFileCommandWhen));
 }
 
 module.exports = { installTimeEntries };
