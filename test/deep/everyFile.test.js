@@ -37,3 +37,18 @@ test("lists a folder it cannot read with the reason and reads the rest", { skip:
   assert.deepEqual(files.map((f) => f.path), ["a.md", "z.md"]);
   assert.deepEqual(leftOut, [{ path: "locked", reason: "unreadable (EACCES)" }]);
 });
+
+test("does not follow a link swapped in for a file after the folder was listed", { skip: fs.constants.O_NOFOLLOW === undefined ? "no O_NOFOLLOW here" : false }, (t) => {
+  const outside = makeTree({ "private.txt": "not part of the target" });
+  const root = makeTree({});
+  fs.symlinkSync(path.join(outside, "private.txt"), path.join(root, "swapped.txt"));
+  // The listing reports a regular file, as it would have before the swap.
+  const readdirSync = fs.readdirSync;
+  t.after(() => (fs.readdirSync = readdirSync));
+  fs.readdirSync = (dir, options) =>
+    readdirSync(dir, options).map((entry) => Object.assign(Object.create(Object.getPrototypeOf(entry)), entry, { isSymbolicLink: () => false, isDirectory: () => false, isFile: () => true }));
+  const { files, leftOut } = listEveryFile(root);
+  assert.deepEqual(files, []);
+  assert.equal(leftOut.length, 1);
+  assert.match(leftOut[0].reason, /^unreadable \((ELOOP|EMLINK)\)$/);
+});

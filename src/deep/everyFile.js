@@ -7,7 +7,9 @@ const path = require("path");
 
 const MAX_TEXT_BYTES = 5 * 1024 * 1024;
 const BINARY_PROBE_BYTES = 8 * 1024;
-const utf8 = new TextDecoder("utf-8", { fatal: true });
+// A link swapped in for a file after its folder was listed fails to open rather than being followed (where the system can say so).
+const OPEN_WITHOUT_FOLLOWING = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+const utf8 =new TextDecoder("utf-8", { fatal: true });
 const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 
 function listEveryFile(root) {
@@ -33,18 +35,18 @@ function listEveryFile(root) {
   };
   const readOne = (full, relPath) => {
     let size;
+    let bytes;
+    let fd;
     try {
-      size = fs.lstatSync(full).size;
+      fd = fs.openSync(full, OPEN_WITHOUT_FOLLOWING);
+      size = fs.fstatSync(fd).size;
+      if (size <= MAX_TEXT_BYTES) bytes = fs.readFileSync(fd);
     } catch (err) {
       return unreadable(relPath, err);
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
     }
     if (size > MAX_TEXT_BYTES) return leftOut.push({ path: relPath, reason: "larger than 5 MB" });
-    let bytes;
-    try {
-      bytes = fs.readFileSync(full);
-    } catch (err) {
-      return unreadable(relPath, err);
-    }
     if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) return leftOut.push({ path: relPath, reason: "binary" });
     try {
       files.push({ path: relPath, size, text: utf8.decode(bytes) });
