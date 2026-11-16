@@ -5,6 +5,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
+const { spawnSync } = require("child_process");
 const { listEveryFile } = require("../../src/deep/everyFile");
 const { makeTree } = require("../helpers");
 
@@ -51,4 +52,19 @@ test("does not follow a link swapped in for a file after the folder was listed",
   assert.deepEqual(files, []);
   assert.equal(leftOut.length, 1);
   assert.match(leftOut[0].reason, /^unreadable \((ELOOP|EMLINK)\)$/);
+});
+
+const canMakeFifo = spawnSync("mkfifo", ["--help"]).error === undefined;
+
+test("lists a FIFO swapped in for a file after the folder was listed as not a regular file, without waiting on it", { skip: canMakeFifo ? false : "no mkfifo here", timeout: 5000 }, (t) => {
+  const root = makeTree({});
+  assert.equal(spawnSync("mkfifo", [path.join(root, "pipe.txt")]).status, 0);
+  // The listing reports a regular file, as it would have before the swap.
+  const readdirSync = fs.readdirSync;
+  t.after(() => (fs.readdirSync = readdirSync));
+  fs.readdirSync = (dir, options) =>
+    readdirSync(dir, options).map((entry) => Object.assign(Object.create(Object.getPrototypeOf(entry)), entry, { isSymbolicLink: () => false, isDirectory: () => false, isFile: () => true }));
+  const { files, leftOut } = listEveryFile(root);
+  assert.deepEqual(files, []);
+  assert.deepEqual(leftOut, [{ path: "pipe.txt", reason: "not a regular file" }]);
 });

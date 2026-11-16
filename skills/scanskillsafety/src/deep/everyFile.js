@@ -7,9 +7,10 @@ const path = require("path");
 
 const MAX_TEXT_BYTES = 5 * 1024 * 1024;
 const BINARY_PROBE_BYTES = 8 * 1024;
-// A link swapped in for a file after its folder was listed fails to open rather than being followed (where the system can say so).
-const OPEN_WITHOUT_FOLLOWING = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
-const utf8 =new TextDecoder("utf-8", { fatal: true });
+// A link swapped in for a file after its folder was listed fails to open rather than being followed, and a FIFO or device swapped
+// in opens without waiting, so the opened file's type can be checked (where the system can say so).
+const OPEN_WITHOUT_FOLLOWING = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
+const utf8 = new TextDecoder("utf-8", { fatal: true });
 const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 
 function listEveryFile(root) {
@@ -39,7 +40,9 @@ function listEveryFile(root) {
     let fd;
     try {
       fd = fs.openSync(full, OPEN_WITHOUT_FOLLOWING);
-      size = fs.fstatSync(fd).size;
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile()) return leftOut.push({ path: relPath, reason: "not a regular file" });
+      size = stat.size;
       if (size <= MAX_TEXT_BYTES) bytes = fs.readFileSync(fd);
     } catch (err) {
       return unreadable(relPath, err);
