@@ -4,6 +4,9 @@
 "use strict";
 
 const { formatText, pushFinding } = require("../scanTarget");
+const { printable } = require("../printable");
+
+const pathList = (paths) => paths.map(printable).join(", ");
 
 function formatServices(services) {
   if (services.length === 0) return "Deep scan will contact no service.";
@@ -25,7 +28,7 @@ function packageLines(packages, findings) {
   else lines.push(`  Checked ${packages.checked} package(s) against OSV.`);
   const malicious = findings.filter((f) => f.source === "osv" && f.category === "malicious-package");
   if (malicious.length > 0) lines.push("  Malicious (also in the findings above):");
-  for (const f of malicious) lines.push(`    ${f.line ? `${f.file}:${f.line}` : f.file} ${f.detail}`);
+  for (const f of malicious) lines.push(`    ${f.line ? `${printable(f.file)}:${f.line}` : printable(f.file)} ${f.detail}`);
   if (packages.vulnerabilities.length > 0) lines.push("  Known vulnerabilities (not counted in the rating):");
   for (const v of packages.vulnerabilities) {
     const severity = v.highest ? `highest ${v.highest}` : "severity not known";
@@ -34,9 +37,9 @@ function packageLines(packages, findings) {
   if (packages.detailsLeft > 0) {
     lines.push(`  ${packages.detailsLeft} more advisory id(s) are listed without severity: OSV's details were fetched for the first 200 only.`);
   }
-  if (packages.namesOnly.length > 0) lines.push(`  Names only (no lockfile, so any version may be installed): ${packages.namesOnly.join(", ")}`);
-  for (const c of packages.couldNotRead) lines.push(`  Could not read: ${c.file}: ${c.reason}`);
-  if (packages.notChecked.length > 0) lines.push(`  Not checked (no support for these lockfiles): ${packages.notChecked.join(", ")}`);
+  if (packages.namesOnly.length > 0) lines.push(`  Names only (no lockfile, so any version may be installed): ${pathList(packages.namesOnly)}`);
+  for (const c of packages.couldNotRead) lines.push(`  Could not read: ${printable(c.file)}: ${c.reason}`);
+  if (packages.notChecked.length > 0) lines.push(`  Not checked (no support for these lockfiles): ${pathList(packages.notChecked)}`);
   return lines;
 }
 
@@ -79,7 +82,8 @@ function claudeLines(claude) {
   lines.push(...flaggedLines(claude, "malicious", "Malicious"), ...flaggedLines(claude, "suspicious", "Suspicious"));
   const benign = claude.files.filter((f) => f.verdict === "benign").length;
   if (benign > 0) lines.push(`  ${benign} file(s) Claude called benign.`);
-  if (benign === claude.files.length) lines.push("  Claude flagged nothing; a file written to mislead a reviewer can pass.");
+  if (claude.files.length === 0) lines.push("  Claude read no file.");
+  else if (benign === claude.files.length) lines.push("  Claude flagged nothing; a file written to mislead a reviewer can pass.");
   if (claude.notRead.length > 0) lines.push(`  Not read (${claude.notRead.length}):`, ...claude.notRead.map((f) => `    ${f.path}: ${f.reason}`));
   if (claude.dropped > 0) lines.push(`  ${claude.dropped} of Claude's findings named lines it was not shown, and were dropped.`);
   lines.push(`  ${claude.usageLine}`);
@@ -91,12 +95,12 @@ function formatDeep(result) {
   if (!result.deep.read) return text;
   const { deep } = result;
   const lines = ["", "Deep scan", commitLine(deep), `Read ${result.scannedFiles.length} file(s); left out ${deep.leftOut.length}${deep.leftOut.length ? ":" : "."}`];
-  for (const f of deep.leftOut) lines.push(`  ${f.path}: ${f.reason}`);
+  for (const f of deep.leftOut) lines.push(`  ${printable(f.path)}: ${f.reason}`);
   lines.push("What runs at install and start-up:");
   if (deep.installTime.length === 0) lines.push("  nothing found");
-  for (const e of deep.installTime) lines.push(`  ${e.file}: ${e.when}: ${e.command}`);
+  for (const e of deep.installTime) lines.push(`  ${printable(e.file)}: ${printable(e.when)}: ${printable(e.command)}`);
   lines.push(...packageLines(deep.packages, result.findings));
-  if (deep.launchedTests.length > 0) lines.push(`Test files the target runs (counted in the rating): ${deep.launchedTests.join(", ")}`);
+  if (deep.launchedTests.length > 0) lines.push(`Test files the target runs (counted in the rating): ${pathList(deep.launchedTests)}`);
   if (deep.testFindings.length > 0) {
     lines.push("Findings in test files nothing launches (not counted in the rating):");
     for (const f of deep.testFindings) pushFinding(lines, f, f.severity === "info" ? "note" : f.severity);

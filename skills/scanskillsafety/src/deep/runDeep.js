@@ -3,6 +3,7 @@
 // ABOUTME: what OSV knows about the packages it pulls in, and Claude's reading of every file once the person agrees to its plan.
 "use strict";
 
+const { posix } = require("path");
 const { ratingFromFindings } = require("../../lib/ratingFromFindings");
 const { SAFETY_SCANNER_NON_GOALS } = require("../../lib/nonGoals");
 const { parseTarget } = require("../parseTarget");
@@ -14,7 +15,8 @@ const { installTimeEntries } = require("./installTime");
 const { readPackages } = require("./lockfiles");
 const { checkPackages, osvUrl } = require("./osv");
 const { findClaude } = require("./runClaude");
-const { chooseForReading, planReading, readEveryFile, quoteLine, printable } = require("./reading");
+const { chooseForReading, planReading, readEveryFile, quoteLine } = require("./reading");
+const { printable } = require("../printable");
 const { isDiscoverable } = require("../discover");
 const { formatClaudeUsage } = require("../../lib/deep/claudeUsage");
 
@@ -50,10 +52,26 @@ async function openTarget(target, options, deps) {
   return { root, commit, changed: false, changesChecked: true, note: null, cleanup };
 }
 
+// The folders a command's relative path may start from: the folder of the file naming it, each folder above it (a plugin's
+// hooks and manifest name scripts from the plugin's folder), and the root.
+function ancestors(file) {
+  const folders = [];
+  for (let folder = posix.dirname(file); folder !== "."; folder = posix.dirname(folder)) folders.push(folder);
+  return [...folders, ""];
+}
+
 // Files that say what runs at install and start-up, and the files of the target their commands name.
 function installPaths(entries, files) {
   const paths = new Set(files.map((f) => f.path));
-  const named = entries.flatMap((e) => e.command.split(/\s+/).map((word) => word.replace(/^(\.\/|\$\{?\w+\}?\/)/, "")).filter((word) => paths.has(word)));
+  const named = entries.flatMap((e) =>
+    e.command.split(/\s+/)
+      .map((word) => word.replace(/^["'`]+|["'`]+$/g, "").replace(/^(\.\/|\$\{?\w+\}?\/)/, ""))
+      .filter(Boolean)
+      .flatMap((word) => {
+        const found = ancestors(e.file).map((folder) => posix.join(folder, word)).find((p) => paths.has(p));
+        return found ? [found] : [];
+      }),
+  );
   return [...entries.map((e) => e.file), ...named];
 }
 

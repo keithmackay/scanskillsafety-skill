@@ -13,6 +13,7 @@ const { SAFETY_SCANNER_NON_GOALS } = require("../lib/nonGoals");
 const { parseTarget } = require("./parseTarget");
 const { discoverLocal, discoverLocalScripts, MAX_FILE_BYTES } = require("./discover");
 const { gatherGithub, gatherGitHost, gatherRawUrl } = require("./fetchRemote");
+const { printable } = require("./printable");
 
 // One file per path: a config that is also loaded as text (hooks.json, .mcp.json) is scanned as a script, at full weight.
 function mergeByPath(textFiles, scriptFiles) {
@@ -63,7 +64,7 @@ async function scanTarget(input, { fetchImpl = fetch } = {}) {
 }
 
 function pushFinding(lines, f, label) {
-  const where = f.line ? `${f.file}:${f.line}` : f.file;
+  const where = f.line ? `${printable(f.file)}:${f.line}` : printable(f.file);
   lines.push(`  ${where} [${label}] ${f.category}: ${f.detail}`);
   if (f.excerpt) lines.push(`      > ${f.excerpt}`);
 }
@@ -81,7 +82,7 @@ function formatText(result) {
     for (const e of result.errors) lines.push(`  error: ${e}`);
     return lines.join("\n");
   }
-  lines.push(`Scanned ${result.scannedFiles.length} file(s): ${result.scannedFiles.join(", ")}`);
+  lines.push(`Scanned ${result.scannedFiles.length} file(s): ${result.scannedFiles.map(printable).join(", ")}`);
   for (const e of result.errors) lines.push(`  warning: could not fetch — ${e}`);
   lines.push(`Rating: ${result.rating.toUpperCase()}`);
   const issues = result.findings.filter((f) => f.severity !== "info");
