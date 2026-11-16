@@ -11,7 +11,7 @@ const { pipeline } = require("stream/promises");
 const { fetchResponse, fetchText, describeFailure, repoPath } = require("../fetchRemote");
 const { runTool, describeDuration } = require("./runTool");
 const { printableCut } = require("../printable");
-const { OBJECT_ID, describeLimit, temporaryFolder } = require("./util");
+const { OBJECT_ID, COMMIT_LIMITS, describeLimit, temporaryFolder } = require("./util");
 const { fillArchiveGaps } = require("./archiveGaps");
 
 // Endpoint shapes, checked with curl on 2026-11-15:
@@ -24,7 +24,6 @@ const { fillArchiveGaps } = require("./archiveGaps");
 //   answers 404 (on codeberg.org, 2026-11-15: body "null" for an unknown ref, a JSON message for an unknown repository), and
 //   <origin>/api/v1/repos/<o>/<r> answers 404 only for an unknown or private repository. <origin>/api/v1/repos/<o>/<r>/archive/<sha>.tar.gz answers application/gzip whose one top folder is the
 //   repository's name in lower case.
-const ARCHIVE_LIMITS = { downloadBytes: 200 * 1024 ** 2, unpackedBytes: 1024 ** 3, files: 100_000, downloadMs: 10 * 60 * 1000 };
 const TAR_TIMEOUT_MS = 5 * 60 * 1000;
 const TAR_COMPLAINT_MAX = 300;
 const GITEA_COMMIT_QUERY = "limit=1&stat=false&verification=false&files=false";
@@ -148,8 +147,8 @@ function folderWithin(tree, subpath) {
   return real === realTree || real.startsWith(realTree + path.sep) ? folder : null;
 }
 
-async function fetchCommit(target, ref, fetchImpl, givenLimits = ARCHIVE_LIMITS) {
-  const limits = { ...ARCHIVE_LIMITS, ...givenLimits };
+async function fetchCommit(target, ref, fetchImpl, givenLimits = COMMIT_LIMITS) {
+  const limits = { ...COMMIT_LIMITS, ...givenLimits };
   const wanted = ref ?? target.ref ?? null;
   const { commitUrl, archiveUrl } = endpoints(target, wanted);
   const commit = await resolveCommit(target, wanted, commitUrl, fetchImpl);
@@ -174,4 +173,4 @@ async function fetchCommit(target, ref, fetchImpl, givenLimits = ARCHIVE_LIMITS)
   }
 }
 
-module.exports = { fetchCommit, ARCHIVE_LIMITS };
+module.exports = { fetchCommit };

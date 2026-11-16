@@ -8,7 +8,7 @@ const { posix } = require("path");
 const { ratingFromFindings } = require("../../lib/ratingFromFindings");
 const { SAFETY_SCANNER_NON_GOALS } = require("../../lib/nonGoals");
 const { parseTarget } = require("../parseTarget");
-const { fetchCommit, ARCHIVE_LIMITS } = require("./archive");
+const { fetchCommit } = require("./archive");
 const { localCommit } = require("./localCommit");
 const { listEveryFile } = require("./everyFile");
 const { scanEveryFile } = require("./scanEveryFile");
@@ -20,7 +20,7 @@ const { findClaude } = require("./runClaude");
 const { chooseForReading, planReading, readEveryFile, quoteLine } = require("./reading");
 const { printable, printableCut } = require("../printable");
 const { isDiscoverable } = require("../discover");
-const { OBJECT_ID } = require("./util");
+const { OBJECT_ID, COMMIT_LIMITS } = require("./util");
 const { formatClaudeUsage } = require("../../lib/deep/claudeUsage");
 
 const isRepository = (target) => (target.kind === "github" || target.kind === "git-host") && !target.isFile;
@@ -77,7 +77,7 @@ const servicesFor = (target, options, found) => SERVICE_STAGES.flatMap((stage) =
 // The folder to read: a local folder in place, or a repository's exact commit unpacked into a temporary folder.
 async function openTarget(target, options, deps) {
   if (target.kind === "local-dir") return { root: target.path, ...localCommit(target.path), fetchedSeparately: [], leftOut: [], cleanup: () => {} };
-  const { commit, root, cleanup, fetchedSeparately, leftOut } = await fetchCommit(target, options.ref, deps.fetchImpl ?? fetch, deps.limits ?? ARCHIVE_LIMITS);
+  const { commit, root, cleanup, fetchedSeparately, leftOut } = await fetchCommit(target, options.ref, deps.fetchImpl ?? fetch, deps.limits ?? COMMIT_LIMITS);
   return { root, commit, changed: false, changesChecked: true, note: null, fetchedSeparately, leftOut, cleanup };
 }
 

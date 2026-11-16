@@ -21,3 +21,12 @@ test("names the time limit in seconds or minutes when it is a whole number of th
   assert.equal(describeDuration(5 * 60_000), "5 minutes");
   assert.equal(describeDuration(1500), "1500 ms");
 });
+
+test("passes the environment and input it is given, and gives bytes when asked", () => {
+  assert.equal(runTool("sh", ["-c", "printf %s \"$ONLY_THIS\""], 5000, { env: { PATH: process.env.PATH, ONLY_THIS: "set" } }).stdout, "set");
+  assert.equal(runTool("sh", ["-c", "printf %s \"${HOME:-none}\""], 5000, { env: { PATH: process.env.PATH } }).stdout, "none");
+  assert.equal(runTool("cat", [], 5000, { input: "piped" }).stdout, "piped");
+  const bytes = runTool("printf", ["a\\000b"], 5000, { binary: true }).stdout;
+  assert.ok(Buffer.isBuffer(bytes));
+  assert.deepEqual([...bytes], [0x61, 0, 0x62]);
+});

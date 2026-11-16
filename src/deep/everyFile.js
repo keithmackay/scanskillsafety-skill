@@ -13,6 +13,18 @@ const OPEN_WITHOUT_FOLLOWING = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW 
 const utf8 = new TextDecoder("utf-8", { fatal: true });
 const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 
+// Whether a file is read as text: { file: { path, size, text } }, or { leftOut: { path, reason } } for a file over 5 MB (whose bytes
+// need not be given), a binary file or one that is not UTF-8.
+function classifyFile(relPath, bytes, size = bytes.length) {
+  if (size > MAX_TEXT_BYTES) return { leftOut: { path: relPath, reason: "larger than 5 MB" } };
+  if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) return { leftOut: { path: relPath, reason: "binary" } };
+  try {
+    return { file: { path: relPath, size, text: utf8.decode(bytes) } };
+  } catch {
+    return { leftOut: { path: relPath, reason: "not UTF-8 text" } };
+  }
+}
+
 function listEveryFile(root) {
   const files = [];
   const leftOut = [];
@@ -51,17 +63,13 @@ function listEveryFile(root) {
     } finally {
       if (fd !== undefined) fs.closeSync(fd);
     }
-    if (size > MAX_TEXT_BYTES) return leftOut.push({ path: relPath, reason: "larger than 5 MB" });
-    if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) return leftOut.push({ path: relPath, reason: "binary" });
-    try {
-      files.push({ path: relPath, size, text: utf8.decode(bytes) });
-    } catch {
-      leftOut.push({ path: relPath, reason: "not UTF-8 text" });
-    }
+    const { file, leftOut: notRead } = classifyFile(relPath, bytes, size);
+    if (file) files.push(file);
+    else leftOut.push(notRead);
   };
   walk(root, "");
   leftOut.sort((a, b) => (a.path < b.path ? -1 : 1));
   return { files, leftOut };
 }
 
-module.exports = { listEveryFile, MAX_TEXT_BYTES };
+module.exports = { listEveryFile, classifyFile, MAX_TEXT_BYTES };

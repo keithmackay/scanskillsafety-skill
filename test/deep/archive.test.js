@@ -6,7 +6,8 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
-const { fetchCommit, ARCHIVE_LIMITS } = require("../../src/deep/archive");
+const { fetchCommit } = require("../../src/deep/archive");
+const { COMMIT_LIMITS } = require("../../src/deep/util");
 const { describeDuration } = require("../../src/deep/runTool");
 const { makeTree, fakeFetch } = require("../helpers");
 
@@ -96,10 +97,10 @@ test("stops before unpacking an archive over the limits, and leaves no temporary
 
 test("names the default limits in the errors", async () => {
   const { describeLimit } = require("../../src/deep/util");
-  assert.deepEqual(ARCHIVE_LIMITS, { downloadBytes: 200 * 1024 ** 2, unpackedBytes: 1024 ** 3, files: 100_000, downloadMs: 10 * 60 * 1000 });
-  assert.equal(describeLimit(ARCHIVE_LIMITS.downloadBytes), "200 MB");
-  assert.equal(describeLimit(ARCHIVE_LIMITS.unpackedBytes), "1 GB");
-  assert.equal(ARCHIVE_LIMITS.files.toLocaleString("en-US"), "100,000");
+  assert.deepEqual(COMMIT_LIMITS, { downloadBytes: 200 * 1024 ** 2, unpackedBytes: 1024 ** 3, files: 100_000, downloadMs: 10 * 60 * 1000 });
+  assert.equal(describeLimit(COMMIT_LIMITS.downloadBytes), "200 MB");
+  assert.equal(describeLimit(COMMIT_LIMITS.unpackedBytes), "1 GB");
+  assert.equal(COMMIT_LIMITS.files.toLocaleString("en-US"), "100,000");
 });
 
 test("refuses an archive that holds a path outside its folder", async () => {
@@ -277,12 +278,12 @@ test("a download that takes longer than its time limit says so", { timeout: 5000
           signal.addEventListener("abort", () => c.error(signal.reason));
         },
       })));
-  const limits = { ...ARCHIVE_LIMITS, downloadMs: 50 };
+  const limits = { ...COMMIT_LIMITS, downloadMs: 50 };
   await allRemoved(async () => {
     await assert.rejects(fetchCommit(github, "main", neverAnswers, limits), /^Error: the download timed out after 50 ms$/);
     await assert.rejects(fetchCommit(github, "main", stalls, limits), /^Error: the download timed out after 50 ms$/);
   });
-  assert.equal(describeDuration(ARCHIVE_LIMITS.downloadMs), "10 minutes");
+  assert.equal(describeDuration(COMMIT_LIMITS.downloadMs), "10 minutes");
 });
 
 // Runs fn, then checks it made at least one temporary folder and that every one is gone.

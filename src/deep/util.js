@@ -9,6 +9,9 @@ const path = require("path");
 // A git object id, a commit's among them: 40 hex characters (SHA-1) or 64 (SHA-256).
 const OBJECT_ID = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
 
+// How much of a repository's commit the deep scan fetches and reads: bytes downloaded, bytes of its files, files, and time.
+const COMMIT_LIMITS = { downloadBytes: 200 * 1024 ** 2, unpackedBytes: 1024 ** 3, files: 100_000, downloadMs: 10 * 60 * 1000 };
+
 // Folders that hold copies of other projects' code.
 const VENDORED_FOLDERS = ["node_modules", "vendor"];
 
@@ -52,4 +55,4 @@ function temporaryFolder(prefix, tmpDir = os.tmpdir()) {
   return { dir, cleanup };
 }
 
-module.exports = { OBJECT_ID, VENDORED_FOLDERS, baseName, compare, isObject, isVendored, parseJson, describeLimit, temporaryFolder };
+module.exports = { OBJECT_ID, COMMIT_LIMITS, VENDORED_FOLDERS, baseName, compare, isObject, isVendored, parseJson, describeLimit, temporaryFolder };

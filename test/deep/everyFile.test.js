@@ -6,7 +6,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { listEveryFile } = require("../../src/deep/everyFile");
+const { listEveryFile, classifyFile } = require("../../src/deep/everyFile");
 const { makeTree } = require("../helpers");
 
 test("reads every text file, tests included, and lists binary, oversized, non-UTF-8 files and links with the reason", () => {
@@ -69,4 +69,11 @@ test("lists a FIFO swapped in for a file after the folder was listed as not a re
   const { files, leftOut } = listEveryFile(root);
   assert.deepEqual(files, []);
   assert.deepEqual(leftOut, [{ path: "pipe.txt", reason: "not a regular file" }]);
+});
+
+test("one rule says whether a file's bytes are read as text, for a folder and for a commit read with git alike", () => {
+  assert.deepEqual(classifyFile("a.md", Buffer.from("hi")), { file: { path: "a.md", size: 2, text: "hi" } });
+  assert.deepEqual(classifyFile("img.png", Buffer.from([0x89, 0x50, 0, 1])), { leftOut: { path: "img.png", reason: "binary" } });
+  assert.deepEqual(classifyFile("bad.txt", Buffer.from([0xff, 0xfe, 0x41])), { leftOut: { path: "bad.txt", reason: "not UTF-8 text" } });
+  assert.deepEqual(classifyFile("big.txt", null, 5 * 1024 * 1024 + 1), { leftOut: { path: "big.txt", reason: "larger than 5 MB" } });
 });
