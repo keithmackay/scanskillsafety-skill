@@ -2,7 +2,7 @@
 // ABOUTME: address, then GitHub's compare call how each scanned commit relates to this one; out of reach is never "not listed".
 "use strict";
 
-const { fetchResponse, describeFailure } = require("../fetchRemote");
+const { fetchResponse, readTextWithin, describeFailure } = require("../fetchRemote");
 const { repoPath, describeLimit } = require("./archive");
 
 // Shapes observed 2026-11-16:
@@ -46,24 +46,10 @@ const failureText = (result) => (result.reason === "too-large" ? `answered more 
 async function fetchJsonWithin(fetchImpl, url, accept, maxBytes) {
   const result = await fetchResponse(fetchImpl, url, { headers: { Accept: accept } });
   if (!result.ok) return result;
-  const chunks = [];
-  let size = 0;
+  const body = await readTextWithin(result.response, url, maxBytes);
+  if (!body.ok) return body;
   try {
-    const reader = result.response.body ? result.response.body.getReader() : null;
-    for (let part = reader && (await reader.read()); part && !part.done; part = await reader.read()) {
-      size += part.value.length;
-      if (size > maxBytes) {
-        await reader.cancel();
-        return { ok: false, reason: "too-large", maxBytes, url };
-      }
-      chunks.push(part.value);
-    }
-  } catch (err) {
-    const reason = err && (err.name === "TimeoutError" || err.name === "AbortError") ? "timeout" : "network";
-    return { ok: false, reason, url, message: err && err.message };
-  }
-  try {
-    return { ok: true, json: JSON.parse(Buffer.concat(chunks).toString("utf-8")) };
+    return { ok: true, json: JSON.parse(body.text) };
   } catch {
     return { ok: true, json: null };
   }

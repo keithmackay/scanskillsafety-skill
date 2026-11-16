@@ -55,6 +55,26 @@ async function fetchText(fetchImpl, url, options) {
   }
 }
 
+// A response's body as text, read no further than maxBytes; a longer one is a failure, and the rest is not read.
+async function readTextWithin(response, url, maxBytes) {
+  const chunks = [];
+  let size = 0;
+  try {
+    const reader = response.body ? response.body.getReader() : null;
+    for (let part = reader && (await reader.read()); part && !part.done; part = await reader.read()) {
+      size += part.value.length;
+      if (size > maxBytes) {
+        await reader.cancel();
+        return { ok: false, reason: "too-large", maxBytes, url };
+      }
+      chunks.push(part.value);
+    }
+  } catch (err) {
+    return failureOf(err, url);
+  }
+  return { ok: true, text: Buffer.concat(chunks).toString("utf-8") };
+}
+
 async function fetchJson(fetchImpl, url) {
   const result = await fetchText(fetchImpl, url);
   if (!result.ok) return result;
@@ -224,4 +244,4 @@ async function gatherRawUrl(url, fetchImpl) {
   return { files: [{ path: name, text: result.text }], errors: [], notices: [] };
 }
 
-module.exports = { fetchResponse, fetchText, describeFailure, gatherGithub, gatherGitHost, gatherRawUrl };
+module.exports = { fetchResponse, fetchText, readTextWithin, failureOf, describeFailure, gatherGithub, gatherGitHost, gatherRawUrl };
