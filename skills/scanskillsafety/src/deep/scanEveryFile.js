@@ -16,19 +16,23 @@ const scanOne = (f) => [
   ...(!readWithScriptRules(f.path) || isPackageJson(f.path) ? scanText(f.text).findings.map((finding) => ({ file: f.path, ...finding })) : []),
 ];
 
+// The first round looks for test files the files outside test folders run; each later round looks only in the files the round
+// before launched, since every file read earlier has already been looked through and `tried` holds every launched path. So a
+// long chain of test files costs its length, not its length times the size of the repository.
 function launchedTestFiles(files) {
   const tree = files.map((f) => ({ path: f.path, size: f.size }));
   const byPath = new Map(files.map((f) => [f.path, f]));
-  const read = files.filter((f) => !isInTestFolder(f.path)).map((f) => ({ path: f.path, text: f.text, script: readWithScriptRules(f.path) }));
+  let referrers = files.filter((f) => !isInTestFolder(f.path)).map((f) => ({ path: f.path, text: f.text, script: readWithScriptRules(f.path) }));
   const launched = [];
   const tried = new Set();
   for (;;) {
-    const round = findLaunchedTestFiles(tree, read, tried, NO_LIMITS);
+    const round = findLaunchedTestFiles(tree, referrers, tried, NO_LIMITS);
     if (round.launched.length === 0) return launched;
+    referrers = [];
     for (const { path, by } of round.launched) {
       tried.add(path);
       launched.push(path);
-      read.push({ path, text: byPath.get(path).text, script: true, launchedBy: by });
+      referrers.push({ path, text: byPath.get(path).text, script: true, launchedBy: by });
     }
   }
 }

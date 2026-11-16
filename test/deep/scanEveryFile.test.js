@@ -50,3 +50,15 @@ test("finds at least everything the plain scan finds on the same folder", async 
   }
   for (const f of plain.findings) assert.ok(deepKeys.has(key(f)), `deep scan also finds ${key(f)}`);
 });
+
+test("a long chain of test files beside many docs is followed to its end quickly", () => {
+  const links = 300;
+  const files = [file("SKILL.md", "Run `bash tests/s0.sh` to set up.")];
+  for (let i = 0; i < links; i++) files.push(file(`tests/s${i}.sh`, i + 1 < links ? `bash tests/s${i + 1}.sh\n` : "echo done\n"));
+  for (let i = 0; i < 2000; i++) files.push(file(`docs/page${i}.md`, `Page ${i} of the guide, about formatting tables and lists.\n`.repeat(20)));
+  const started = Date.now();
+  const result = scanEveryFile(files);
+  const elapsed = Date.now() - started;
+  assert.deepEqual(result.launched, Array.from({ length: links }, (_, i) => `tests/s${i}.sh`));
+  assert.ok(elapsed < 2000, `took ${elapsed} ms`);
+});
