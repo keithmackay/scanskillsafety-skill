@@ -28,19 +28,19 @@ const hasGit = spawnSync("git", ["--version"]).status === 0;
 test("names a checkout's commit, and says when it has uncommitted changes", { skip: hasGit ? false : "no git here" }, () => {
   const root = checkout({ "SKILL.md": "hi" });
   const head = git(root, "rev-parse", "HEAD");
-  assert.deepEqual(localCommit(root), { commit: head, changed: false, changesChecked: true });
+  assert.deepEqual(localCommit(root), { commit: head, changed: false, changesChecked: true, note: null });
   fs.writeFileSync(path.join(root, "SKILL.md"), "changed");
-  assert.deepEqual(localCommit(root), { commit: head, changed: true, changesChecked: true });
+  assert.deepEqual(localCommit(root), { commit: head, changed: true, changesChecked: true, note: null });
 });
 
 test("a folder that is not a checkout has no commit", () => {
-  assert.deepEqual(localCommit(makeTree({ "SKILL.md": "hi" })), { commit: null, changed: false, changesChecked: false });
+  assert.deepEqual(localCommit(makeTree({ "SKILL.md": "hi" })), { commit: null, changed: false, changesChecked: false, note: "not a git checkout, so no commit can be named" });
 });
 
 test("a checkout with no commit yet has no commit", { skip: hasGit ? false : "no git here" }, () => {
   const root = makeTree({ "SKILL.md": "hi" });
   git(root, "init", "-q");
-  assert.deepEqual(localCommit(root), { commit: null, changed: false, changesChecked: false });
+  assert.deepEqual(localCommit(root), { commit: null, changed: false, changesChecked: false, note: "a git checkout with no commit yet" });
 });
 
 test("never runs a command the checkout's git configuration names, and says changes were not checked", { skip: hasGit ? false : "no git here" }, () => {
@@ -52,7 +52,12 @@ test("never runs a command the checkout's git configuration names, and says chan
   fs.writeFileSync(path.join(root, "SKILL.md"), "changed");
   const head = git(root, "rev-parse", "HEAD");
   assert.equal(fs.existsSync(marker), false);
-  assert.deepEqual(localCommit(root), { commit: head, changed: false, changesChecked: false });
+  assert.deepEqual(localCommit(root), {
+    commit: head,
+    changed: false,
+    changesChecked: false,
+    note: "could not check for uncommitted changes safely (the repository's git configuration names commands)",
+  });
   assert.equal(fs.existsSync(marker), false);
 });
 
@@ -92,4 +97,25 @@ test("never runs a command a submodule's own configuration names", { skip: hasGi
   const got = localCommit(root);
   assert.equal(fs.existsSync(marker), false);
   assert.equal(got.changesChecked, true);
+});
+
+test("a git that stops answering is a clear error", { skip: process.platform === "win32" ? "needs a shell script for git" : false }, (t) => {
+  const bin = makeTree({});
+  fs.writeFileSync(path.join(bin, "git"), "#!/bin/sh\nsleep 5\n", { mode: 0o755 });
+  const savedPath = process.env.PATH;
+  t.after(() => (process.env.PATH = savedPath));
+  process.env.PATH = `${bin}${path.delimiter}${savedPath}`;
+  assert.throws(() => localCommit(makeTree({ "SKILL.md": "hi" }), { timeoutMs: 100 }), /^Error: git did not finish within 100 ms$/);
+});
+
+test("a configuration git cannot read, or a status that fails, says changes could not be checked", { skip: process.platform === "win32" ? "needs a shell script for git" : false }, (t) => {
+  const savedPath = process.env.PATH;
+  t.after(() => (process.env.PATH = savedPath));
+  for (const failing of ["config", "status"]) {
+    const bin = makeTree({});
+    // Answers as a checkout at commit c…c, and fails the one subcommand named.
+    fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh\nfor a; do case "$a" in ${failing}) exit 2;; config) exit 1;; HEAD) echo ${"c".repeat(40)}; exit 0;; esac; done\nexit 0\n`, { mode: 0o755 });
+    process.env.PATH = `${bin}${path.delimiter}${savedPath}`;
+    assert.deepEqual(localCommit(makeTree({})), { commit: "c".repeat(40), changed: false, changesChecked: false, note: "could not check for uncommitted changes" }, failing);
+  }
 });

@@ -6,7 +6,8 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
-const { fetchCommit } = require("../../src/deep/archive");
+const { fetchCommit, ARCHIVE_LIMITS } = require("../../src/deep/archive");
+const { describeDuration } = require("../../src/deep/runTool");
 const { makeTree, fakeFetch } = require("../helpers");
 
 const SHA = "a".repeat(40);
@@ -66,8 +67,8 @@ test("stops before unpacking an archive over the limits, and leaves no temporary
 });
 
 test("names the default limits in the errors", async () => {
-  const { ARCHIVE_LIMITS, describeLimit } = require("../../src/deep/archive");
-  assert.deepEqual(ARCHIVE_LIMITS, { downloadBytes: 200 * 1024 ** 2, unpackedBytes: 1024 ** 3, files: 100_000 });
+  const { describeLimit } = require("../../src/deep/archive");
+  assert.deepEqual(ARCHIVE_LIMITS, { downloadBytes: 200 * 1024 ** 2, unpackedBytes: 1024 ** 3, files: 100_000, downloadMs: 10 * 60 * 1000 });
   assert.equal(describeLimit(ARCHIVE_LIMITS.downloadBytes), "200 MB");
   assert.equal(describeLimit(ARCHIVE_LIMITS.unpackedBytes), "1 GB");
   assert.equal(ARCHIVE_LIMITS.files.toLocaleString("en-US"), "100,000");
@@ -161,7 +162,7 @@ test("cleaning up removes its own exit and signal listeners", async () => {
   assert.deepEqual(counts(), before);
 });
 
-test("Ctrl-C during a slow download removes the temporary folder and ends the process by that signal", async (t) => {
+test("Ctrl-C during a slow download removes the temporary folder and ends the process by that signal", { timeout: 10000 }, async (t) => {
   const child = spawn(process.execPath, ["-e", `
     const fs = require("fs");
     const makeFolder = fs.mkdtempSync;
@@ -176,10 +177,13 @@ test("Ctrl-C during a slow download removes the temporary folder and ends the pr
   let out = "";
   let stderr = "";
   child.stderr.on("data", (d) => (stderr += d));
-  await new Promise((resolve) => child.stdout.on("data", (d) => {
-    out += d;
-    if (/downloading/.test(out)) resolve();
-  }));
+  await new Promise((resolve, reject) => {
+    child.stdout.on("data", (d) => {
+      out += d;
+      if (/downloading/.test(out)) resolve();
+    });
+    child.on("exit", (code, signal) => reject(new Error(`the child ended before downloading (${code ?? signal}): ${stderr}`)));
+  });
   const folder = /folder (\S+)/.exec(out)[1];
   assert.equal(fs.existsSync(folder), true);
   child.kill("SIGINT");
@@ -187,6 +191,40 @@ test("Ctrl-C during a slow download removes the temporary folder and ends the pr
   assert.equal(stderr, "");
   assert.deepEqual([code, signal], [null, "SIGINT"]);
   assert.equal(fs.existsSync(folder), false);
+});
+
+test("refuses a subpath that passes through a link in the archive, and reads nothing outside", async () => {
+  const outside = makeTree({ "secret/private.md": "not part of the target" });
+  const root = makeTree({ "r-abc/SKILL.md": "hi" });
+  fs.symlinkSync(outside, path.join(root, "r-abc", "link"));
+  const out = path.join(makeTree({}), "out.tgz");
+  assert.equal(spawnSync("tar", ["-czf", out, "-C", root, "r-abc"]).status, 0);
+  const tgz = fs.readFileSync(out);
+  await allRemoved(async () => {
+    for (const subpath of ["link/secret", "link"]) {
+      await assert.rejects(fetchCommit({ ...github, subpath }, "main", fakeFetch(githubRoutes(tgz))), new RegExp(`no folder ${subpath} in o/r at aaaaaaa`));
+    }
+  });
+});
+
+test("a download that takes longer than its time limit says so", { timeout: 5000 }, async () => {
+  const neverAnswers = (url, { signal }) =>
+    url.includes("/commits/") ? Promise.resolve(new Response(SHA)) : new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+  const stalls = (url, { signal }) =>
+    url.includes("/commits/")
+      ? Promise.resolve(new Response(SHA))
+      : Promise.resolve(new Response(new ReadableStream({
+        start(c) {
+          c.enqueue(new Uint8Array([0x1f, 0x8b]));
+          signal.addEventListener("abort", () => c.error(signal.reason));
+        },
+      })));
+  const limits = { ...ARCHIVE_LIMITS, downloadMs: 50 };
+  await allRemoved(async () => {
+    await assert.rejects(fetchCommit(github, "main", neverAnswers, limits), /^Error: the download timed out after 50 ms$/);
+    await assert.rejects(fetchCommit(github, "main", stalls, limits), /^Error: the download timed out after 50 ms$/);
+  });
+  assert.equal(describeDuration(ARCHIVE_LIMITS.downloadMs), "10 minutes");
 });
 
 // Runs fn, then checks it made at least one temporary folder and that every one is gone.

@@ -6,10 +6,10 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const zlib = require("zlib");
-const { spawnSync } = require("child_process");
 const { Readable, Transform, Writable } = require("stream");
 const { pipeline } = require("stream/promises");
 const { fetchResponse, fetchText, describeFailure } = require("../fetchRemote");
+const { runTool, describeDuration } = require("./runTool");
 
 // Endpoint shapes, checked with curl on 2026-11-15:
 // - GitHub: GET api.github.com/repos/<o>/<r>/commits/<ref or HEAD> with "Accept: application/vnd.github.sha" answers the full
@@ -20,9 +20,8 @@ const { fetchResponse, fetchText, describeFailure } = require("../fetchRemote");
 //   &files=false answers [{ "sha": "<40 hex>", ... }], the default branch's head without sha=; an unknown ref or repository
 //   answers 404. <origin>/api/v1/repos/<o>/<r>/archive/<sha>.tar.gz answers application/gzip whose one top folder is the
 //   repository's name in lower case.
-const ARCHIVE_LIMITS = { downloadBytes: 200 * 1024 ** 2, unpackedBytes: 1024 ** 3, files: 100_000 };
-const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
-const LIST_MAX_BUFFER = 256 * 1024 ** 2;
+const ARCHIVE_LIMITS = { downloadBytes: 200 * 1024 ** 2, unpackedBytes: 1024 ** 3, files: 100_000, downloadMs: 10 * 60 * 1000 };
+const TAR_TIMEOUT_MS = 5 * 60 * 1000;
 const COMMIT_ID = /^[0-9a-f]{40}$/;
 const GITEA_COMMIT_QUERY = "limit=1&stat=false&verification=false&files=false";
 
@@ -99,13 +98,15 @@ function byteLimit(limit, error) {
 }
 
 async function download(url, file, fetchImpl, limits) {
-  const result = await fetchResponse(fetchImpl, url, { timeoutMs: DOWNLOAD_TIMEOUT_MS });
-  if (!result.ok) throw new Error(describeFailure(result));
+  const timedOut = () => new Error(`the download timed out after ${describeDuration(limits.downloadMs)}`);
+  const result = await fetchResponse(fetchImpl, url, { timeoutMs: limits.downloadMs });
+  if (!result.ok) throw result.reason === "timeout" ? timedOut() : new Error(describeFailure(result));
   const overLimit = tooLarge(`the download is larger than ${describeLimit(limits.downloadBytes)}`);
   try {
     await pipeline(Readable.fromWeb(result.response.body), byteLimit(limits.downloadBytes, overLimit), fs.createWriteStream(file));
   } catch (err) {
     if (err === overLimit) throw err;
+    if (err && (err.name === "TimeoutError" || err.name === "AbortError")) throw timedOut();
     throw new Error(`could not download the archive (${err.message}): ${url}`);
   }
 }
@@ -123,13 +124,15 @@ async function checkUnpackedSize(file, limits) {
 }
 
 function runTar(args) {
-  const run = spawnSync("tar", args, { encoding: "utf-8", maxBuffer: LIST_MAX_BUFFER });
+  const run = runTool("tar", args, TAR_TIMEOUT_MS);
   if (run.error) throw new Error(`could not unpack the archive (${run.error.message})`);
   if (run.status !== 0) throw new Error(`could not unpack the archive (tar: ${run.stderr.trim()})`);
   return run.stdout;
 }
 
-// Any Gitea or Forgejo address can serve a crafted archive, so its names are checked before anything is unpacked.
+// Any Gitea or Forgejo address can serve a crafted archive, so its names are checked before anything is unpacked. The listing
+// does not show where a symbolic or hard link points: unpacking relies on GNU tar and bsdtar refusing, by default, to write
+// through a link or to a path with "..". A subpath is checked against links separately, after unpacking.
 function checkListing(file, limits) {
   const names = runTar(["-tzf", file]).split("\n").filter(Boolean);
   if (names.some((n) => n.startsWith("/") || n.split("/").includes(".."))) throw new Error("the archive holds a path outside its folder");
@@ -137,7 +140,23 @@ function checkListing(file, limits) {
   if (files > limits.files) throw tooLarge(`the archive holds more than ${limits.files.toLocaleString("en-US")} files`);
 }
 
-async function fetchCommit(target, ref, fetchImpl, limits = ARCHIVE_LIMITS) {
+// The subpath's folder inside the unpacked tree, or null when it is missing, leaves the tree, or passes through a link (each
+// part is examined without following links, and the resolved folder must still be inside the tree).
+function folderWithin(tree, subpath) {
+  let folder = tree;
+  for (const part of subpath.split("/").filter(Boolean)) {
+    if (part === "..") return null;
+    folder = path.join(folder, part);
+    const stat = fs.lstatSync(folder, { throwIfNoEntry: false });
+    if (!stat || !stat.isDirectory()) return null;
+  }
+  const real = fs.realpathSync(folder);
+  const realTree = fs.realpathSync(tree);
+  return real === realTree || real.startsWith(realTree + path.sep) ? folder : null;
+}
+
+async function fetchCommit(target, ref, fetchImpl, givenLimits = ARCHIVE_LIMITS) {
+  const limits = { ...ARCHIVE_LIMITS, ...givenLimits };
   const wanted = ref ?? target.ref ?? null;
   const { commitUrl, archiveUrl } = endpoints(target, wanted);
   const commit = await resolveCommit(target, wanted, commitUrl, fetchImpl);
@@ -151,11 +170,8 @@ async function fetchCommit(target, ref, fetchImpl, limits = ARCHIVE_LIMITS) {
     fs.mkdirSync(tree);
     runTar(["-xzf", archive, "-C", tree, "--strip-components=1", "--no-same-owner"]);
     fs.rmSync(archive);
-    const root = path.join(tree, target.subpath);
-    const inside = root === tree || root.startsWith(tree + path.sep);
-    if (!inside || !fs.lstatSync(root, { throwIfNoEntry: false })?.isDirectory()) {
-      throw new Error(`no folder ${target.subpath} in ${target.owner}/${target.repo} at ${commit.slice(0, 7)}`);
-    }
+    const root = folderWithin(tree, target.subpath);
+    if (!root) throw new Error(`no folder ${target.subpath} in ${target.owner}/${target.repo} at ${commit.slice(0, 7)}`);
     return { commit, root, cleanup };
   } catch (err) {
     cleanup();
