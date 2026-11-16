@@ -9,8 +9,9 @@ exports.checkReading = checkReading;
 exports.estimateReading = estimateReading;
 exports.READING_CALL_CHARS = 60000;
 exports.REASON_MAX = 300;
-// Claude Code's fixed cost a call with a one-line system prompt, measured 2026-11-14 (docs/plans/claude-token-savings-2026-11-14.md).
-exports.FIXED_TOKENS_PER_CALL = 1100;
+// Claude Code's fixed cost of a call with the reading schema and system prompt, measured 2026-11-15 (scanskillsafety --deep on
+// keithmackay/findsafeskills-skill: 4,962 input tokens against 3,372 estimated with 1,100 fixed).
+exports.FIXED_TOKENS_PER_CALL = 2700;
 exports.OUTPUT_TOKENS_PER_PART = 60;
 // The longest row a line is sent in, in characters (code points); a longer line continues on further rows.
 const LINE_MAX = 2000;
