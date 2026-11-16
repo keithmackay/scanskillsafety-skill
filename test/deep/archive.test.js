@@ -107,6 +107,23 @@ test("Gitea and Forgejo use their own commit and archive endpoints", async () =>
   }
 });
 
+test("an owner or repository name is encoded in every address, so it cannot reach another path or query", async () => {
+  const odd = { owner: "o?x=1", repo: "r#/../y" };
+  const githubCalls = fakeFetch({});
+  await assert.rejects(fetchCommit({ ...github, ...odd }, "main", githubCalls));
+  assert.deepEqual(githubCalls.calls, ["https://api.github.com/repos/o%3Fx%3D1/r%23%2F..%2Fy/commits/main"]);
+  const tgz = makeTarball({ "r-abc/SKILL.md": "hi" });
+  const archived = fakeFetch({
+    "https://api.github.com/repos/o%3Fx%3D1/r%23%2F..%2Fy/commits/main": SHA,
+    [`https://codeload.github.com/o%3Fx%3D1/r%23%2F..%2Fy/tar.gz/${SHA}`]: { body: tgz },
+  });
+  (await fetchCommit({ ...github, ...odd }, "main", archived)).cleanup();
+  const giteaCalls = fakeFetch({});
+  await assert.rejects(fetchCommit({ ...forgejo, ...odd }, "main", giteaCalls));
+  assert.ok(giteaCalls.calls.length > 0);
+  for (const url of giteaCalls.calls) assert.ok(url.startsWith("https://code.example/api/v1/repos/o%3Fx%3D1/r%23%2F..%2Fy"), url);
+});
+
 test("a subpath link scans that folder of the unpacked commit", async () => {
   const tgz = makeTarball({ "r-abc/skills/x/SKILL.md": "hi", "r-abc/README.md": "top" });
   const got = await fetchCommit({ ...github, subpath: "skills/x" }, "main", fakeFetch(githubRoutes(tgz)));

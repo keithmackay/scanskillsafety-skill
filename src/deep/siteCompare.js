@@ -3,6 +3,7 @@
 "use strict";
 
 const { fetchText, describeFailure } = require("../fetchRemote");
+const { repoPath } = require("./archive");
 
 // Shapes observed 2026-11-16:
 // - GET <site>/api/listings/lookup?repo=<repository URL> -> {"listings":[{"slug","url","rating","scannedAt","scanCommit",
@@ -42,7 +43,7 @@ async function lookUp(target, fetchImpl, base) {
 // How this commit relates to the scanned one, from GitHub's compare call; for other hosts, or when the call fails, not compared.
 async function relationTo(target, scanned, commit, fetchImpl) {
   if (target.kind !== "github") return { relation: "not-compared", reason: "only commits on GitHub are compared" };
-  const url = `https://api.github.com/repos/${target.owner}/${target.repo}/compare/${scanned}...${commit}?per_page=1`;
+  const url = `https://api.github.com/repos/${repoPath(target)}/compare/${scanned}...${commit}?per_page=1`;
   const result = await fetchText(fetchImpl, url, { headers: { Accept: "application/vnd.github+json" } });
   if (!result.ok) {
     if (result.status === 404) return { relation: "not-compared", reason: "GitHub does not know the scanned commit" };

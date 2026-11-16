@@ -49,10 +49,10 @@ const n = (x) => x.toLocaleString("en-US");
 const commits = (count) => `${n(count)} commit${count === 1 ? "" : "s"}`;
 const dayOf = (timestamp) => (timestamp === null ? "an unknown date" : printable(timestamp.slice(0, 10)));
 
-// How one scan's commit relates to the commit read here.
+// How one scan's commit relates to the commit read here. The lookup dates only the text scan, so a script scan's line has no date.
 function relationLine(scan, scannedAt) {
   if (scan.relation === "same") return "findsafeskills scanned this commit";
-  const scanned = `findsafeskills scanned ${scan.commit.slice(0, 7)} on ${dayOf(scannedAt)}`;
+  const scanned = `findsafeskills scanned ${scan.commit.slice(0, 7)}${scannedAt === undefined ? "" : ` on ${dayOf(scannedAt)}`}`;
   if (scan.relation === "newer") return `${scanned}; this commit is ${commits(scan.by)} newer`;
   if (scan.relation === "older") return `${scanned}; this commit is ${commits(scan.by)} older`;
   if (scan.relation === "diverged") {
@@ -69,8 +69,12 @@ function siteLines(site) {
   const lines = ["findsafeskills:"];
   for (const listing of site.listings) {
     lines.push(`  ${printable(listing.url ?? "a listing with no page address")} (${listing.rating === null ? "no rating" : `rating: ${printable(listing.rating)}`})`);
+    if (listing.text && listing.scripts && listing.text.commit === listing.scripts.commit) {
+      lines.push(`    Text and script scans: ${relationLine(listing.text, listing.scannedAt)}`);
+      continue;
+    }
     if (listing.text) lines.push(`    Text scan: ${relationLine(listing.text, listing.scannedAt)}`);
-    if (listing.scripts) lines.push(`    Script scan: ${relationLine(listing.scripts, listing.scannedAt)}`);
+    if (listing.scripts) lines.push(`    Script scan: ${relationLine(listing.scripts)}`);
     if (!listing.text && !listing.scripts) lines.push(`    Scanned on ${dayOf(listing.scannedAt)}, with no commit recorded to compare`);
   }
   return lines;

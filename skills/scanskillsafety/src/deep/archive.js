@@ -32,15 +32,18 @@ const describeLimit = (bytes) =>
   bytes % 1024 ** 3 === 0 ? `${bytes / 1024 ** 3} GB` : bytes % 1024 ** 2 === 0 ? `${bytes / 1024 ** 2} MB` : `${bytes} bytes`;
 const tooLarge = (what) => new Error(`too large to check deeply: ${what}`);
 
+// The repository's owner and name as one escaped path, so neither can reach another path or a query.
+const repoPath = (target) => `${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
+
 function endpoints(target, ref) {
-  const { owner, repo } = target;
+  const ownerRepo = repoPath(target);
   if (target.kind === "github") {
     return {
-      commitUrl: `https://api.github.com/repos/${owner}/${repo}/commits/${encodeURIComponent(ref ?? "HEAD")}`,
-      archiveUrl: (sha) => `https://codeload.github.com/${owner}/${repo}/tar.gz/${sha}`,
+      commitUrl: `https://api.github.com/repos/${ownerRepo}/commits/${encodeURIComponent(ref ?? "HEAD")}`,
+      archiveUrl: (sha) => `https://codeload.github.com/${ownerRepo}/tar.gz/${sha}`,
     };
   }
-  const api = `${target.origin}/api/v1/repos/${owner}/${repo}`;
+  const api = `${target.origin}/api/v1/repos/${ownerRepo}`;
   return {
     commitUrl: `${api}/commits?${ref ? `sha=${encodeURIComponent(ref)}&` : ""}${GITEA_COMMIT_QUERY}`,
     archiveUrl: (sha) => `${api}/archive/${sha}.tar.gz`,
@@ -61,7 +64,7 @@ function commitIdOf(target, text) {
 // the repository itself is looked up to tell them apart.
 async function repositoryShown(target, fetchImpl) {
   if (target.kind === "github") return false;
-  const result = await fetchText(fetchImpl, `${target.origin}/api/v1/repos/${target.owner}/${target.repo}`);
+  const result = await fetchText(fetchImpl, `${target.origin}/api/v1/repos/${repoPath(target)}`);
   return result.ok || result.status !== 404;
 }
 
@@ -193,4 +196,4 @@ async function fetchCommit(target, ref, fetchImpl, givenLimits = ARCHIVE_LIMITS)
   }
 }
 
-module.exports = { fetchCommit, ARCHIVE_LIMITS, describeLimit };
+module.exports = { fetchCommit, ARCHIVE_LIMITS, describeLimit, repoPath };

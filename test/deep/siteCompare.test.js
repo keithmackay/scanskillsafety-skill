@@ -150,6 +150,14 @@ test("a Gitea or Forgejo repository is looked up by its own address and gives th
   assert.deepEqual(fetchImpl.calls, [lookup]);
 });
 
+test("an owner or repository name is encoded in the compare address", async () => {
+  const target = { kind: "github", owner: "o?x", repo: "r#/..", ref: null, subpath: "", isFile: false };
+  const lookup = lookupUrl("https://github.com/o?x/r#/..");
+  const fetchImpl = fakeFetch({ [lookup]: { body: { listings: [listing({ scanCommit: OLD })] } } });
+  await compareWithSite(target, COMMIT, fetchImpl, BASE);
+  assert.deepEqual(fetchImpl.calls, [lookup, `https://api.github.com/repos/o%3Fx/r%23%2F../compare/${OLD}...${COMMIT}?per_page=1`]);
+});
+
 test("the site's address comes from FINDSAFESKILLS_URL, else findsafeskills.com", async () => {
   const saved = process.env.FINDSAFESKILLS_URL;
   try {
