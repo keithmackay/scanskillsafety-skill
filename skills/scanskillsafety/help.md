@@ -63,8 +63,9 @@ DEEP SCAN
   Ask the agent for a deeper check, or run:
     node <install-dir>/cli.cjs --deep <local-folder-or-repo-url>
 
-  Reads every file of the exact commit you would install (downloaded as
-  one archive from the repository's own host), lists what runs at install
+  Reads every file of the exact commit you would install (fetched with git
+  from the repository's own host, with no credentials sent, or downloaded
+  as one archive when git is not installed), lists what runs at install
   and start-up, checks the packages it pulls in against OSV, compares the
   commit with what findsafeskills scanned, and, once you agree to its
   plan, has Claude read every file through your own claude CLI. Before
