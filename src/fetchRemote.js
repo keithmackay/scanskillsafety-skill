@@ -23,20 +23,35 @@ const FALLBACK_PATHS = [
   ".claude-plugin/marketplace.json", "hooks/hooks.json", ".mcp.json", "package.json",
 ];
 
-async function fetchText(fetchImpl, url, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+function failureOf(err, url) {
+  const reason = err && (err.name === "TimeoutError" || err.name === "AbortError") ? "timeout" : "network";
+  return { ok: false, reason, url, message: err && err.message };
+}
+
+// A response whose status is OK, its body not yet read; the timeout also covers reading the body.
+async function fetchResponse(fetchImpl, url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers = {} } = {}) {
   try {
     const response = await fetchImpl(url, {
       signal: AbortSignal.timeout(timeoutMs),
-      headers: { "User-Agent": "scanskillsafety" },
+      headers: { "User-Agent": "scanskillsafety", ...headers },
     });
-    if (response.ok) return { ok: true, text: await response.text() };
+    if (response.ok) return { ok: true, response };
     const reason = response.status === 404 ? "not-found"
       : response.status === 403 || response.status === 429 ? "rate-limited"
       : "http";
     return { ok: false, reason, status: response.status, url };
   } catch (err) {
-    const reason = err && (err.name === "TimeoutError" || err.name === "AbortError") ? "timeout" : "network";
-    return { ok: false, reason, url, message: err && err.message };
+    return failureOf(err, url);
+  }
+}
+
+async function fetchText(fetchImpl, url, options) {
+  const result = await fetchResponse(fetchImpl, url, options);
+  if (!result.ok) return result;
+  try {
+    return { ok: true, text: await result.response.text() };
+  } catch (err) {
+    return failureOf(err, url);
   }
 }
 
@@ -209,4 +224,4 @@ async function gatherRawUrl(url, fetchImpl) {
   return { files: [{ path: name, text: result.text }], errors: [], notices: [] };
 }
 
-module.exports = { fetchText, gatherGithub, gatherGitHost, gatherRawUrl };
+module.exports = { fetchResponse, fetchText, describeFailure, gatherGithub, gatherGitHost, gatherRawUrl };
