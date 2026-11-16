@@ -2,6 +2,8 @@
 // ABOUTME: become findings, known vulnerabilities are listed apart, and any failed request means the check did not run.
 "use strict";
 
+const { isObject } = require("./util");
+
 // Shapes observed 2026-11-15:
 // POST /v1/querybatch {"queries":[{"package":{"name":"flatmap-stream","ecosystem":"npm"},"version":"0.1.1"},
 //   {"package":{"name":"left-pad","ecosystem":"npm"},"version":"1.3.0"}]}
@@ -41,7 +43,6 @@ async function request(fetchImpl, url, init = {}) {
   }
 }
 
-const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 
 // The ids OSV lists for each query, following each result's pages until it has none; a query that pages on and on, or hands
 // back a token it gave before, is a failure rather than a loop.

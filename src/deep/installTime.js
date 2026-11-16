@@ -4,23 +4,12 @@
 
 const { posix } = require("path");
 const { isScriptPath, isConfig } = require("../../lib/scriptFiles");
+const { baseName, compare, isVendored, parseJson } = require("./util");
 
 const NPM_HOOKS = ["preinstall", "install", "postinstall", "prepare"];
-const VENDORED = new Set(["node_modules", "vendor"]);
 
-const baseName = (p) => p.slice(p.lastIndexOf("/") + 1);
 const folderOf = (p) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
-const isVendored = (p) => p.split("/").slice(0, -1).some((s) => VENDORED.has(s));
-const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const byFileCommandWhen = (a, b) => compare(a.file, b.file) || compare(a.command, b.command) || compare(a.when, b.when);
-
-function parseJson(text) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
 
 function mcpServerEntries(file, json) {
   const servers = json && typeof json.mcpServers === "object" && json.mcpServers ? json.mcpServers : {};
@@ -117,4 +106,4 @@ function installTimeEntries(files) {
   return withoutRepeats(entries.sort(byFileCommandWhen));
 }
 
-module.exports = { installTimeEntries, isVendored };
+module.exports = { installTimeEntries };

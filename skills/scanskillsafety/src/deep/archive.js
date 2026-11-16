@@ -12,6 +12,7 @@ const { pipeline } = require("stream/promises");
 const { fetchResponse, fetchText, describeFailure, repoPath } = require("../fetchRemote");
 const { runTool, describeDuration } = require("./runTool");
 const { printableCut } = require("../printable");
+const { OBJECT_ID, describeLimit } = require("./util");
 const { fillArchiveGaps } = require("./archiveGaps");
 
 // Endpoint shapes, checked with curl on 2026-11-15:
@@ -27,11 +28,8 @@ const { fillArchiveGaps } = require("./archiveGaps");
 const ARCHIVE_LIMITS = { downloadBytes: 200 * 1024 ** 2, unpackedBytes: 1024 ** 3, files: 100_000, downloadMs: 10 * 60 * 1000 };
 const TAR_TIMEOUT_MS = 5 * 60 * 1000;
 const TAR_COMPLAINT_MAX = 300;
-const COMMIT_ID = /^[0-9a-f]{40}$/;
 const GITEA_COMMIT_QUERY = "limit=1&stat=false&verification=false&files=false";
 
-const describeLimit = (bytes) =>
-  bytes % 1024 ** 3 === 0 ? `${bytes / 1024 ** 3} GB` : bytes % 1024 ** 2 === 0 ? `${bytes / 1024 ** 2} MB` : `${bytes} bytes`;
 const tooLarge = (what) => new Error(`too large to check deeply: ${what}`);
 
 function endpoints(target, ref) {
@@ -79,7 +77,7 @@ async function resolveCommit(target, ref, commitUrl, fetchImpl) {
   }
   const commit = commitIdOf(target, result.text);
   if (commit === null) throw noCommit;
-  if (typeof commit !== "string" || !COMMIT_ID.test(commit)) throw new Error(`did not answer a commit id: ${commitUrl}`);
+  if (typeof commit !== "string" || !OBJECT_ID.test(commit)) throw new Error(`did not answer a commit id: ${commitUrl}`);
   return commit;
 }
 
@@ -197,4 +195,4 @@ async function fetchCommit(target, ref, fetchImpl, givenLimits = ARCHIVE_LIMITS)
   }
 }
 
-module.exports = { fetchCommit, ARCHIVE_LIMITS, describeLimit };
+module.exports = { fetchCommit, ARCHIVE_LIMITS };

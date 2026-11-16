@@ -7,6 +7,7 @@ const path = require("path");
 const { fetchText, describeFailure, repoPath } = require("../fetchRemote");
 const { printable } = require("../printable");
 const { MAX_TEXT_BYTES } = require("./everyFile");
+const { OBJECT_ID } = require("./util");
 
 // Endpoint shapes, checked with curl on 2026-11-16:
 // - GitHub: GET api.github.com/repos/<o>/<r>/git/trees/<commit>?recursive=1 answers { sha, url, tree: [{ path, mode, type
@@ -20,7 +21,6 @@ const MAX_SEPARATE_FETCHES = 50;
 const GITEA_PER_PAGE = 10_000;
 const MAX_TREE_PAGES = 100;
 const TREE_TIMEOUT_MS = 60_000;
-const OBJECT_ID = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
 const LINK_MODE = "120000";
 
 const cannotList = (reason) => new Error(`could not list every file of the commit: ${reason}`);

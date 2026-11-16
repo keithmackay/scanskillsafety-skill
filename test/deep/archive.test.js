@@ -95,7 +95,7 @@ test("stops before unpacking an archive over the limits, and leaves no temporary
 });
 
 test("names the default limits in the errors", async () => {
-  const { describeLimit } = require("../../src/deep/archive");
+  const { describeLimit } = require("../../src/deep/util");
   assert.deepEqual(ARCHIVE_LIMITS, { downloadBytes: 200 * 1024 ** 2, unpackedBytes: 1024 ** 3, files: 100_000, downloadMs: 10 * 60 * 1000 });
   assert.equal(describeLimit(ARCHIVE_LIMITS.downloadBytes), "200 MB");
   assert.equal(describeLimit(ARCHIVE_LIMITS.unpackedBytes), "1 GB");
@@ -323,4 +323,12 @@ test("tar's complaint is cut to 300 characters with control and format character
   } finally {
     process.env.PATH = savedPath;
   }
+});
+
+test("a commit id of a SHA-256 repository (64 hex characters) is accepted", async () => {
+  const tgz = makeTarball({ "r-abc/SKILL.md": "hi" });
+  const long = "e".repeat(64);
+  const got = await fetchCommit(github, "main", fakeFetch(githubRoutes(tgz, "main", long, [{ path: "SKILL.md", type: "blob", mode: "100644", sha: "f".repeat(64), size: 2 }])));
+  got.cleanup();
+  assert.equal(got.commit, long);
 });

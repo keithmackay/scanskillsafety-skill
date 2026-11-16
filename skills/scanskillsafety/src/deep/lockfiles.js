@@ -2,9 +2,8 @@
 // ABOUTME: names from its manifests when it has none; formats it cannot read are listed, never ignored.
 "use strict";
 
-const { isVendored } = require("./installTime");
+const { baseName, isObject, isVendored } = require("./util");
 
-const baseName = (p) => p.slice(p.lastIndexOf("/") + 1);
 const normalisePyPI = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
 const unquote = (s) => s.replace(/^["']|["']$/g, "");
 const linesOf = (text) => text.split(/\r?\n/);
@@ -26,7 +25,6 @@ function parseJson(text) {
   }
 }
 
-const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 const isWhitespace = (c) => c === " " || c === "\t" || c === "\n" || c === "\r";
 // An integer-like key is listed by Object.entries before every other key, out of document order.
 const isIndexKey = (key) => /^(0|[1-9]\d{0,8})$/.test(key);

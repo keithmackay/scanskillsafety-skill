@@ -3,7 +3,7 @@
 "use strict";
 
 const { fetchResponse, readTextWithin, describeFailure, repoPath } = require("../fetchRemote");
-const { describeLimit } = require("./archive");
+const { OBJECT_ID, isObject, describeLimit } = require("./util");
 
 // Shapes observed 2026-11-16:
 // - GET <site>/api/listings/lookup?repo=<repository URL> -> {"listings":[{"slug","url","rating","scannedAt","scanCommit",
@@ -12,7 +12,6 @@ const { describeLimit } = require("./archive");
 // - GET api.github.com/repos/<o>/<r>/compare/<base>...<head>?per_page=1 -> {"status": "ahead"|"behind"|"diverged"|"identical",
 //   "ahead_by", "behind_by", ...}, where ahead means head is newer than base; an unknown commit answers 404.
 const DEFAULT_SITE_URL = "https://findsafeskills.com";
-const COMMIT_ID = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
 const RATINGS = ["green", "yellow", "red"];
 const MAX_LISTINGS = 10;
 const LOOKUP_MAX_BYTES = 1024 ** 2;
@@ -24,9 +23,8 @@ const siteUrl = () => (process.env.FINDSAFESKILLS_URL ?? DEFAULT_SITE_URL).repla
 const repositoryUrl = (target) =>
   target.kind === "github" ? `https://github.com/${target.owner}/${target.repo}` : `${target.origin}/${target.owner}/${target.repo}`;
 
-const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 const stringOrNull = (v) => (typeof v === "string" ? v : null);
-const commitOrNull = (v) => (typeof v === "string" && COMMIT_ID.test(v) ? v : null);
+const commitOrNull = (v) => (typeof v === "string" && OBJECT_ID.test(v) ? v : null);
 const ratingOf = (v) => (v === null || RATINGS.includes(v) ? v : "unknown");
 
 // The listing's page on the site itself: its own address when that is on the site's origin, else the page its slug names.

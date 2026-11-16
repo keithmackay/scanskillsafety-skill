@@ -20,6 +20,7 @@ const { findClaude } = require("./runClaude");
 const { chooseForReading, planReading, readEveryFile, quoteLine } = require("./reading");
 const { printable, printableCut } = require("../printable");
 const { isDiscoverable } = require("../discover");
+const { OBJECT_ID } = require("./util");
 const { formatClaudeUsage } = require("../../lib/deep/claudeUsage");
 
 const isRepository = (target) => (target.kind === "github" || target.kind === "git-host") && !target.isFile;
@@ -211,8 +212,9 @@ async function runDeep(input, options, deps = {}) {
   }
   if (deps.onServices) deps.onServices(services);
   // Agreeing to a repository's plan pins its commit: with no --ref, that commit is the one read.
-  const agreedCommit = /^([0-9a-f]{40}|[0-9a-f]{64}):[0-9a-f]+$/.exec(options.claudeOk ?? "")?.[1];
-  const pinned = claudePath && agreedCommit && isRepository(target) && !options.ref ? { ...options, ref: agreedCommit } : options;
+  const [agreedCommit, agreedDigest] = (options.claudeOk ?? "").split(":");
+  const pinsCommit = OBJECT_ID.test(agreedCommit) && agreedDigest !== undefined;
+  const pinned = claudePath && pinsCommit && isRepository(target) && !options.ref ? { ...options, ref: agreedCommit } : options;
   let opened;
   try {
     opened = await openTarget(target, pinned, deps);
