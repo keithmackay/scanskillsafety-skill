@@ -97,7 +97,9 @@ test("an archive over the limits gives no rating and says it is too large to che
   const result = await runDeep("https://github.com/o/r", ALL_OFF, { fetchImpl, limits: { downloadBytes: 10, unpackedBytes: 1e9, files: 1e5 } });
   assert.equal(result.rating, null);
   assert.match(result.errors[0], /^too large to check deeply/);
+  assert.equal(result.deep.read, false);
   assert.match(formatDeep(result), /COULD NOT SCAN/);
+  assert.doesNotMatch(formatDeep(result), /Deep scan\n/);
 });
 
 test("a single file or a plain URL is not something --deep can read", async () => {
@@ -120,20 +122,16 @@ test("names the services it will contact, and what each receives, before the fir
   const result = await runDeep("https://github.com/o/r", ALL_ON, { fetchImpl, onServices: (services) => events.push(services) });
   assert.deepEqual(events[0], result.deep.services);
   assert.equal(events.indexOf("request"), 1);
-  assert.deepEqual(result.deep.services.map((s) => s.service), ["github.com", "findsafeskills.com", "api.osv.dev", "Anthropic"]);
-  assert.deepEqual(result.deep.services[0], { service: "github.com", receives: "requests for this repository's commit id and archive" });
-  assert.deepEqual(result.deep.services[1], { service: "findsafeskills.com", receives: "the repository URL" });
-  assert.deepEqual(result.deep.services[2], { service: "api.osv.dev", receives: "package names, ecosystems and versions" });
-  assert.deepEqual(result.deep.services[3], { service: "Anthropic", receives: "the contents of the files Claude reads, through your claude program, only after you agree" });
+  assert.deepEqual(result.deep.services, [
+    { service: "api.github.com", receives: "a request for this repository's commit id" },
+    { service: "codeload.github.com", receives: "a request for that commit's archive" },
+  ]);
 });
 
-test("the services follow the target and the options", async () => {
-  const names = async (input, options) => (await runDeep(input, options, { fetchImpl: fakeFetch({}) })).deep.services.map((s) => s.service);
-  const local = makeTree({ "SKILL.md": "hi" });
-  assert.deepEqual(await names(local, ALL_ON), ["api.osv.dev", "Anthropic"]);
-  assert.deepEqual(await names(local, { ...ALL_ON, osv: false }), ["Anthropic"]);
-  assert.deepEqual(await names(local, ALL_OFF), []);
-  assert.deepEqual(await names("https://code.example/o/r", { ...ALL_ON, site: false, claude: false }), ["code.example", "api.osv.dev"]);
+test("names only the services the stages that run contact: a repository's own host, none for a local folder", async () => {
+  const services = async (input) => (await runDeep(input, ALL_ON, { fetchImpl: fakeFetch({}) })).deep.services;
+  assert.deepEqual(await services(makeTree({ "SKILL.md": "hi" })), []);
+  assert.deepEqual(await services("https://code.example:8443/o/r"), [{ service: "code.example:8443", receives: "requests for this repository's commit id and archive" }]);
 });
 
 test("the services line says what each service receives, or that none is contacted", () => {
@@ -162,10 +160,11 @@ test("the text output adds a Deep scan section", async () => {
 
 test("the text output names the commit and whether the folder has changes", () => {
   const base = { target: "x", rating: "green", scannedFiles: [], findings: [], notices: [], errors: [], nonGoals: [] };
-  const deep = { commit: SHA, changed: false, changesChecked: true, leftOut: [], installTime: [], testFindings: [], launchedTests: [] };
+  const deep = { read: true, commit: SHA, changed: false, changesChecked: true, note: null, leftOut: [], installTime: [], testFindings: [], launchedTests: [] };
   assert.match(formatDeep({ ...base, deep }), new RegExp(`Commit: ${SHA}\n`));
   assert.match(formatDeep({ ...base, deep: { ...deep, changed: true } }), /with uncommitted changes: the files scanned are not exactly any commit/);
-  assert.match(formatDeep({ ...base, deep: { ...deep, changesChecked: false } }), /could not check for uncommitted changes safely \(the repository's git configuration names commands\)/);
+  assert.match(formatDeep({ ...base, deep: { ...deep, changesChecked: false, note: "could not check for uncommitted changes" } }), new RegExp(`Commit: ${SHA}; could not check for uncommitted changes\n`));
+  assert.match(formatDeep({ ...base, deep: { ...deep, commit: null, changesChecked: false, note: "a git checkout with no commit yet" } }), /Commit: a git checkout with no commit yet\n/);
   assert.match(formatDeep({ ...base, deep }), /What runs at install and start-up:\n {2}nothing found/);
   assert.match(formatDeep({ ...base, deep: { ...deep, launchedTests: ["tests/run.sh"] } }), /Test files the target runs \(counted in the rating\): tests\/run\.sh/);
 });
@@ -175,4 +174,8 @@ test("a folder with no text file to read has no rating", async () => {
   assert.equal(result.rating, null);
   assert.deepEqual(result.errors, ["no text file to read"]);
   assert.deepEqual(result.deep.leftOut, [{ path: "logo.png", reason: "binary" }]);
+  assert.equal(result.deep.read, true);
+  const out = formatDeep(result);
+  assert.match(out, /COULD NOT SCAN/);
+  assert.match(out, /\nDeep scan\nCommit: not a git checkout, so no commit can be named\nRead 0 file\(s\); left out 1:\n {2}logo\.png: binary/);
 });

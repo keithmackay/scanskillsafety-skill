@@ -10,15 +10,15 @@ function formatServices(services) {
 }
 
 function commitLine(deep) {
-  if (deep.commit === null) return "Commit: not a git checkout, so no commit can be named";
-  if (!deep.changesChecked) return `Commit: ${deep.commit}; could not check for uncommitted changes safely (the repository's git configuration names commands)`;
+  if (deep.commit === null) return `Commit: ${deep.note}`;
+  if (!deep.changesChecked) return `Commit: ${deep.commit}; ${deep.note}`;
   if (deep.changed) return `Commit: ${deep.commit}, with uncommitted changes: the files scanned are not exactly any commit`;
   return `Commit: ${deep.commit}`;
 }
 
 function formatDeep(result) {
   const text = formatText(result);
-  if (result.rating === null) return text;
+  if (!result.deep.read) return text;
   const { deep } = result;
   const lines = ["", "Deep scan", commitLine(deep), `Read ${result.scannedFiles.length} file(s); left out ${deep.leftOut.length}${deep.leftOut.length ? ":" : "."}`];
   for (const f of deep.leftOut) lines.push(`  ${f.path}: ${f.reason}`);

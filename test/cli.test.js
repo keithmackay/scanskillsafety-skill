@@ -188,7 +188,7 @@ test("--deep on a local folder prints a Deep scan section, names the services fi
   assert.equal(out.status, 0);
   assert.match(out.stdout, /Rating: GREEN/);
   assert.match(out.stdout, /\nDeep scan\n/);
-  assert.equal(out.stderr, "Deep scan will contact: api.osv.dev (package names, ecosystems and versions); Anthropic (the contents of the files Claude reads, through your claude program, only after you agree).\n");
+  assert.equal(out.stderr, "Deep scan will contact no service.\n");
   assert.equal(run("--deep", "--no-osv", "--no-claude", red).status, 2);
   assert.equal(run("--deep", "--no-osv", "--no-claude", red).stderr, "Deep scan will contact no service.\n");
 });
@@ -198,7 +198,7 @@ test("--deep --json puts the deep results and the services under deep, and print
   const parsed = JSON.parse(out.stdout);
   assert.equal(out.stderr, "");
   assert.equal(parsed.rating, "green");
-  assert.deepEqual(parsed.deep.services, [{ service: "api.osv.dev", receives: "package names, ecosystems and versions" }]);
+  assert.deepEqual(parsed.deep.services, []);
   assert.equal(out.status, 0);
 });
 

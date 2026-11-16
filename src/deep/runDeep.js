@@ -12,24 +12,28 @@ const { scanEveryFile } = require("./scanEveryFile");
 const { installTimeEntries } = require("./installTime");
 
 const isRepository = (target) => (target.kind === "github" || target.kind === "git-host") && !target.isFile;
-const hostOf = (target) => (target.kind === "github" ? "github.com" : new URL(target.origin).host);
 
-function servicesFor(target, options) {
-  const services = [];
-  if (isRepository(target)) services.push({ service: hostOf(target), receives: "requests for this repository's commit id and archive" });
-  if (isRepository(target) && options.site) services.push({ service: "findsafeskills.com", receives: "the repository URL" });
-  if (options.osv) services.push({ service: "api.osv.dev", receives: "package names, ecosystems and versions" });
-  if (options.claude) {
-    services.push({ service: "Anthropic", receives: "the contents of the files Claude reads, through your claude program, only after you agree" });
+// The hosts the commit stage contacts for a repository; a local folder is read in place.
+function commitServices(target) {
+  if (target.kind === "github") {
+    return [
+      { service: "api.github.com", receives: "a request for this repository's commit id" },
+      { service: "codeload.github.com", receives: "a request for that commit's archive" },
+    ];
   }
-  return services;
+  if (target.kind === "git-host") return [{ service: new URL(target.origin).host, receives: "requests for this repository's commit id and archive" }];
+  return [];
 }
+
+// Each stage that contacts a service names it here, with what it receives, so the list is complete before any request.
+const SERVICE_STAGES = [commitServices];
+const servicesFor = (target, options) => SERVICE_STAGES.flatMap((stage) => stage(target, options));
 
 // The folder to read: a local folder in place, or a repository's exact commit unpacked into a temporary folder.
 async function openTarget(target, options, deps) {
   if (target.kind === "local-dir") return { root: target.path, ...localCommit(target.path), cleanup: () => {} };
-  const { commit, root, cleanup } = await fetchCommit(target, options.ref, deps.fetchImpl, deps.limits ?? ARCHIVE_LIMITS);
-  return { root, commit, changed: false, changesChecked: true, cleanup };
+  const { commit, root, cleanup } = await fetchCommit(target, options.ref, deps.fetchImpl ?? fetch, deps.limits ?? ARCHIVE_LIMITS);
+  return { root, commit, changed: false, changesChecked: true, note: null, cleanup };
 }
 
 async function runDeep(input, options, deps = {}) {
@@ -45,9 +49,11 @@ async function runDeep(input, options, deps = {}) {
     nonGoals: SAFETY_SCANNER_NON_GOALS.map((g) => g.title),
     deep: {
       services,
+      read: false,
       commit: null,
       changed: false,
       changesChecked: false,
+      note: null,
       leftOut: [],
       installTime: [],
       testFindings: [],
@@ -64,7 +70,7 @@ async function runDeep(input, options, deps = {}) {
   if (deps.onServices) deps.onServices(services);
   let opened;
   try {
-    opened = await openTarget(target, options, { fetchImpl: fetch, ...deps });
+    opened = await openTarget(target, options, deps);
   } catch (err) {
     result.errors.push(err.message);
     return result;
@@ -79,9 +85,11 @@ async function runDeep(input, options, deps = {}) {
       errors: files.length > 0 ? [] : ["no text file to read"],
     });
     Object.assign(result.deep, {
+      read: true,
       commit: opened.commit,
       changed: opened.changed,
       changesChecked: opened.changesChecked,
+      note: opened.note,
       leftOut,
       installTime: installTimeEntries(files),
       testFindings,
