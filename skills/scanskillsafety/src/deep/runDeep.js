@@ -8,7 +8,8 @@ const { posix } = require("path");
 const { ratingFromFindings } = require("../../lib/ratingFromFindings");
 const { SAFETY_SCANNER_NON_GOALS } = require("../../lib/nonGoals");
 const { parseTarget } = require("../parseTarget");
-const { fetchCommit } = require("./archive");
+const { fetchCommit, resolveRef } = require("./archive");
+const { readCommitWithGit, findGit, gitUrl } = require("./gitCommit");
 const { localCommit } = require("./localCommit");
 const { listEveryFile } = require("./everyFile");
 const { scanEveryFile } = require("./scanEveryFile");
@@ -25,16 +26,30 @@ const { formatClaudeUsage } = require("../../lib/deep/claudeUsage");
 
 const isRepository = (target) => (target.kind === "github" || target.kind === "git-host") && !target.isFile;
 
-// The hosts the commit stage contacts for a repository; a local folder is read in place.
-function commitServices(target) {
+// The hosts the commit stage contacts for a repository: the commit id from its API, then a git fetch, or without git its archive;
+// a local folder is read in place.
+function commitServices(target, options, { git }) {
   if (target.kind === "github") {
+    if (git.found) {
+      return [
+        { service: "api.github.com", receives: "a request for this repository's commit id" },
+        { service: "github.com", receives: "a git fetch of this commit, with no credentials sent" },
+      ];
+    }
     return [
       { service: "api.github.com", receives: "requests for this repository's commit id and file list, and for any file the archive leaves out" },
       { service: "codeload.github.com", receives: "a request for that commit's archive" },
     ];
   }
-  if (target.kind === "git-host") return [{ service: new URL(target.origin).host, receives: "requests for this repository, its commit id, file list and archive, and any file the archive leaves out" }];
-  return [];
+  if (target.kind !== "git-host") return [];
+  const host = new URL(target.origin).host;
+  if (git.found) {
+    return [{
+      service: host,
+      receives: "requests for this repository and its commit id, and a git fetch of this commit, with no credentials sent; if the host will not serve that commit to git, its archive and file list, and any file the archive leaves out",
+    }];
+  }
+  return [{ service: host, receives: "requests for this repository, its commit id, file list and archive, and any file the archive leaves out" }];
 }
 
 // A repository's address goes to the site; GitHub is asked how this commit relates to each commit the site scanned.
@@ -74,11 +89,38 @@ function addressErrors(target, options) {
 const SERVICE_STAGES = [commitServices, siteServices, osvServices, claudeServices];
 const servicesFor = (target, options, found) => SERVICE_STAGES.flatMap((stage) => stage(target, options, found));
 
-// The folder to read: a local folder in place, or a repository's exact commit unpacked into a temporary folder.
-async function openTarget(target, options, deps) {
-  if (target.kind === "local-dir") return { root: target.path, ...localCommit(target.path), fetchedSeparately: [], leftOut: [], cleanup: () => {} };
-  const { commit, root, cleanup, fetchedSeparately, leftOut } = await fetchCommit(target, options.ref, deps.fetchImpl ?? fetch, deps.limits ?? COMMIT_LIMITS);
-  return { root, commit, changed: false, changesChecked: true, note: null, fetchedSeparately, leftOut, cleanup };
+// The files to read and where they came from: a local folder in place, or a repository's exact commit, read with git when git
+// is installed and otherwise from the commit's archive.
+async function openTarget(target, options, deps, git) {
+  if (target.kind === "local-dir") return { ...listEveryFile(target.path), ...localCommit(target.path), fetchedSeparately: [], route: null };
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const limits = { ...COMMIT_LIMITS, ...deps.limits };
+  if (!git.found) return fromArchive(target, options.ref, fetchImpl, limits, { method: "archive", reason: "git is not installed" });
+  const commit = await resolveRef(target, options.ref, fetchImpl);
+  try {
+    const { files, leftOut } = await readCommitWithGit({
+      target, commit, ref: options.ref, url: deps.gitUrl ? deps.gitUrl(target) : gitUrl(target), limits, filter: git.filter,
+      env: deps.env ?? process.env, allowFileProtocol: deps.allowFileProtocol === true,
+    });
+    return { files, leftOut, commit, changed: false, changesChecked: true, note: null, fetchedSeparately: [], route: { method: "git" } };
+  } catch (err) {
+    // A Gitea or Forgejo archive comes from the same host the services line names; GitHub's would be another host.
+    if (!err.gitRefused || target.kind !== "git-host") throw err;
+    return fromArchive(target, commit, fetchImpl, limits, { method: "archive", reason: `the host would not serve this commit to git (${err.message})` });
+  }
+}
+
+// A repository's commit read from its archive, unpacked into a temporary folder that is removed once its files are read.
+async function fromArchive(target, ref, fetchImpl, limits, route) {
+  const { commit, root, cleanup, fetchedSeparately, leftOut } = await fetchCommit(target, ref, fetchImpl, limits);
+  try {
+    const listed = listEveryFile(root);
+    // Submodules and links the archive left out are known only from the commit's file list.
+    const allLeftOut = [...listed.leftOut, ...leftOut].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    return { files: listed.files, leftOut: allLeftOut, commit, changed: false, changesChecked: true, note: null, fetchedSeparately, route };
+  } finally {
+    cleanup();
+  }
 }
 
 // The folders a command's relative path may start from: the folder of the file naming it, each folder above it (a plugin's
@@ -171,7 +213,9 @@ async function runDeep(input, options, deps = {}) {
   const badAddresses = addressErrors(target, options);
   const refOnLocal = target.kind === "local-dir" && options.ref !== null && options.ref !== undefined;
   const readable = (target.kind === "local-dir" && !refOnLocal) || isRepository(target);
-  const services = readable && badAddresses.length === 0 ? servicesFor(target, options, { claudeFound: claudePath !== null }) : [];
+  // Whether git is installed decides which hosts a repository's commit comes from, so it is known before the services are named.
+  const git = readable && isRepository(target) ? deps.git ?? findGit(deps.env ?? process.env) : { found: false, filter: false };
+  const services = readable && badAddresses.length === 0 ? servicesFor(target, options, { claudeFound: claudePath !== null, git }) : [];
   const result = {
     target: input,
     rating: null,
@@ -189,6 +233,7 @@ async function runDeep(input, options, deps = {}) {
       note: null,
       leftOut: [],
       fetchedSeparately: [],
+      route: null,
       installTime: [],
       testFindings: [],
       launchedTests: [],
@@ -217,52 +262,46 @@ async function runDeep(input, options, deps = {}) {
   const pinned = claudePath && pinsCommit && isRepository(target) && !options.ref ? { ...options, ref: agreedCommit } : options;
   let opened;
   try {
-    opened = await openTarget(target, pinned, deps);
+    opened = await openTarget(target, pinned, deps, git);
   } catch (err) {
     result.errors.push(err.message);
     return result;
   }
-  try {
-    const listed = listEveryFile(opened.root);
-    const { files } = listed;
-    // Submodules and links the archive left out are known only from the commit's file list.
-    const leftOut = [...listed.leftOut, ...opened.leftOut].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-    const entries = installTimeEntries(files);
-    const reading = claudePath && files.length > 0 ? claudePlan(target, files, entries, opened, options.model) : null;
-    if (reading && options.claudeOk && options.claudeOk !== reading.plan.id) {
-      result.deep.commit = opened.commit;
-      result.errors.push(`the target or model changed since the plan (plan id ${options.claudeOk}, now ${reading.plan.id}); run --deep again without --claude-ok`);
-      return result;
-    }
-    const { findings: fileFindings, testFindings, launched } = scanEveryFile(files);
-    const { findings: packageFindings, packages } = await packageCheck(files, leftOut, options, deps.fetchImpl ?? fetch);
-    const site = options.site ? await compareWithSite(target, opened.commit, deps.fetchImpl ?? fetch) : { status: "off" };
-    const findings = [...fileFindings, ...packageFindings];
-    Object.assign(result, {
-      rating: files.length > 0 ? ratingFromFindings(findings) : null,
-      scannedFiles: files.map((f) => f.path),
-      findings,
-      errors: files.length > 0 ? [] : ["no text file to read"],
-    });
-    Object.assign(result.deep, {
-      read: true,
-      commit: opened.commit,
-      changed: opened.changed,
-      changesChecked: opened.changesChecked,
-      note: opened.note,
-      leftOut,
-      fetchedSeparately: opened.fetchedSeparately,
-      installTime: entries,
-      testFindings,
-      launchedTests: launched,
-      site,
-      packages,
-    });
-    if (reading) result.deep.claude = await claudeStage(reading, files, options, claudePath, deps);
+  const { files, leftOut } = opened;
+  const entries = installTimeEntries(files);
+  const reading = claudePath && files.length > 0 ? claudePlan(target, files, entries, opened, options.model) : null;
+  if (reading && options.claudeOk && options.claudeOk !== reading.plan.id) {
+    result.deep.commit = opened.commit;
+    result.errors.push(`the target or model changed since the plan (plan id ${options.claudeOk}, now ${reading.plan.id}); run --deep again without --claude-ok`);
     return result;
-  } finally {
-    opened.cleanup();
   }
+  const { findings: fileFindings, testFindings, launched } = scanEveryFile(files);
+  const { findings: packageFindings, packages } = await packageCheck(files, leftOut, options, deps.fetchImpl ?? fetch);
+  const site = options.site ? await compareWithSite(target, opened.commit, deps.fetchImpl ?? fetch) : { status: "off" };
+  const findings = [...fileFindings, ...packageFindings];
+  Object.assign(result, {
+    rating: files.length > 0 ? ratingFromFindings(findings) : null,
+    scannedFiles: files.map((f) => f.path),
+    findings,
+    errors: files.length > 0 ? [] : ["no text file to read"],
+  });
+  Object.assign(result.deep, {
+    read: true,
+    commit: opened.commit,
+    changed: opened.changed,
+    changesChecked: opened.changesChecked,
+    note: opened.note,
+    leftOut,
+    fetchedSeparately: opened.fetchedSeparately,
+    route: opened.route,
+    installTime: entries,
+    testFindings,
+    launchedTests: launched,
+    site,
+    packages,
+  });
+  if (reading) result.deep.claude = await claudeStage(reading, files, options, claudePath, deps);
+  return result;
 }
 
 module.exports = { runDeep };

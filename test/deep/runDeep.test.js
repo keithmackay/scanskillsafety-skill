@@ -6,7 +6,14 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { runDeep } = require("../../src/deep/runDeep");
+const { runDeep: runDeepWith } = require("../../src/deep/runDeep");
+const { sourceRepository } = require("./gitSource");
+
+// Most tests here read a repository from its archive through fakeFetch, so they say git is not installed; the tests of the git
+// route pass `git: undefined` to look for git as the tool does.
+const NO_GIT = { found: false, filter: false };
+const runDeep = (input, options, deps = {}) => runDeepWith(input, options, { git: NO_GIT, ...deps });
+const hasGit = spawnSync("git", ["--version"]).status === 0;
 const { formatDeep, formatServices } = require("../../src/deep/formatDeep");
 const { planReading } = require("../../src/deep/reading");
 const { exitCodeFor } = require("../../src/scanTarget");
@@ -130,6 +137,71 @@ test("a file .gitattributes keeps out of the archive is fetched, scanned and nam
   const out = formatDeep(result);
   assert.match(out, /Left out of the archive by \.gitattributes; fetched separately: hooks\/hooks\.json\n/);
   assert.match(out, /\n {2}lib: submodule, not read/);
+});
+
+test("with git installed, a repository is read with git: every file, one .gitattributes keeps out of an archive too", { skip: hasGit ? false : "no git here" }, async () => {
+  const source = sourceRepository();
+  const fetchImpl = fakeFetch({ "https://api.github.com/repos/o/r/commits/HEAD": source.commit });
+  const result = await runDeep("https://github.com/o/r", ALL_OFF, { git: undefined, fetchImpl, gitUrl: () => source.url, allowFileProtocol: true });
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.deep.commit, source.commit);
+  assert.deepEqual(result.deep.route, { method: "git" });
+  assert.deepEqual(result.scannedFiles, [".gitattributes", "SKILL.md", "hooks/hooks.json", "skills/x/SKILL.md"]);
+  assert.deepEqual(result.deep.leftOut.map((f) => `${f.path}: ${f.reason}`), [
+    "big.txt: larger than 5 MB", "img.png: binary", "link: symbolic link, not followed", "sub: submodule, not read",
+  ]);
+  assert.deepEqual(result.deep.fetchedSeparately, []);
+  assert.deepEqual(fetchImpl.calls, ["https://api.github.com/repos/o/r/commits/HEAD"]);
+  assert.match(formatDeep(result), /\nCommit: [0-9a-f]{40}\nRead with git\n/);
+});
+
+test("without git, a repository is read from its archive, and the output says why", async () => {
+  const bin = makeTree({});
+  fs.symlinkSync(spawnSync("sh", ["-c", "command -v tar"], { encoding: "utf-8" }).stdout.trim(), path.join(bin, "tar"));
+  const tgz = makeTarball({ "r-abc/SKILL.md": "Formats tables." });
+  const fetchImpl = fakeFetch({
+    "https://api.github.com/repos/o/r/commits/HEAD": SHA,
+    [`https://codeload.github.com/o/r/tar.gz/${SHA}`]: { body: tgz },
+    ...treeRoute(SHA),
+  });
+  const events = [];
+  const result = await runDeep("https://github.com/o/r", ALL_OFF, { git: undefined, env: { ...process.env, PATH: bin }, fetchImpl, onServices: (s) => events.push(s) });
+  assert.deepEqual(result.deep.route, { method: "archive", reason: "git is not installed" });
+  assert.deepEqual(result.scannedFiles, ["SKILL.md"]);
+  assert.deepEqual(events[0].map((s) => s.service), ["api.github.com", "codeload.github.com"]);
+  assert.match(formatDeep(result), /\nRead from the archive; git is not installed\n/);
+});
+
+test("with git, the services named are the commit id request and a git fetch with no credentials sent", async () => {
+  const services = async (input) => (await runDeep(input, ALL_OFF, { git: { found: true, filter: true }, fetchImpl: fakeFetch({}) })).deep.services;
+  assert.deepEqual(await services("https://github.com/o/r"), [
+    { service: "api.github.com", receives: "a request for this repository's commit id" },
+    { service: "github.com", receives: "a git fetch of this commit, with no credentials sent" },
+  ]);
+  assert.deepEqual(await services("https://code.example/o/r"), [{
+    service: "code.example",
+    receives: "requests for this repository and its commit id, and a git fetch of this commit, with no credentials sent; if the host will not serve that commit to git, its archive and file list, and any file the archive leaves out",
+  }]);
+});
+
+test("a Gitea or Forgejo host that will not serve the commit to git is read from its archive; GitHub's refusal is an error", { skip: hasGit ? false : "no git here" }, async () => {
+  const source = sourceRepository();
+  const api = "https://code.example/api/v1/repos/o/r";
+  const query = "limit=1&stat=false&verification=false&files=false";
+  const fetchImpl = fakeFetch({
+    [`${api}/commits?${query}`]: { body: [{ sha: SHA }] },
+    [`${api}/commits?sha=${SHA}&${query}`]: { body: [{ sha: SHA }] },
+    [`${api}/archive/${SHA}.tar.gz`]: { body: makeTarball({ "r-abc/SKILL.md": "Formats tables." }) },
+    [`${api}/git/trees/${SHA}?recursive=true&per_page=10000&page=1`]: { body: { truncated: false, page: 1, tree: [] } },
+  });
+  const deps = { git: undefined, fetchImpl, gitUrl: () => source.url, allowFileProtocol: true };
+  const gitea = await runDeep("https://code.example/o/r", ALL_OFF, deps);
+  assert.equal(gitea.deep.route.method, "archive");
+  assert.match(gitea.deep.route.reason, /^the host would not serve this commit to git \(git could not fetch commit c{40} from file:/);
+  assert.deepEqual(gitea.scannedFiles, ["SKILL.md"]);
+  const github = await runDeep("https://github.com/o/r", ALL_OFF, { ...deps, fetchImpl: fakeFetch({ "https://api.github.com/repos/o/r/commits/HEAD": SHA }) });
+  assert.equal(github.rating, null);
+  assert.match(github.errors[0], /^git could not fetch commit c{40} from file:/);
 });
 
 test("a commit whose file list the host cut short gives no rating", async () => {
@@ -323,7 +395,7 @@ test("a hostile lockfile cannot write terminal escapes into the text output", as
 
 test("the text output's findsafeskills section: each listing's rating, page and how its scans relate to this commit", () => {
   const base = { target: "x", rating: "green", scannedFiles: [], findings: [], notices: [], errors: [], nonGoals: [] };
-  const deep = { read: true, commit: SHA, changed: false, changesChecked: true, note: null, leftOut: [], fetchedSeparately: [], installTime: [], testFindings: [], launchedTests: [], packages: { status: "off" }, claude: { status: "off" } };
+  const deep = { read: true, commit: SHA, changed: false, changesChecked: true, note: null, leftOut: [], fetchedSeparately: [], route: null, installTime: [], testFindings: [], launchedTests: [], packages: { status: "off" }, claude: { status: "off" } };
   const out = (site) => formatDeep({ ...base, deep: { ...deep, site } });
   const page = { url: "https://findsafeskills.com/listings/o-r", rating: "yellow", scannedAt: "2026-10-30T10:00:00.000Z" };
   assert.match(out({ status: "off" }), /\nfindsafeskills: not compared \(--no-site\)\n/);
@@ -454,7 +526,7 @@ test("the text output adds a Deep scan section", async () => {
 
 test("the text output names the commit and whether the folder has changes", () => {
   const base = { target: "x", rating: "green", scannedFiles: [], findings: [], notices: [], errors: [], nonGoals: [] };
-  const deep = { read: true, commit: SHA, changed: false, changesChecked: true, note: null, leftOut: [], fetchedSeparately: [], installTime: [], testFindings: [], launchedTests: [], site: { status: "off" }, packages: { status: "off" }, claude: { status: "off" } };
+  const deep = { read: true, commit: SHA, changed: false, changesChecked: true, note: null, leftOut: [], fetchedSeparately: [], route: null, installTime: [], testFindings: [], launchedTests: [], site: { status: "off" }, packages: { status: "off" }, claude: { status: "off" } };
   assert.match(formatDeep({ ...base, deep }), new RegExp(`Commit: ${SHA}\n`));
   assert.match(formatDeep({ ...base, deep: { ...deep, changed: true } }), /with uncommitted changes: the files scanned are not exactly any commit/);
   assert.match(formatDeep({ ...base, deep: { ...deep, changesChecked: false, note: "could not check for uncommitted changes" } }), new RegExp(`Commit: ${SHA}; could not check for uncommitted changes\n`));
@@ -476,7 +548,7 @@ test("a folder with no text file to read has no rating", async () => {
 
 test("the text output's Packages section: how many were checked, the malicious ones, known vulnerabilities apart, and what was not read", () => {
   const base = { target: "x", rating: "red", scannedFiles: [], notices: [], errors: [], nonGoals: [] };
-  const deep = { read: true, commit: SHA, changed: false, changesChecked: true, note: null, leftOut: [], fetchedSeparately: [], installTime: [], testFindings: [], launchedTests: [], site: { status: "off" }, claude: { status: "off" } };
+  const deep = { read: true, commit: SHA, changed: false, changesChecked: true, note: null, leftOut: [], fetchedSeparately: [], route: null, installTime: [], testFindings: [], launchedTests: [], site: { status: "off" }, claude: { status: "off" } };
   const malicious = { severity: "critical", category: "malicious-package", source: "osv", file: "package-lock.json", line: 8, detail: "flatmap-stream@0.1.1 is listed as malicious in OSV (MAL-2025-20690)" };
   const packages = {
     status: "done",

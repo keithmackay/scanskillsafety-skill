@@ -147,11 +147,16 @@ function folderWithin(tree, subpath) {
   return real === realTree || real.startsWith(realTree + path.sep) ? folder : null;
 }
 
+// The full commit id that ref names (or the link's ref, or the default branch), from the repository's own host.
+async function resolveRef(target, ref, fetchImpl) {
+  const wanted = ref ?? target.ref ?? null;
+  return resolveCommit(target, wanted, endpoints(target, wanted).commitUrl, fetchImpl);
+}
+
 async function fetchCommit(target, ref, fetchImpl, givenLimits = COMMIT_LIMITS) {
   const limits = { ...COMMIT_LIMITS, ...givenLimits };
-  const wanted = ref ?? target.ref ?? null;
-  const { commitUrl, archiveUrl } = endpoints(target, wanted);
-  const commit = await resolveCommit(target, wanted, commitUrl, fetchImpl);
+  const commit = await resolveRef(target, ref, fetchImpl);
+  const { archiveUrl } = endpoints(target, null);
   const { dir, cleanup } = temporaryFolder("scanskillsafety-deep-");
   try {
     const archive = path.join(dir, "archive.tar.gz");
@@ -173,4 +178,4 @@ async function fetchCommit(target, ref, fetchImpl, givenLimits = COMMIT_LIMITS) 
   }
 }
 
-module.exports = { fetchCommit };
+module.exports = { fetchCommit, resolveRef };
