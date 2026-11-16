@@ -6,7 +6,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 const { createHash } = require("crypto");
-const { runClaude } = require("../../src/deep/runClaude");
+const { runClaude, findClaude } = require("../../src/deep/runClaude");
 const { chooseForReading, planReading, readEveryFile, quoteLine } = require("../../src/deep/reading");
 const { READING_SYSTEM_PROMPT, READING_SCHEMA } = require("../../lib/deep/reading");
 const { makeTree } = require("../helpers");
@@ -39,6 +39,76 @@ test("runClaude: a program that is not there resolves as missing", async () => {
   assert.deepEqual(await runClaude({ args: [], prompt: "x", timeoutMs: 5000, command: path.join(makeTree({}), "no-claude") }), { missing: true });
 });
 
+test("runClaude: a call that keeps running through SIGTERM settles at its time limit and is killed after the grace period", { skip }, async () => {
+  const { env, log } = fakeEnv({ FAKE_CLAUDE_MODE: "stubborn" });
+  const started = Date.now();
+  const run = await runClaude({ args: [], prompt: "x", timeoutMs: 500, killAfterMs: 500, command: FAKE, env });
+  assert.equal(run.timedOut, true);
+  assert.ok(Date.now() - started < 2000, "settles without waiting for the child to end");
+  const [{ pid }] = fakeClaudeCalls(log);
+  const alive = () => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const deadline = Date.now() + 5000;
+  while (alive() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(alive(), false);
+});
+
+test("runClaude: a reply over 16 MB is a failed call", { skip }, async () => {
+  const { env } = fakeEnv({ FAKE_CLAUDE_MODE: "huge" });
+  const run = await runClaude({ args: [], prompt: "x", timeoutMs: 30_000, command: FAKE, env });
+  assert.equal(run.error, "the reply was too large");
+  assert.equal(run.stdout, "");
+});
+
+test("runClaude: a program that cannot be started is a failed call with its reason, and its folder is removed", async () => {
+  for (const command of [makeTree({}), "bad\0name"]) {
+    const tmpDir = makeTree({});
+    const run = await runClaude({ args: [], prompt: "x", timeoutMs: 5000, command, tmpDir });
+    assert.equal(typeof run.error, "string", command);
+    assert.ok(run.error.length > 0);
+    assert.deepEqual(fs.readdirSync(tmpDir), [], command);
+  }
+});
+
+test("runClaude: the claude program does not inherit the marks of a Claude Code session; everything else, auth included, passes", { skip }, async () => {
+  const { env, log } = fakeEnv({ CLAUDECODE: "1", CLAUDE_CODE_SSE_PORT: "1234", ANTHROPIC_API_KEY: "kept", ANTHROPIC_BASE_URL: "http://kept" });
+  await runClaude({ args: [], prompt: "x", timeoutMs: 5000, command: FAKE, env });
+  const [{ envKeys }] = fakeClaudeCalls(log);
+  assert.ok(!envKeys.includes("CLAUDECODE"));
+  assert.ok(!envKeys.includes("CLAUDE_CODE_SSE_PORT"));
+  assert.ok(envKeys.includes("ANTHROPIC_API_KEY") && envKeys.includes("ANTHROPIC_BASE_URL") && envKeys.includes("FAKE_CLAUDE_LOG"));
+});
+
+test("a call that could not be made or whose reply was too large leaves its files not read", async () => {
+  const run = async () => ({ stdout: "", exitCode: null, timedOut: false, error: "the reply was too large" });
+  const outcome = await read(planReading([{ path: "a.md", text: "x" }], "haiku").calls, process.env, { run });
+  assert.deepEqual(outcome.notRead, [{ path: "a.md", reason: "the call failed" }]);
+});
+
+test("findClaude: an executable claude on PATH or CLAUDE_BIN, found without running it", () => {
+  const dir = makeTree({ claude: "#!/bin/sh\n", "not-run": "x" });
+  fs.chmodSync(path.join(dir, "claude"), 0o755);
+  assert.deepEqual(findClaude({ PATH: dir }, "darwin"), { path: path.join(dir, "claude") });
+  assert.deepEqual(findClaude({ PATH: dir, CLAUDE_BIN: path.join(dir, "claude") }, "darwin"), { path: path.join(dir, "claude") });
+  assert.deepEqual(findClaude({ PATH: dir, CLAUDE_BIN: path.join(dir, "not-run") }, "darwin"), { reason: "the claude CLI is not installed" });
+  assert.deepEqual(findClaude({ PATH: makeTree({}) }, "darwin"), { reason: "the claude CLI is not installed" });
+});
+
+test("findClaude on Windows: claude.exe is used; a claude.cmd alone is named as something it cannot start safely", () => {
+  const cmdOnly = makeTree({ "claude.cmd": "@echo off", "claude.bat": "@echo off" });
+  assert.deepEqual(findClaude({ PATH: cmdOnly }, "win32"), {
+    reason: "the claude CLI is installed as claude.cmd, which this tool cannot start safely without a shell (Windows)",
+  });
+  const withExe = makeTree({ "claude.cmd": "@echo off", "claude.exe": "MZ" });
+  assert.deepEqual(findClaude({ Path: withExe }, "win32"), { path: path.join(withExe, "claude.exe") });
+});
+
 test("runClaude: a call past its time limit is stopped and said to have timed out", { skip }, async () => {
   const { env } = fakeEnv({ FAKE_CLAUDE_MODE: "sleep" });
   const started = Date.now();
@@ -51,7 +121,7 @@ test("each call is a locked-down claude -p with the reading prompt and schema, i
   const root = makeTree({ "SKILL.md": "Formats tables." });
   const { reading } = chooseForReading([{ path: "SKILL.md", text: "Formats tables." }], NO_PLACES);
   const { env, log } = fakeEnv();
-  const outcome = await read(planReading(reading).calls, env);
+  const outcome = await read(planReading(reading, "haiku").calls, env);
   assert.equal(outcome.status, "done");
   const [call] = fakeClaudeCalls(log);
   const argv = call.argv;
@@ -125,20 +195,30 @@ test("reads risky files first, then what runs at install and start-up, then what
   assert.deepEqual(reading.map((f) => f.path), ["b/run.py", "tools/fetch.py", "package.json", "setup.js", "SKILL.md", "a.md", "z.md"]);
 });
 
-test("the plan id is the SHA-256 of every file read, path and text, in reading order; any change makes another", () => {
+test("the plan id is a digest of the model and every file read, its path and the SHA-256 of its text, in reading order", () => {
   const reading = [{ path: "a.md", text: "one" }, { path: "b.md", text: "two" }];
-  const expected = createHash("sha256").update("a.md\0one\0b.md\0two\0").digest("hex");
-  const plan = planReading(reading);
+  const sha = (text) => createHash("sha256").update(text).digest("hex");
+  const expected = sha(`5:haiku4:a.md${sha("one")}4:b.md${sha("two")}`).slice(0, 32);
+  const plan = planReading(reading, "haiku");
   assert.equal(plan.planId, expected);
   assert.equal(plan.calls.length, 1);
   assert.equal(plan.estimate.calls, 1);
   assert.ok(plan.estimate.inputTokens > 1100);
-  assert.notEqual(planReading([{ path: "a.md", text: "one" }, { path: "b.md", text: "two!" }]).planId, expected);
+  assert.notEqual(planReading([{ path: "a.md", text: "one" }, { path: "b.md", text: "two!" }], "haiku").planId, expected);
+  assert.notEqual(planReading(reading, "sonnet").planId, expected);
+  assert.notEqual(planReading([{ path: "b.md", text: "two" }, { path: "a.md", text: "one" }], "haiku").planId, expected);
+});
+
+test("text holding NUL characters cannot make two different readings share a plan id", () => {
+  const one = planReading([{ path: "a", text: "x\0b\0y" }], "haiku").planId;
+  const two = planReading([{ path: "a", text: "x" }, { path: "b", text: "y" }], "haiku").planId;
+  const three = planReading([{ path: "a\0b", text: "y" }], "haiku").planId;
+  assert.equal(new Set([one, two, three]).size, 3);
 });
 
 test("a file larger than one call is split, and every part is sent exactly once", { skip }, async () => {
   const reading = [{ path: "big.md", text: bigText(150_000) }, { path: "small.md", text: "hi" }];
-  const { calls } = planReading(reading);
+  const { calls } = planReading(reading, "haiku");
   assert.ok(calls.length >= 3);
   const { env, log } = fakeEnv();
   const outcome = await read(calls, env);
@@ -155,7 +235,7 @@ test("a file larger than one call is split, and every part is sent exactly once"
 
 test("a file's verdict is the worst of its parts", { skip }, async () => {
   const reading = [{ path: "big.md", text: bigText(100_000) }];
-  const { calls } = planReading(reading);
+  const { calls } = planReading(reading, "haiku");
   const reply = replyFile({ files: [{ path: "big.md", chunk: 1, verdict: "benign", findings: [] }, { path: "big.md", chunk: 2, verdict: "malicious", findings: [] }] });
   const { env } = fakeEnv({ FAKE_CLAUDE_REPLY: reply });
   const outcome = await read(calls, env);
@@ -164,7 +244,7 @@ test("a file's verdict is the worst of its parts", { skip }, async () => {
 
 test("a file with a part Claude gave no verdict for is listed as not read, even if other parts were", { skip }, async () => {
   const reading = [{ path: "big.md", text: bigText(100_000) }, { path: "ok.md", text: "fine" }];
-  const { calls } = planReading(reading);
+  const { calls } = planReading(reading, "haiku");
   const reply = replyFile({ files: [{ path: "big.md", chunk: 1, verdict: "benign", findings: [] }, { path: "ok.md", chunk: 1, verdict: "benign", findings: [] }] });
   const { env } = fakeEnv({ FAKE_CLAUDE_REPLY: reply });
   const outcome = await read(calls, env);
@@ -173,7 +253,7 @@ test("a file with a part Claude gave no verdict for is listed as not read, even 
   assert.deepEqual(outcome.notRead, [{ path: "big.md", reason: "Claude gave no verdict on part of it" }]);
 });
 
-const threeCalls = () => planReading([{ path: "a.md", text: bigText(40_000) }, { path: "b.md", text: bigText(40_000) }, { path: "c.md", text: bigText(40_000) }]).calls;
+const threeCalls = () => planReading([{ path: "a.md", text: bigText(40_000) }, { path: "b.md", text: bigText(40_000) }, { path: "c.md", text: bigText(40_000) }], "haiku").calls;
 
 test("a refusal stops the reading and lists every file not read", { skip }, async () => {
   const { env, log } = fakeEnv({ FAKE_CLAUDE_MODE: "refuse" });
@@ -181,7 +261,11 @@ test("a refusal stops the reading and lists every file not read", { skip }, asyn
   assert.equal(outcome.status, "stopped");
   assert.equal(outcome.stopReason, "Claude declined to read part of it");
   assert.equal(fakeClaudeCalls(log).length, 1);
-  assert.deepEqual(outcome.notRead.map((f) => f.path), ["a.md", "b.md", "c.md"]);
+  assert.deepEqual(outcome.notRead, [
+    { path: "a.md", reason: "refused" },
+    { path: "b.md", reason: "not reached: the reading stopped" },
+    { path: "c.md", reason: "not reached: the reading stopped" },
+  ]);
   assert.deepEqual(outcome.files, []);
 });
 
@@ -190,7 +274,9 @@ test("a usage limit stops the reading", { skip }, async () => {
   const outcome = await read(threeCalls(), env);
   assert.equal(outcome.stopReason, "Claude usage limit reached");
   assert.equal(fakeClaudeCalls(log).length, 1);
-  assert.deepEqual(outcome.notRead.map((f) => f.path), ["a.md", "b.md", "c.md"]);
+  assert.deepEqual(outcome.notRead.map((f) => [f.path, f.reason]), [
+    ["a.md", "stopped by the usage limit"], ["b.md", "not reached: the reading stopped"], ["c.md", "not reached: the reading stopped"],
+  ]);
 });
 
 test("two failed calls in a row stop the reading", { skip }, async () => {
@@ -209,7 +295,7 @@ test("two failed calls in a row stop the reading", { skip }, async () => {
 
 test("a call past its time limit leaves its files not read and the reading goes on", { skip }, async () => {
   const { env } = fakeEnv({ FAKE_CLAUDE_MODE: "sleep" });
-  const outcome = await read(planReading([{ path: "a.md", text: "x" }]).calls, env, { timeoutMs: 300 });
+  const outcome = await read(planReading([{ path: "a.md", text: "x" }], "haiku").calls, env, { timeoutMs: 300 });
   assert.equal(outcome.status, "done");
   assert.deepEqual(outcome.notRead, [{ path: "a.md", reason: "the call failed" }]);
 });
@@ -234,7 +320,7 @@ test("the budget stops the reading after a call whose reported usage passed it",
 });
 
 test("the claude program gone by the time of the call stops the reading", async () => {
-  const outcome = await read(planReading([{ path: "a.md", text: "x" }]).calls, process.env, { command: path.join(makeTree({}), "no-claude") });
+  const outcome = await read(planReading([{ path: "a.md", text: "x" }], "haiku").calls, process.env, { command: path.join(makeTree({}), "no-claude") });
   assert.equal(outcome.stopReason, "the claude CLI is not installed");
   assert.deepEqual(outcome.notRead, [{ path: "a.md", reason: "not reached: the reading stopped" }]);
 });

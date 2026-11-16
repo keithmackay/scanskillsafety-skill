@@ -6,8 +6,8 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-// FAKE_CLAUDE_REPLY: a JSON file holding the structured output to give. FAKE_CLAUDE_MODE: refuse, limit, garbage or sleep; with
-// neither, it gives every part it was sent the verdict FAKE_CLAUDE_VERDICT (benign by default). FAKE_CLAUDE_TOKENS: the input
+// FAKE_CLAUDE_REPLY: a JSON file holding the structured output to give. FAKE_CLAUDE_MODE: refuse, limit, garbage, sleep,
+// stubborn (keeps running through SIGTERM) or huge (a reply over 16 MB); with neither, it gives every part it was sent the verdict FAKE_CLAUDE_VERDICT (benign by default). FAKE_CLAUDE_TOKENS: the input
 // tokens it reports for each call (100 by default).
 const SCRIPT = String.raw`
 const fs = require("fs");
@@ -17,13 +17,18 @@ process.stdin.setEncoding("utf-8");
 process.stdin.on("data", (d) => { stdin += d; });
 process.stdin.on("end", () => {
   if (env.FAKE_CLAUDE_LOG) {
-    const entry = { argv: process.argv.slice(2), stdin, cwd: process.cwd(), cwdEntries: fs.readdirSync(process.cwd()) };
+    const entry = { argv: process.argv.slice(2), stdin, cwd: process.cwd(), cwdEntries: fs.readdirSync(process.cwd()), pid: process.pid, envKeys: Object.keys(env) };
     fs.appendFileSync(env.FAKE_CLAUDE_LOG, JSON.stringify(entry) + "\n");
   }
   const usage = { input_tokens: Number(env.FAKE_CLAUDE_TOKENS || 100), output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
   const reply = (fields) => process.stdout.write(JSON.stringify({ type: "result", is_error: false, usage, total_cost_usd: 0.01, ...fields }));
   const mode = env.FAKE_CLAUDE_MODE;
   if (mode === "sleep") return setTimeout(() => {}, 600000);
+  if (mode === "stubborn") {
+    process.on("SIGTERM", () => {});
+    return setInterval(() => {}, 1000);
+  }
+  if (mode === "huge") return process.stdout.write("x".repeat(17 * 1024 * 1024));
   if (mode === "garbage") return process.stdout.write("this is not JSON");
   if (mode === "refuse") return reply({ stop_reason: "refusal", result: "I will not read this." });
   if (mode === "limit") {

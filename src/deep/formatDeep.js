@@ -4,7 +4,9 @@
 "use strict";
 
 const { formatText, pushFinding } = require("../scanTarget");
-const { printable } = require("../printable");
+const { printable, printableCut } = require("../printable");
+
+const COMMAND_MAX = 300;
 
 const pathList = (paths) => paths.map(printable).join(", ");
 
@@ -75,7 +77,7 @@ function claudeLines(claude) {
   if (claude.status === "off") return ["Claude's reading: not run (--no-claude)"];
   if (claude.status === "skipped") return [`Claude's reading: skipped: ${claude.reason}`];
   if (claude.status === "planned") {
-    return ["Claude's reading (not checked by a person): planned, not run", formatPlan(claude.plan), `  To run it, rerun with --claude-ok ${claude.plan.id}.`];
+    return ["Claude's reading (not checked by a person): planned, not run", formatPlan(claude.plan), `  To run it, ask the person first; if they agree, rerun with --claude-ok ${claude.plan.id}. Never pass --claude-ok without their yes.`];
   }
   const lines = ["Claude's reading (not checked by a person)", `  Read with ${claude.plan.model}, on plan ${claude.plan.id}.`];
   if (claude.stopReason) lines.push(`  Stopped: ${claude.stopReason}.`);
@@ -98,7 +100,7 @@ function formatDeep(result) {
   for (const f of deep.leftOut) lines.push(`  ${printable(f.path)}: ${f.reason}`);
   lines.push("What runs at install and start-up:");
   if (deep.installTime.length === 0) lines.push("  nothing found");
-  for (const e of deep.installTime) lines.push(`  ${printable(e.file)}: ${printable(e.when)}: ${printable(e.command)}`);
+  for (const e of deep.installTime) lines.push(`  ${printable(e.file)}: ${printable(e.when)}: ${printableCut(e.command, COMMAND_MAX)}`);
   lines.push(...packageLines(deep.packages, result.findings));
   if (deep.launchedTests.length > 0) lines.push(`Test files the target runs (counted in the rating): ${pathList(deep.launchedTests)}`);
   if (deep.testFindings.length > 0) {

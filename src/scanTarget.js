@@ -65,8 +65,8 @@ async function scanTarget(input, { fetchImpl = fetch } = {}) {
 
 function pushFinding(lines, f, label) {
   const where = f.line ? `${printable(f.file)}:${f.line}` : printable(f.file);
-  lines.push(`  ${where} [${label}] ${f.category}: ${f.detail}`);
-  if (f.excerpt) lines.push(`      > ${f.excerpt}`);
+  lines.push(`  ${where} [${label}] ${f.category}: ${printable(f.detail)}`);
+  if (f.excerpt) lines.push(`      > ${printable(f.excerpt)}`);
 }
 
 function formatText(result) {

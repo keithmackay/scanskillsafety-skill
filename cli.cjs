@@ -10,6 +10,7 @@ const { parseCliArgs, DEFAULT_MODEL } = require("./src/deep/args");
 const { runDeep } = require("./src/deep/runDeep");
 const { formatDeep, formatServices, formatPlan } = require("./src/deep/formatDeep");
 const readline = require("readline");
+const { printableStrings } = require("./src/printable");
 
 const { version } = require("./package.json");
 
@@ -53,6 +54,8 @@ Exit codes:
   2  red: at least one critical finding
   3  could not scan (bad arguments, bad target, nothing found, network error), not a clean result
   4  --deep: the rating is not red, but Claude marked a file suspicious or malicious
+     With --deep, 0, 1 or 2 while deep.claude.status is planned, skipped or stopped means
+     Claude's reading did not finish: the code is the rating's alone.
 `;
 
 function ask(question) {
@@ -86,11 +89,11 @@ async function main(argv) {
     const interactive = !args.json && Boolean(process.stdin.isTTY && process.stdout.isTTY);
     const onPlan = (plan) => console.error(`Claude's reading (not checked by a person)\n${formatPlan(plan)}`);
     const result = await runDeep(args.target, args.deep, { onServices, interactive, onPlan, ask });
-    console.log(args.json ? JSON.stringify(result, null, 2) : formatDeep(result));
+    console.log(args.json ? JSON.stringify(printableStrings(result), null, 2) : formatDeep(result));
     return exitCodeFor(result);
   }
   const result = await scanTarget(args.target);
-  console.log(args.json ? JSON.stringify(result, null, 2) : formatText(result));
+  console.log(args.json ? JSON.stringify(printableStrings(result), null, 2) : formatText(result));
   return exitCodeFor(result);
 }
 

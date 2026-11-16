@@ -256,3 +256,22 @@ async function allRemoved(fn) {
     assert.equal(fs.existsSync(dir), false, `${dir} is removed`);
   }
 }
+
+test("tar's complaint is cut to 300 characters with control and format characters replaced", { skip: process.platform === "win32" ? "the stand-in tar is a POSIX script" : false }, async () => {
+  const tgz = makeTarball({ "r-abc/SKILL.md": "hi" });
+  const bin = makeTree({});
+  fs.writeFileSync(path.join(bin, "tar"), `#!${process.execPath}\nprocess.stderr.write("\\u0007\\u202e" + "e".repeat(1000));\nprocess.exitCode = 2;\n`, { mode: 0o755 });
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${savedPath}`;
+  try {
+    await assert.rejects(fetchCommit(github, "main", fakeFetch(githubRoutes(tgz))), (err) => {
+      const said = /^could not unpack the archive \(tar: (.*)\)$/s.exec(err.message);
+      assert.ok(said, err.message);
+      assert.equal(Array.from(said[1]).length, 300);
+      assert.doesNotMatch(said[1], /[\p{Cc}\p{Cf}]/u);
+      return true;
+    });
+  } finally {
+    process.env.PATH = savedPath;
+  }
+});

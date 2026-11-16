@@ -75,15 +75,16 @@ function installPaths(entries, files) {
   return [...entries.map((e) => e.file), ...named];
 }
 
-// What Claude would read and what it would cost; the plan id is the commit for a repository, the text itself for a local folder.
+// What Claude would read and what it would cost. The plan id pins the model and the exact text read, and for a repository the
+// commit too ("<commit>:<digest>"), so a --claude-ok given for it reads nothing else.
 function claudePlan(target, files, entries, opened, model) {
   const agentPaths = files.map((f) => f.path).filter(isDiscoverable);
   const { reading, leftOut } = chooseForReading(files, { installPaths: installPaths(entries, files), agentPaths });
-  const { calls, estimate, planId } = planReading(reading);
+  const { calls, estimate, planId } = planReading(reading, model);
   const parts = new Map();
   for (const c of calls.flat()) parts.set(c.path, (parts.get(c.path) ?? 0) + 1);
   const plan = {
-    id: target.kind === "local-dir" ? planId : opened.commit,
+    id: target.kind === "local-dir" ? planId : `${opened.commit}:${planId}`,
     model,
     files: reading.map((f) => ({ path: printable(f.path), parts: parts.get(f.path) })),
     leftOut: leftOut.map((f) => ({ path: printable(f.path), reason: f.reason })),
@@ -136,7 +137,8 @@ async function packageCheck(files, leftOut, options, fetchImpl) {
 
 async function runDeep(input, options, deps = {}) {
   const target = parseTarget(input);
-  const claudePath = options.claude ? findClaude(deps.env ?? process.env) : null;
+  const found = options.claude ? findClaude(deps.env ?? process.env) : null;
+  const claudePath = found?.path ?? null;
   const services = target.kind === "local-dir" || isRepository(target) ? servicesFor(target, options, { claudeFound: claudePath !== null }) : [];
   const result = {
     target: input,
@@ -159,7 +161,7 @@ async function runDeep(input, options, deps = {}) {
       launchedTests: [],
       site: { status: "off" },
       packages: { status: "off" },
-      claude: options.claude && !claudePath ? { status: "skipped", reason: "the claude CLI is not installed" } : { status: "off" },
+      claude: found?.reason ? { status: "skipped", reason: found.reason } : { status: "off" },
     },
   };
   if (target.kind !== "local-dir" && !isRepository(target)) {
@@ -168,7 +170,8 @@ async function runDeep(input, options, deps = {}) {
   }
   if (deps.onServices) deps.onServices(services);
   // Agreeing to a repository's plan pins its commit: with no --ref, that commit is the one read.
-  const pinned = claudePath && options.claudeOk && isRepository(target) && !options.ref ? { ...options, ref: options.claudeOk } : options;
+  const agreedCommit = /^([0-9a-f]{40}|[0-9a-f]{64}):[0-9a-f]+$/.exec(options.claudeOk ?? "")?.[1];
+  const pinned = claudePath && agreedCommit && isRepository(target) && !options.ref ? { ...options, ref: agreedCommit } : options;
   let opened;
   try {
     opened = await openTarget(target, pinned, deps);
@@ -182,7 +185,7 @@ async function runDeep(input, options, deps = {}) {
     const reading = claudePath && files.length > 0 ? claudePlan(target, files, entries, opened, options.model) : null;
     if (reading && options.claudeOk && options.claudeOk !== reading.plan.id) {
       result.deep.commit = opened.commit;
-      result.errors.push(`the target changed since the plan (plan id ${options.claudeOk}, now ${reading.plan.id}); run --deep again without --claude-ok`);
+      result.errors.push(`the target or model changed since the plan (plan id ${options.claudeOk}, now ${reading.plan.id}); run --deep again without --claude-ok`);
       return result;
     }
     const { findings: fileFindings, testFindings, launched } = scanEveryFile(files);

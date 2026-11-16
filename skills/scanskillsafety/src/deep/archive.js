@@ -10,6 +10,7 @@ const { Readable, Transform, Writable } = require("stream");
 const { pipeline } = require("stream/promises");
 const { fetchResponse, fetchText, describeFailure } = require("../fetchRemote");
 const { runTool, describeDuration } = require("./runTool");
+const { printableCut } = require("../printable");
 
 // Endpoint shapes, checked with curl on 2026-11-15:
 // - GitHub: GET api.github.com/repos/<o>/<r>/commits/<ref or HEAD> with "Accept: application/vnd.github.sha" answers the full
@@ -23,6 +24,7 @@ const { runTool, describeDuration } = require("./runTool");
 //   repository's name in lower case.
 const ARCHIVE_LIMITS = { downloadBytes: 200 * 1024 ** 2, unpackedBytes: 1024 ** 3, files: 100_000, downloadMs: 10 * 60 * 1000 };
 const TAR_TIMEOUT_MS = 5 * 60 * 1000;
+const TAR_COMPLAINT_MAX = 300;
 const COMMIT_ID = /^[0-9a-f]{40}$/;
 const GITEA_COMMIT_QUERY = "limit=1&stat=false&verification=false&files=false";
 
@@ -138,7 +140,7 @@ async function checkUnpackedSize(file, limits) {
 function runTar(args) {
   const run = runTool("tar", args, TAR_TIMEOUT_MS);
   if (run.error) throw new Error(`could not unpack the archive (${run.error.message})`);
-  if (run.status !== 0) throw new Error(`could not unpack the archive (tar: ${run.stderr.trim()})`);
+  if (run.status !== 0) throw new Error(`could not unpack the archive (tar: ${printableCut(run.stderr.trim(), TAR_COMPLAINT_MAX)})`);
   return run.stdout;
 }
 
