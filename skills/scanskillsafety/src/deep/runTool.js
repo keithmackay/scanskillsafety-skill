@@ -14,7 +14,8 @@ function describeDuration(ms) {
 
 // options: env (the whole environment the program gets), input (written to its stdin), binary (stdout and stderr as bytes).
 function runTool(program, args, timeoutMs, { env, input, binary = false } = {}) {
-  const run = spawnSync(program, args, { encoding: binary ? "buffer" : "utf-8", maxBuffer: MAX_BUFFER, timeout: timeoutMs, env, input });
+  const bytesIn = typeof input === "string" ? Buffer.from(input, "utf-8") : input;
+  const run = spawnSync(program, args, { encoding: binary ? "buffer" : "utf-8", maxBuffer: MAX_BUFFER, timeout: timeoutMs, env, input: bytesIn });
   if (run.error && run.error.code === "ETIMEDOUT") throw new Error(`${program} did not finish within ${describeDuration(timeoutMs)}`);
   return run;
 }

@@ -29,4 +29,5 @@ test("passes the environment and input it is given, and gives bytes when asked",
   const bytes = runTool("printf", ["a\\000b"], 5000, { binary: true }).stdout;
   assert.ok(Buffer.isBuffer(bytes));
   assert.deepEqual([...bytes], [0x61, 0, 0x62]);
+  assert.deepEqual([...runTool("cat", [], 5000, { input: "é", binary: true }).stdout], [0xc3, 0xa9]);
 });
