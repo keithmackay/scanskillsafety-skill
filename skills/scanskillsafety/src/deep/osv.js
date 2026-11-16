@@ -115,8 +115,10 @@ function maliciousFinding(pkg, id, record) {
   const finding = (severity, detail) => ({ severity, category: "malicious-package", source: "osv", file: pkg.file, line: pkg.line, detail });
   if (pkg.version !== null) return finding("critical", `${pkg.name}@${pkg.version} is listed as malicious in OSV (${id})`);
   if (record && everyVersion(record)) return finding("critical", `${pkg.name} is listed as malicious in OSV, every version (${id})`);
-  const versions = record ? affectedVersionsText(record) : "not fetched";
-  return finding("warning", `${pkg.name} had malicious versions ${versions} (${id}); this project does not pin a version`);
+  if (!record) {
+    return finding("warning", `${pkg.name} has malicious-package records in OSV (${id}); their versions were not fetched, and this project does not pin a version`);
+  }
+  return finding("warning", `${pkg.name} had malicious versions ${affectedVersionsText(record)} (${id}); this project does not pin a version`);
 }
 
 function highestSeverity(ids, details) {

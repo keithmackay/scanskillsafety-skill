@@ -139,7 +139,7 @@ test("names only the services the stages that run contact: a repository's own ho
   const services = async (input, options = ALL_ON) => (await runDeep(input, options, { fetchImpl: fakeFetch({}) })).deep.services;
   assert.deepEqual(await services(makeTree({ "SKILL.md": "hi" })), [OSV_SERVICE]);
   assert.deepEqual(await services(makeTree({ "SKILL.md": "hi" }), { ...ALL_ON, osv: false }), []);
-  assert.deepEqual(await services("https://code.example:8443/o/r"), [{ service: "code.example:8443", receives: "requests for this repository's commit id and archive" }, OSV_SERVICE]);
+  assert.deepEqual(await services("https://code.example:8443/o/r"), [{ service: "code.example:8443", receives: "requests for this repository, its commit id and its archive" }, OSV_SERVICE]);
 });
 
 test("the OSV service is named by the address OSV_URL gives", async () => {

@@ -222,3 +222,57 @@ test("a lockfile left out of the file list could not be read, with the reason it
   const read = readPackages([{ path: "package.json", text: JSON.stringify({ dependencies: { chalk: "^5.0.0" } }) }], leftOut);
   assert.deepEqual(read, { ...EMPTY, couldNotRead: [{ file: "package-lock.json", reason: "larger than 5 MB, not checked" }] });
 });
+
+test("lockfiles with Windows line endings read the same", () => {
+  const crlf = (name) => fixture(name).replace(/\n/g, "\r\n");
+  const cases = [
+    ["yarn.lock", "yarn.classic.lock"], ["yarn.lock", "yarn.berry.lock"], ["pnpm-lock.yaml", "pnpm-lock.v6.yaml"],
+    ["pnpm-lock.yaml", "pnpm-lock.v9.yaml"], ["poetry.lock", "poetry.lock"], ["uv.lock", "uv.lock"], ["requirements.txt", "requirements.txt"],
+    ["package-lock.json", "package-lock.v1.json"], ["package-lock.json", "package-lock.v3.json"],
+  ];
+  for (const [file, name] of cases) {
+    assert.deepEqual(readPackages([{ path: file, text: crlf(name) }]), one(file, name), name);
+  }
+  const pyproject = '[project]\r\ndependencies = [\r\n  "anyio>=4",\r\n  "idna",\r\n]\r\n\r\n[tool.poetry.dependencies]\r\npython = "^3.10"\r\nhttpx = "^0.27"\r\n';
+  assert.deepEqual(readPackages([{ path: "pyproject.toml", text: pyproject }]).packages.map((p) => p.name), ["anyio", "idna", "httpx"]);
+});
+
+test("a lockfile with entries it cannot make out could not be read, rather than read as holding nothing", () => {
+  const read = readPackages([
+    { path: "yarn.lock", text: "# yarn lockfile v1\n\nsomething odd\n  resolved x\n" },
+    { path: "a/pnpm-lock.yaml", text: "lockfileVersion: '9.0'\n\npackages:\n\n  no-version-here:\n    resolution: {}\n" },
+    { path: "b/package-lock.json", text: JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/x": { resolved: "y" } } }) },
+    { path: "c/package-lock.json", text: JSON.stringify({ lockfileVersion: 1, dependencies: { x: { resolved: "y" } } }) },
+    { path: "poetry.lock", text: '[[package]]\nname = "x"\n' },
+    { path: "requirements.txt", text: "# tools\nrequests>=2\n" },
+    { path: "package.json", text: JSON.stringify({ dependencies: { chalk: "^5.0.0" } }) },
+  ]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [
+      { file: "yarn.lock", reason: "no packages found in it" },
+      { file: "a/pnpm-lock.yaml", reason: "no packages found in it" },
+      { file: "b/package-lock.json", reason: "no packages found in it" },
+      { file: "c/package-lock.json", reason: "no packages found in it" },
+      { file: "poetry.lock", reason: "no packages found in it" },
+      { file: "requirements.txt", reason: "no pinned versions in it" },
+    ],
+  });
+});
+
+test("a lockfile that truly lists no dependency is read as holding none", () => {
+  const read = readPackages([
+    { path: "package-lock.json", text: JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" }, "node_modules/w": { link: true, resolved: "w" } } }) },
+    { path: "a/package-lock.json", text: JSON.stringify({ lockfileVersion: 1 }) },
+    { path: "yarn.lock", text: "__metadata:\n  version: 8\n\n\"t@workspace:.\":\n  version: 0.0.0-use.local\n" },
+    { path: "pnpm-lock.yaml", text: "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n" },
+    { path: "uv.lock", text: 'version = 1\n\n[[package]]\nname = "t"\nversion = "0.1.0"\nsource = { editable = "." }\n' },
+    { path: "requirements.txt", text: "# nothing yet\n\n" },
+  ]);
+  assert.deepEqual(read, EMPTY);
+});
+
+test("an oversized Cargo, Go or Ruby lockfile is still listed as not checked", () => {
+  const read = readPackages([], [{ path: "Cargo.lock", reason: "larger than 5 MB" }, { path: "vendor/go.sum", reason: "larger than 5 MB" }]);
+  assert.deepEqual(read, { ...EMPTY, notChecked: ["Cargo.lock"] });
+});

@@ -7,9 +7,16 @@ const { isVendored } = require("./installTime");
 const baseName = (p) => p.slice(p.lastIndexOf("/") + 1);
 const normalisePyPI = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
 const unquote = (s) => s.replace(/^["']|["']$/g, "");
+const linesOf = (text) => text.split(/\r?\n/);
 
 class Unreadable extends Error {}
 const unsupportedVersion = (version) => new Unreadable(`lockfileVersion ${version ?? "(none)"} is not a version it can read`);
+
+// A lockfile with entries but no package read from them is one it could not make out, not one that holds nothing.
+function found(packages, entries, reason = "no packages found in it") {
+  if (entries > 0 && packages.length === 0) throw new Unreadable(reason);
+  return packages;
+}
 
 function parseJson(text) {
   try {
@@ -46,13 +53,15 @@ function readNpmLock(text) {
   const lineOf = jsonKeyLines(text);
   if (version === 2 || version === 3) {
     // Keys without node_modules/ are the project's own workspace folders.
-    return Object.entries(json.packages ?? {})
-      .filter(([key, entry]) => key.includes("node_modules/") && entry && !entry.link && typeof entry.version === "string")
+    const entries = Object.entries(json.packages ?? {}).filter(([key, entry]) => key.includes("node_modules/") && !(entry && entry.link));
+    const packages = entries
+      .filter(([, entry]) => entry && typeof entry.version === "string")
       .map(([key, entry]) => ({
         name: typeof entry.name === "string" ? entry.name : key.slice(key.lastIndexOf("node_modules/") + "node_modules/".length),
         version: entry.version,
         line: lineOf(key),
       }));
+    return found(packages, entries.length);
   }
   if (version === 1) {
     const out = [];
@@ -65,7 +74,7 @@ function readNpmLock(text) {
       }
     };
     walk(json.dependencies);
-    return out;
+    return found(out, Object.keys(json.dependencies ?? {}).length);
   }
   throw unsupportedVersion(version);
 }
@@ -82,16 +91,19 @@ function yarnSpecName(spec) {
 }
 
 function readYarnLock(text) {
-  const berry = /^__metadata:$/m.test(text);
+  const lines = linesOf(text);
+  const berry = lines.includes("__metadata:");
   if (!berry && !text.includes("# yarn lockfile v1")) throw new Unreadable("not a Yarn lockfile it can read");
   const versionLine = berry ? /^ {2}version: "?([^"\s]+)"?$/ : /^ {2}version "([^"]+)"$/;
   const out = [];
   let entry = null;
-  text.split("\n").forEach((line, i) => {
-    if (/^[^\s#].*:$/.test(line)) {
-      const spec = unquote(line.slice(0, -1).split(/,\s*/)[0]);
+  let entries = 0;
+  lines.forEach((line, i) => {
+    if (/^[^\s#]/.test(line)) {
+      const spec = unquote(line.replace(/:$/, "").split(/,\s*/)[0]);
       const skipped = spec === "__metadata" || spec.slice(spec.indexOf("@", 1)).includes("@workspace:");
-      entry = skipped ? null : { name: yarnSpecName(spec), line: i + 1 };
+      if (!skipped) entries++;
+      entry = skipped || !line.endsWith(":") ? null : { name: yarnSpecName(spec), line: i + 1 };
       return;
     }
     const match = entry && versionLine.exec(line);
@@ -100,7 +112,7 @@ function readYarnLock(text) {
       entry = null;
     }
   });
-  return out;
+  return found(out, entries);
 }
 
 const PNPM_VERSIONS = ["6.0", "6.1", "9.0"];
@@ -110,8 +122,10 @@ function readPnpmLock(text) {
   if (!PNPM_VERSIONS.includes(version)) throw unsupportedVersion(version);
   const out = [];
   let inPackages = false;
-  text.split("\n").forEach((line, i) => {
+  let entries = 0;
+  linesOf(text).forEach((line, i) => {
     if (/^\S/.test(line)) inPackages = line === "packages:";
+    if (inPackages && /^ {2}\S/.test(line)) entries++;
     const match = inPackages && /^ {2}(\S.*):$/.exec(line);
     if (!match) return;
     let key = unquote(match[1]).replace(/^\//, "");
@@ -119,18 +133,20 @@ function readPnpmLock(text) {
     const at = key.lastIndexOf("@");
     if (at > 0) out.push({ name: key.slice(0, at), version: key.slice(at + 1), line: i + 1 });
   });
-  return out;
+  return found(out, entries);
 }
 
 // poetry.lock and uv.lock: each [[package]] block's name and version; a block whose source is editable or virtual is the project.
 function readPackageBlocks(text) {
   const out = [];
   let block = null;
+  let entries = 0;
   const finish = () => {
+    if (block && !block.project) entries++;
     if (block && block.name && block.version && !block.project) out.push({ name: block.name, version: block.version, line: block.line });
     block = null;
   };
-  text.split("\n").forEach((line, i) => {
+  linesOf(text).forEach((line, i) => {
     if (line.startsWith("[")) {
       finish();
       if (line.trim() === "[[package]]") block = { name: null, version: null, line: null, project: false };
@@ -144,18 +160,20 @@ function readPackageBlocks(text) {
     if (/^source = \{ *(editable|virtual) *=/.test(line)) block.project = true;
   });
   finish();
-  return out;
+  return found(out, entries);
 }
 
 const PINNED_REQUIREMENT = /^([A-Za-z0-9._-]+)(\[[^\]]*\])?==([^\s;#]+)/;
 
 function readRequirements(text) {
   const out = [];
-  text.split("\n").forEach((line, i) => {
+  let entries = 0;
+  linesOf(text).forEach((line, i) => {
+    if (/^\s*[^\s#-]/.test(line)) entries++;
     const match = PINNED_REQUIREMENT.exec(line);
     if (match) out.push({ name: match[1], version: match[3], line: i + 1 });
   });
-  return out;
+  return found(out, entries, "no pinned versions in it");
 }
 
 const LOCKFILES = {
@@ -198,21 +216,19 @@ function quotedStrings(text, from) {
 
 function pyprojectNames(text) {
   const names = [];
-  const lines = text.split("\n");
+  const lines = linesOf(text);
   let table = null;
-  let offset = 0;
-  for (const line of lines) {
+  lines.forEach((line, i) => {
     const header = /^\[+([^\]]+)\]+\s*$/.exec(line);
     if (header) table = header[1].trim();
     else if (table === "project" && /^dependencies\s*=\s*\[/.test(line)) {
-      const from = offset + line.indexOf("[") + 1;
-      names.push(...quotedStrings(text, from).map((requirement) => requirement.trim().split(/[<>=!~;[ (]/)[0]));
+      const rest = lines.slice(i).join("\n");
+      names.push(...quotedStrings(rest, line.indexOf("[") + 1).map((requirement) => requirement.trim().split(/[<>=!~;[ (]/)[0]));
     } else if (table === "tool.poetry.dependencies") {
       const key = /^(["']?)([A-Za-z0-9._-]+)\1\s*=/.exec(line);
       if (key && key[2] !== "python") names.push(key[2]);
     }
-    offset += line.length + 1;
-  }
+  });
   return names.filter(Boolean);
 }
 
@@ -247,7 +263,9 @@ function readPackages(files, leftOut = []) {
       result.couldNotRead.push({ file: f.path, reason: err.message });
     }
   }
-  for (const f of leftOut.filter((l) => !isVendored(l.path) && lockfileKind(l.path))) {
+  const ownLeftOut = leftOut.filter((l) => !isVendored(l.path));
+  result.notChecked.push(...ownLeftOut.filter((l) => NOT_CHECKED.has(baseName(l.path))).map((l) => l.path));
+  for (const f of ownLeftOut.filter((l) => lockfileKind(l.path))) {
     locked.add(lockfileKind(f.path).ecosystem);
     result.couldNotRead.push({ file: f.path, reason: `${f.reason}, not checked` });
   }

@@ -24,7 +24,7 @@ function commitServices(target) {
       { service: "codeload.github.com", receives: "a request for that commit's archive" },
     ];
   }
-  if (target.kind === "git-host") return [{ service: new URL(target.origin).host, receives: "requests for this repository's commit id and archive" }];
+  if (target.kind === "git-host") return [{ service: new URL(target.origin).host, receives: "requests for this repository, its commit id and its archive" }];
   return [];
 }
 

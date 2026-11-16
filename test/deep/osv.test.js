@@ -167,3 +167,19 @@ test("the address can be changed with a base argument or OSV_URL", async () => {
   }
   assert.deepEqual(other.calls, ["http://osv.test/v1/querybatch", "http://osv.test/v1/querybatch"]);
 });
+
+test("a name-only package whose malicious record is past the 200 details says its versions were not fetched", async () => {
+  const ids = Array.from({ length: 200 }, (_, i) => `MAL-${i}`);
+  const routes = { [BATCH]: answers(vulns(...ids), vulns("MAL-late")) };
+  for (const id of ids) routes[vulnUrl(id)] = record(id);
+  const result = await checkPackages([pinned("a", "1.0.0"), nameOnly("b")], fakeFetch(routes));
+  assert.deepEqual(result.findings.at(-1), {
+    severity: "warning",
+    category: "malicious-package",
+    source: "osv",
+    file: "package.json",
+    line: null,
+    detail: "b has malicious-package records in OSV (MAL-late); their versions were not fetched, and this project does not pin a version",
+  });
+  assert.equal(result.detailsLeft, 1);
+});
