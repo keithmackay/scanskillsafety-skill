@@ -80,3 +80,14 @@ test("a manifest path that names the default hooks file lists its hooks once", (
   ]);
   assert.deepEqual(entries, [{ file: "hooks/hooks.json", when: "hook Stop", command: "echo bye" }]);
 });
+
+test("a config or manifest a SKILL.md names is not listed as a script it runs", () => {
+  const entries = installTimeEntries([
+    file("SKILL.md", "See `.codex-plugin/plugin.json`, `hooks/hooks.json` and `.mcp.json`, then run `scripts/go.sh`."),
+    file(".codex-plugin/plugin.json", "{}"),
+    file("hooks/hooks.json", "{}"),
+    file(".mcp.json", "{}"),
+    file("scripts/go.sh", "echo go"),
+  ]);
+  assert.deepEqual(entries.filter((e) => e.when === "the skill names it").map((e) => e.command), ["scripts/go.sh"]);
+});

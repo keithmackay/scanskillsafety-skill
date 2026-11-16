@@ -3,7 +3,7 @@
 "use strict";
 
 const { posix } = require("path");
-const { isScriptPath } = require("../../lib/scriptFiles");
+const { isScriptPath, isConfig } = require("../../lib/scriptFiles");
 
 const NPM_HOOKS = ["preinstall", "install", "postinstall", "prepare"];
 const VENDORED = new Set(["node_modules", "vendor"]);
@@ -92,7 +92,8 @@ function withoutRepeats(entries) {
 }
 
 function installTimeEntries(files) {
-  const scripts = files.map((f) => f.path).filter((p) => isScriptPath(p) && !isVendored(p));
+  // Configs and manifests are read with the script rules but are not programs a skill runs.
+  const scripts = files.map((f) => f.path).filter((p) => isScriptPath(p) && !isConfig(p) && !isVendored(p));
   const textByPath = new Map(files.filter((f) => !isVendored(f.path)).map((f) => [f.path, f.text]));
   const entries = [];
   for (const { path, text } of files) {
