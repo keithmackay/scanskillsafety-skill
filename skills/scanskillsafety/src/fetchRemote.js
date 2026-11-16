@@ -23,21 +23,56 @@ const FALLBACK_PATHS = [
   ".claude-plugin/marketplace.json", "hooks/hooks.json", ".mcp.json", "package.json",
 ];
 
-async function fetchText(fetchImpl, url, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+function failureOf(err, url) {
+  const reason = err && (err.name === "TimeoutError" || err.name === "AbortError") ? "timeout" : "network";
+  return { ok: false, reason, url, message: err && err.message };
+}
+
+// A response whose status is OK, its body not yet read; the timeout also covers reading the body.
+async function fetchResponse(fetchImpl, url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers = {} } = {}) {
   try {
     const response = await fetchImpl(url, {
       signal: AbortSignal.timeout(timeoutMs),
-      headers: { "User-Agent": "scanskillsafety" },
+      headers: { "User-Agent": "scanskillsafety", ...headers },
     });
-    if (response.ok) return { ok: true, text: await response.text() };
+    if (response.ok) return { ok: true, response };
     const reason = response.status === 404 ? "not-found"
       : response.status === 403 || response.status === 429 ? "rate-limited"
       : "http";
     return { ok: false, reason, status: response.status, url };
   } catch (err) {
-    const reason = err && (err.name === "TimeoutError" || err.name === "AbortError") ? "timeout" : "network";
-    return { ok: false, reason, url, message: err && err.message };
+    return failureOf(err, url);
   }
+}
+
+async function fetchText(fetchImpl, url, options) {
+  const result = await fetchResponse(fetchImpl, url, options);
+  if (!result.ok) return result;
+  try {
+    return { ok: true, text: await result.response.text() };
+  } catch (err) {
+    return failureOf(err, url);
+  }
+}
+
+// A response's body as text, read no further than maxBytes; a longer one is a failure, and the rest is not read.
+async function readTextWithin(response, url, maxBytes) {
+  const chunks = [];
+  let size = 0;
+  try {
+    const reader = response.body ? response.body.getReader() : null;
+    for (let part = reader && (await reader.read()); part && !part.done; part = await reader.read()) {
+      size += part.value.length;
+      if (size > maxBytes) {
+        await reader.cancel();
+        return { ok: false, reason: "too-large", maxBytes, url };
+      }
+      chunks.push(part.value);
+    }
+  } catch (err) {
+    return failureOf(err, url);
+  }
+  return { ok: true, text: Buffer.concat(chunks).toString("utf-8") };
 }
 
 async function fetchJson(fetchImpl, url) {
@@ -49,6 +84,9 @@ async function fetchJson(fetchImpl, url) {
     return { ok: false, reason: "http", url, message: "response was not JSON" };
   }
 }
+
+// The repository's owner and name as one escaped path, so neither can reach another path or a query.
+const repoPath = (target) => `${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
 
 function describeFailure(result) {
   switch (result.reason) {
@@ -209,4 +247,4 @@ async function gatherRawUrl(url, fetchImpl) {
   return { files: [{ path: name, text: result.text }], errors: [], notices: [] };
 }
 
-module.exports = { fetchText, gatherGithub, gatherGitHost, gatherRawUrl };
+module.exports = { fetchResponse, fetchText, readTextWithin, failureOf, describeFailure, repoPath, gatherGithub, gatherGitHost, gatherRawUrl };

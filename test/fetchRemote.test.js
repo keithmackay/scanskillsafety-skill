@@ -1,11 +1,21 @@
 "use strict";
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { fetchText, gatherGithub, gatherGitHost, gatherRawUrl } = require("../src/fetchRemote");
+const { fetchText, readTextWithin, failureOf, gatherGithub, gatherGitHost, gatherRawUrl } = require("../src/fetchRemote");
 const { fakeFetch } = require("./helpers");
 
 const API = "https://api.github.com/repos/o/r";
 const RAW = "https://raw.githubusercontent.com/o/r";
+
+test("readTextWithin reads a body up to its limit, and a longer one is a failure naming the limit and the address", async () => {
+  assert.deepEqual(await readTextWithin(new Response("héllo"), "https://a/x", 6), { ok: true, text: "héllo" });
+  assert.deepEqual(await readTextWithin(new Response("héllo!"), "https://a/x", 6), { ok: false, reason: "too-large", maxBytes: 6, url: "https://a/x" });
+  assert.deepEqual(await readTextWithin(new Response(null), "https://a/x", 6), { ok: true, text: "" });
+  const broken = new Response(new ReadableStream({ pull(c) { c.error(new TypeError("reset")); } }));
+  assert.deepEqual(await readTextWithin(broken, "https://a/x", 6), failureOf(new TypeError("reset"), "https://a/x"));
+  const timedOut = Object.assign(new Error("slow"), { name: "TimeoutError" });
+  assert.equal(failureOf(timedOut, "https://a/x").reason, "timeout");
+});
 
 test("fetchText classifies 404, rate limits, and network errors", async () => {
   const f = fakeFetch({ "https://a/limited": { status: 403, body: "rate limit" }, "https://a/down": new TypeError("fetch failed") });

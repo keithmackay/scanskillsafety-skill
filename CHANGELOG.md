@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-16
+
+### Added
+
+- `--deep`: a deeper check of the exact commit a person would install, run on their own machine. Before any request leaves the machine it names every service it will contact and what each receives (on stderr, or `deep.services` with `--json`), and each service past the target's host can be turned off. `--json` puts its results under `deep`.
+  - **The exact commit:** `--ref` (default: the default branch) is resolved to a full commit id on GitHub, Gitea or Forgejo, and every file of that commit is read. With `git` installed the commit is fetched alone (`--depth 1`, files over 5 MB filtered out) over https into a temporary bare repository, with no user or system git configuration, no credentials, no prompts and no hooks, and each file is read from git's store without a checkout, so files `.gitattributes` keeps out of release archives (`export-ignore`) are read too. Without `git`, or from a Gitea or Forgejo host that won't serve the commit to git, the commit's archive is downloaded from the repository's own host (`codeload.github.com` for GitHub) and unpacked into a temporary folder; files the archive leaves out are found in the commit's file list and fetched one by one (at most 50; more, or a list the host cut short, gives no rating). The output says which route was used. Past 200 MB fetched or downloaded, or 1 GB or 100,000 files, it exits 3, "too large to check deeply". Temporary folders are removed afterwards, also on an error or Ctrl-C. Submodules are listed, not read. A missing or private repository is named as such. A local folder is read in place, with its git commit and whether it has uncommitted changes.
+  - **Every file:** the static rules run on every text file, with no limit on file count or size and tests included; binary, non-UTF-8 and over-5 MB files and symbolic links are listed with the reason, never skipped silently. Findings in test files nothing launches are listed apart and don't count toward the rating.
+  - **What runs at install and start-up:** npm install scripts, `setup.py` and `pyproject.toml` build backends, MCP server commands, hooks, plugin commands and agents, and scripts a `SKILL.md` names, each with its file and command.
+  - **The packages it pulls in:** lockfiles (npm `lockfileVersion` 1–3, Yarn classic and Berry, pnpm 6 and 9, Poetry, uv, pinned `requirements*.txt`), or manifest names when there is no lockfile, checked against api.osv.dev (`--no-osv`). A known-malicious package (`MAL-`) is critical; known vulnerabilities are listed and not counted; an OSV failure says the check did not run.
+  - **Compared with findsafeskills:** the site's lookup says whether the repository is listed, and GitHub's compare call how the commit read relates to the one findsafeskills scanned (`--no-site`).
+  - **Claude's reading:** every text file except vendored, built, minified or generated files and lockfiles is read by Claude in a locked-down `claude -p` (`--safe-mode`, no tools, no MCP servers, an empty working folder), through the user's own `claude` CLI, only after the person agrees to a plan with its token estimate: `Run Claude's reading? [y/N]` in a terminal, or `--claude-ok <plan id>` on a second run. The plan id pins the commit, the exact text read and the model. `--budget` and `--model` set the spend and the model (default `sonnet`); `--no-claude` leaves it out. Each finding is checked against what Claude was shown, quotes come from the file itself, and Claude's findings are shown apart, as not checked by a person; they never change the rating.
+  - **Exit code 4:** the rating is not red, but Claude marked a file suspicious or malicious.
+
+### Changed
+
+- Options are parsed with Node's `util.parseArgs`: a deep option without `--deep`, a missing option value, or more than one target is refused with exit code 3 and a message naming the problem.
+- Text taken from the target (paths, excerpts, commands) has its control and format characters replaced with `?` in text and JSON output, so a target cannot hide or rewrite part of it.
+- Node.js 18.3 or newer is required (for `util.parseArgs`).
+
 ## [1.2.0] - 2026-11-09
 
 ### Added

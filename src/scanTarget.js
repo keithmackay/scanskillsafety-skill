@@ -13,6 +13,7 @@ const { SAFETY_SCANNER_NON_GOALS } = require("../lib/nonGoals");
 const { parseTarget } = require("./parseTarget");
 const { discoverLocal, discoverLocalScripts, MAX_FILE_BYTES } = require("./discover");
 const { gatherGithub, gatherGitHost, gatherRawUrl } = require("./fetchRemote");
+const { printable, printableLines } = require("./printable");
 
 // One file per path: a config that is also loaded as text (hooks.json, .mcp.json) is scanned as a script, at full weight.
 function mergeByPath(textFiles, scriptFiles) {
@@ -63,9 +64,9 @@ async function scanTarget(input, { fetchImpl = fetch } = {}) {
 }
 
 function pushFinding(lines, f, label) {
-  const where = f.line ? `${f.file}:${f.line}` : f.file;
-  lines.push(`  ${where} [${label}] ${f.category}: ${f.detail}`);
-  if (f.excerpt) lines.push(`      > ${f.excerpt}`);
+  const where = f.line ? `${printable(f.file)}:${f.line}` : printable(f.file);
+  lines.push(`  ${where} [${label}] ${f.category}: ${printable(f.detail)}`);
+  if (f.excerpt) lines.push(`      > ${printable(f.excerpt)}`);
 }
 
 function formatText(result) {
@@ -79,9 +80,9 @@ function formatText(result) {
   if (result.rating === null) {
     lines.push("Rating: COULD NOT SCAN — no result. This is not a clean bill of health.");
     for (const e of result.errors) lines.push(`  error: ${e}`);
-    return lines.join("\n");
+    return printableLines(lines);
   }
-  lines.push(`Scanned ${result.scannedFiles.length} file(s): ${result.scannedFiles.join(", ")}`);
+  lines.push(`Scanned ${result.scannedFiles.length} file(s): ${result.scannedFiles.map(printable).join(", ")}`);
   for (const e of result.errors) lines.push(`  warning: could not fetch — ${e}`);
   lines.push(`Rating: ${result.rating.toUpperCase()}`);
   const issues = result.findings.filter((f) => f.severity !== "info");
@@ -92,10 +93,16 @@ function formatText(result) {
     lines.push("", "Notes (these don't change the rating):");
     for (const f of notes) pushFinding(lines, f, "note");
   }
-  return lines.join("\n");
+  return printableLines(lines);
 }
 
 const EXIT_CODES = { green: 0, yellow: 1, red: 2 };
-const exitCodeFor = (result) => (result.rating === null ? 3 : EXIT_CODES[result.rating]);
+const FLAGGED_BY_CLAUDE = new Set(["malicious", "suspicious"]);
+// 4: the rating is not red, but Claude's reading (--deep) marked a file; a red rating exits 2 whatever Claude found.
+function exitCodeFor(result) {
+  if (result.rating === null) return 3;
+  const flagged = (result.deep?.claude.files ?? []).some((f) => FLAGGED_BY_CLAUDE.has(f.verdict));
+  return result.rating !== "red" && flagged ? 4 : EXIT_CODES[result.rating];
+}
 
-module.exports = { scanTarget, formatText, exitCodeFor };
+module.exports = { scanTarget, formatText, pushFinding, exitCodeFor };

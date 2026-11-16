@@ -30,7 +30,7 @@ WHAT IT DOES
     - raw IP addresses and throwaway hosts                  (warning;
       critical beside chmod +x, a startup entry, or a relay)
     - cryptocurrency miners                                 (critical)
-    - setuid and setgid                                     (warning)
+    - setuid                                                (warning)
     - ransom notes                                          (warning)
   Scripts are read up to 200 files, 200 KB each, 4,000 KB in all; a
   pattern only quoted as data in code is a note.
@@ -43,7 +43,8 @@ WHAT IT DOES
   attacks, novel phrasing, or anything outside the scanned files.
 
 WHAT IT NEEDS
-  - Node.js 18 or newer
+  - Node.js 18.3 or newer
+  - for Claude's reading in --deep: the claude CLI (Claude Code)
 
 USAGE
   Ask the agent, e.g.:
@@ -58,10 +59,43 @@ USAGE
   (…/tree/<branch>/<path>) or to one file (…/blob/<branch>/<file>), a raw
   file URL, or a local folder or file.
 
+DEEP SCAN
+  Ask the agent for a deeper check, or run:
+    node <install-dir>/cli.cjs --deep <local-folder-or-repo-url>
+
+  Reads every file of the exact commit you would install (fetched with git
+  from the repository's own host, with no credentials sent, or downloaded
+  as one archive when git is not installed), lists what runs at install
+  and start-up, checks the packages it pulls in against OSV, compares the
+  commit with what findsafeskills scanned, and, once you agree to its
+  plan, has Claude read every file through your own claude CLI. Before
+  any request it names each service it will contact and what each gets.
+  Claude's findings are shown apart, are not checked by a person, and
+  never change the rating; a file written to mislead a reviewer can pass.
+
+  In a terminal it asks "Run Claude's reading? [y/N]". Run by an agent
+  (no terminal, or --json) it prints the plan and its id and stops; the
+  agent must ask you before rerunning with --claude-ok <plan id>.
+
+  --ref <ref>        (CLI) the branch, tag or commit to check
+                     (default: the default branch; repository URLs only)
+  --no-site          (CLI) don't ask findsafeskills.com about the repository
+  --no-osv           (CLI) don't ask api.osv.dev about the packages
+  --no-claude        (CLI) don't have Claude read the files
+  --claude-ok <id>   (CLI) agree to Claude's reading of the plan with this
+                     id (it pins the commit, the exact files and the model)
+  --budget <tokens>  (CLI) stop Claude's reading at this many tokens
+  --model <model>    (CLI) the model Claude reads with (default: sonnet)
+
+  Limits: 200 MB downloaded, 1 GB or 100,000 files unpacked (past them it
+  exits 3, too large to check deeply); files over 5 MB are listed, not
+  read. macOS and Linux are supported; Windows is best effort.
+
 FLAGS
   --help        Show this message and exit
   --version     Show installed version and check for updates
   --json        (CLI) Print the result as JSON
+  --deep        (CLI) Run the deep scan (see DEEP SCAN)
   -h, --help    (CLI) Print the CLI's usage, options, examples and exit codes
   -V, --version (CLI) Print "scanskillsafety <version>" and exit
 
@@ -70,6 +104,11 @@ EXIT CODES (CLI)
   1  yellow: warnings only
   2  red: at least one critical finding
   3  could not scan (bad arguments, bad target, nothing found, network error), not a clean result
+  4  --deep: the rating is not red, but Claude marked a file suspicious or malicious;
+     a stopped reading that flagged a file still exits 4
+     With --deep, 0, 1 or 2 while deep.claude.status is planned, skipped or stopped means
+     Claude's reading did not finish (or stopped before flagging a file): the code is the
+     rating's alone.
 
 MORE
   https://github.com/keithmackay/scanskillsafety-skill

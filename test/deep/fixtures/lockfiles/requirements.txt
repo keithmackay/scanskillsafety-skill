@@ -1,0 +1,7 @@
+# Pinned with pip freeze
+certifi==2024.8.30
+charset-normalizer==3.3.2
+requests[socks]==2.32.3 ; python_version >= "3.8"
+urllib3>=2.0
+-e .
+Zope.Interface==7.0.3  # pinned for the plugin loader
