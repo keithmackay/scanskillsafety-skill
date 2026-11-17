@@ -378,7 +378,7 @@ test("a hostile lockfile cannot write terminal escapes into the text output", as
   const root = makeTree({
     "SKILL.md": "Formats tables.",
     "pnpm-lock.yaml": `lockfileVersion: ${esc}5.4\n`,
-    "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": {}, [`node_modules/x${esc}`]: { version: `1.0.0${esc}` } } }),
+    "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": {}, [`node_modules/x${esc}`]: { version: "1.0.0" } } }),
   });
   const fetchImpl = fakeFetch({
     [OSV_BATCH]: () => ({ body: { results: [{ vulns: [{ id: `GHSA-${esc}` }] }] } }),
@@ -388,6 +388,20 @@ test("a hostile lockfile cannot write terminal escapes into the text output", as
   assert.ok(result.deep.packages.couldNotRead.length > 0);
   assert.ok(result.deep.packages.vulnerabilities.length > 0, JSON.stringify(result.deep.packages));
   result.findings.push({ severity: "critical", category: "malicious-package", source: "osv", file: "package-lock.json", line: 1, detail: `x${esc} is listed as malicious` });
+  const out = formatDeep(result);
+  assert.doesNotMatch(out, /[\u001b\u0007]/);
+  assert.doesNotMatch(out.replace(/\n/g, ""), /[\p{Cc}\p{Cf}]/u);
+});
+
+test("a package-lock.json version holding terminal escapes is a source it could not read, and the text output holds no escape", async () => {
+  const esc = "\u001b[2J\u001b]0;owned\u0007";
+  const root = makeTree({
+    "SKILL.md": "Formats tables.",
+    "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/x": { version: `1.0.0${esc}` } } }),
+  });
+  const result = await runDeep(root, { ...ALL_OFF, osv: true }, { fetchImpl: fakeFetch({}) });
+  assert.deepEqual(result.deep.packages.couldNotRead, [{ file: "package-lock.json", reason: "a package source it could not read" }]);
+  assert.equal(result.deep.packages.checked, 0);
   const out = formatDeep(result);
   assert.doesNotMatch(out, /[\u001b\u0007]/);
   assert.doesNotMatch(out.replace(/\n/g, ""), /[\p{Cc}\p{Cf}]/u);

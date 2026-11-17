@@ -98,11 +98,9 @@ function npmSource(entry) {
 // A version 1 entry: an alias by its real name; a version that is a source is classified from it and not kept, so a credential
 // in it is never shown.
 function npmV1Entry(name, entry) {
-  const source = entry.resolved === undefined ? {} : { source: entry.resolved };
-  const alias = npmAlias(entry.version);
-  if (alias) return { ...alias, ...source };
-  if (!SEMVER.test(entry.version)) return { name, version: null, source: entry.version, direct: true };
-  return { name, version: entry.version, ...source };
+  const named = npmAlias(entry.version) ?? { name, version: entry.version };
+  if (!SEMVER.test(named.version)) return { name: named.name, version: null, source: named.version, direct: true };
+  return { ...named, ...(entry.resolved === undefined ? {} : { source: entry.resolved }) };
 }
 
 function readNpmLock(text) {
@@ -218,7 +216,7 @@ function readYarnLock(text) {
   let entry = null;
   let entries = 0;
   const finish = () => {
-    if (entry && entry.version !== undefined) out.push(entry);
+    if (entry && entry.version !== undefined) out.push({ name: entry.name, line: entry.line, version: entry.version, ...entry.origin });
     entry = null;
   };
   lines.forEach((line, i) => {
@@ -233,7 +231,7 @@ function readYarnLock(text) {
     if (!entry) return;
     const match = versionLine.exec(line);
     if (match && entry.version === undefined) entry.version = match[1];
-    else if (line.startsWith(sourceLine)) Object.assign(entry, sourceOf(unquote(line.slice(sourceLine.length))));
+    else if (line.startsWith(sourceLine)) entry.origin = sourceOf(unquote(line.slice(sourceLine.length)));
   });
   finish();
   return found(out, entries);
@@ -402,6 +400,14 @@ function verdictOf(ecosystem, entry) {
   return verdict.kind === "git" && entry.commit ? { ...verdict, commit: entry.commit } : verdict;
 }
 
+// An npm entry whose version is not semver: the text is never kept or sent to OSV, and an entry with no source of its own is one
+// it could not read.
+function withCheckedVersion(ecosystem, entry) {
+  if (ecosystem !== "npm" || entry.version === null || SEMVER.test(entry.version)) return entry;
+  const ownSource = entry.source !== undefined || entry.classified !== undefined;
+  return { ...entry, version: null, ...(ownSource ? {} : UNREADABLE) };
+}
+
 const packageName = (ecosystem, name) => (ecosystem === "PyPI" ? normalisePyPI(name) : name);
 
 // A package from a source other than the official registry, as read from one file; an unreadable source has no address.
@@ -440,7 +446,8 @@ function readPackages(files, leftOut = []) {
       continue;
     }
     let unreadable = false;
-    for (const entry of read.entries) {
+    for (const readEntry of read.entries) {
+      const entry = withCheckedVersion(kind.ecosystem, readEntry);
       const verdict = verdictOf(kind.ecosystem, entry);
       if (verdict.expected) add(kind.ecosystem, f.path, entry);
       else if (verdict.kind !== "local") {

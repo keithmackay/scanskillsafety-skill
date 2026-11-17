@@ -407,7 +407,7 @@ test("yarn.lock, Berry: a patch whose encoding cannot be decoded is a source it 
   });
 });
 
-test("the new lockfile fixtures read the same with Windows line endings", () => {
+test("the source fixtures read the same with Windows line endings", () => {
   const crlf = (name) => fixture(name).replace(/\n/g, "\r\n");
   const cases = [
     ["package-lock.json", "package-lock.v3.sources.json"], ["package-lock.json", "package-lock.v1.git.json"],
@@ -452,4 +452,73 @@ test("a yarn.lock with a resolution line millions of characters long is read qui
   const text = `__metadata:\n  version: 8\n\n"x@npm:1":\n  version: 1.0.0\n  resolution: "x@${"a@".repeat(2000000)}"\n`;
   const read = quickly(() => readPackages([{ path: "yarn.lock", text }]));
   assert.deepEqual(read.couldNotRead, [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }]);
+});
+
+test("package-lock.json version 1: an alias whose version is a URL is classified from it, and the version is not kept", () => {
+  const text = JSON.stringify({ lockfileVersion: 1, dependencies: { a: { version: `npm:b@git+https://SECRET@github.com/u/r.git#${SHA1}` } } });
+  const read = readPackages([{ path: "package-lock.json", text }]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    sourced: [sourced("b", null, "package-lock.json", 1, "git", "https://github.com/u/r.git", { commit: SHA1 })],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("package-lock.json version 3: a version that is not semver is never kept; with no source of its own the entry is unreadable", () => {
+  const bad = "git+https://SECRET@github.com/u/r.git";
+  const text = JSON.stringify({
+    lockfileVersion: 3,
+    packages: {
+      "node_modules/a": { version: bad, resolved: "https://registry.npmjs.org/a/-/a-1.0.0.tgz" },
+      "node_modules/b": { version: bad, resolved: "https://registry.npmmirror.com/b/-/b-1.0.0.tgz" },
+      "node_modules/c": { version: bad },
+    },
+  });
+  const read = readPackages([{ path: "package-lock.json", text }]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [npm("a", null, "package-lock.json", 1)],
+    couldNotRead: [{ file: "package-lock.json", reason: UNREADABLE_SOURCE }],
+    sourced: [
+      sourced("b", null, "package-lock.json", 1, "host", "https://registry.npmmirror.com"),
+      sourced("c", null, "package-lock.json", 1, "unreadable", null),
+    ],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("yarn.lock, classic: a version that is not semver is never kept; with no source of its own the entry is unreadable", () => {
+  const text = [
+    "# yarn lockfile v1", "",
+    "a@^1:", '  version "git+https://SECRET@github.com/u/r.git"', '  resolved "https://registry.npmmirror.com/a/-/a-1.0.0.tgz"', "",
+    "b@^1:", '  version "git+https://SECRET@github.com/u/r.git"', "",
+  ].join("\n");
+  const read = readPackages([{ path: "yarn.lock", text }]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("a", null, "yarn.lock", 3, "host", "https://registry.npmmirror.com"), sourced("b", null, "yarn.lock", 7, "unreadable", null)],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("yarn.lock, Berry: a version that is not semver from npm: has no source of its own, so the entry is unreadable", () => {
+  const text = '__metadata:\n  version: 8\n\n"a@npm:^1":\n  version: git+https://SECRET@github.com/u/r.git\n  resolution: "a@npm:1.0.0"\n';
+  const read = readPackages([{ path: "yarn.lock", text }]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("a", null, "yarn.lock", 4, "unreadable", null)],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("yarn.lock: a second source line in one entry replaces the first entirely", () => {
+  const berry = '__metadata:\n  version: 8\n\n"a@npm:^1":\n  version: 1.0.0\n  resolution: "a@https://files.example.com/a-1.0.0.tgz"\n  resolution: "a@npm:1.0.0"\n';
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text: berry }]), { ...EMPTY, packages: [npm("a", "1.0.0", "yarn.lock", 4)] });
+  const classic = [
+    "# yarn lockfile v1", "",
+    "a@^1:", '  version "1.0.0"', `  resolved "https://codeload.github.com/u/r/tar.gz/${SHA1}"`, '  resolved "https://registry.yarnpkg.com/a/-/a-1.0.0.tgz"', "",
+  ].join("\n");
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text: classic }]), { ...EMPTY, packages: [npm("a", "1.0.0", "yarn.lock", 3)] });
 });
