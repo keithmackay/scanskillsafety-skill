@@ -1,0 +1,78 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@scope/thing':
+        specifier: https://files.example.com/a/thing-2.0.0.tgz
+        version: https://files.example.com/a/thing-2.0.0.tgz
+      js-tokens:
+        specifier: ^4.0.0
+        version: 4.0.0
+      left-pad:
+        specifier: git+ssh://git@github.com/someone/left-pad.git#3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a
+        version: git+ssh://git@github.com/someone/left-pad.git#3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a
+      lodash:
+        specifier: ^4.17.21
+        version: 4.17.21
+      mine:
+        specifier: file:packages/mine
+        version: file:packages/mine
+      other:
+        specifier: git+https://gitlab.com/someone/other.git#3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a
+        version: git+https://gitlab.com/someone/other.git#3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a
+      tiny:
+        specifier: github:someone/tiny#3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a
+        version: https://codeload.github.com/someone/tiny/tar.gz/3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a
+
+packages:
+
+  '@scope/thing@https://files.example.com/a/thing-2.0.0.tgz':
+    resolution: {tarball: https://files.example.com/a/thing-2.0.0.tgz}
+    version: 2.0.0
+
+  js-tokens@4.0.0:
+    resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
+
+  left-pad@git+ssh://git@github.com/someone/left-pad.git#3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a:
+    resolution: {commit: 3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a, repo: git@github.com:someone/left-pad.git, type: git}
+    version: 1.3.0
+
+  lodash@4.17.21:
+    resolution:
+      integrity: sha512-v2kDEe57lecTulaDIuNTPy3Ry4gLGJ6Z1O3vE1krgXZNrsQ+LFTGHVxVjcXPs17LhbZVGedAJv8XZ1tvj5FvSg==
+      tarball: https://registry.npmmirror.com/lodash/-/lodash-4.17.21.tgz
+
+  mine@file:packages/mine:
+    resolution: {directory: packages/mine, type: directory}
+    name: mine
+    version: 0.1.0
+
+  other@git+https://gitlab.com/someone/other.git#3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a:
+    resolution: {commit: 3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a, repo: https://gitlab.com/someone/other.git, type: git}
+    version: 2.1.0
+
+  tiny@https://codeload.github.com/someone/tiny/tar.gz/3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a:
+    resolution: {tarball: https://codeload.github.com/someone/tiny/tar.gz/3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a}
+    version: 1.0.0
+
+snapshots:
+
+  '@scope/thing@https://files.example.com/a/thing-2.0.0.tgz': {}
+
+  js-tokens@4.0.0: {}
+
+  left-pad@git+ssh://git@github.com/someone/left-pad.git#3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a: {}
+
+  lodash@4.17.21: {}
+
+  mine@file:packages/mine: {}
+
+  other@git+https://gitlab.com/someone/other.git#3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a: {}
+
+  tiny@https://codeload.github.com/someone/tiny/tar.gz/3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a: {}

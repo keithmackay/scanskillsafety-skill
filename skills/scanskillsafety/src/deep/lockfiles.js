@@ -3,7 +3,7 @@
 "use strict";
 
 const { OBJECT_ID, baseName, isObject, isVendored } = require("./util");
-const { classifySource, NAME_SEGMENT, UNREADABLE } = require("./packageSources");
+const { classifySource, LOCAL, NAME_SEGMENT, UNREADABLE } = require("./packageSources");
 
 const normalisePyPI = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
 const unquote = (s) => s.replace(/^["']|["']$/g, "");
@@ -154,15 +154,19 @@ function yarnSpecName(spec) {
 
 const CODELOAD = "https://codeload.github.com/";
 
+// A GitHub repository at one commit, shown as the repository, when its user, name and commit are ones it can read; null otherwise.
+function githubCommit(user, repo, commit) {
+  if (!NAME_SEGMENT.test(user) || !NAME_SEGMENT.test(repo) || !OBJECT_ID.test(commit)) return null;
+  return { expected: false, kind: "git", address: `https://github.com/${user}/${repo}`, commit };
+}
+
 // A GitHub shorthand that Yarn classic resolved to a codeload tarball (`https://codeload.github.com/u/r/tar.gz/<sha>`): a git
 // source, shown as the repository, with the commit from the path. Anything else on codeload is left to the classifier.
 function codeloadSource(resolved) {
   if (!resolved.startsWith(CODELOAD)) return null;
   const segments = resolved.slice(CODELOAD.length).split("/", 5);
-  if (segments.length !== 4) return null;
-  const [user, repo, format, commit] = segments;
-  if (!NAME_SEGMENT.test(user) || !NAME_SEGMENT.test(repo) || format !== "tar.gz" || !OBJECT_ID.test(commit)) return null;
-  return { expected: false, kind: "git", address: `https://github.com/${user}/${repo}`, commit };
+  if (segments.length !== 4 || segments[2] !== "tar.gz") return null;
+  return githubCommit(segments[0], segments[1], segments[3]);
 }
 
 // The resolution in a Berry `name@<resolution>`: the text after the first `@` past the start, so a scoped name stays whole; null
@@ -244,22 +248,124 @@ function readYarnLock(text) {
 
 const PNPM_VERSIONS = ["6.0", "6.1", "9.0"];
 
+// One `name: value` field added to a Map, so an input name is never taken for an object property.
+function addField(fields, text) {
+  const colon = text.indexOf(": ");
+  if (colon > 0) fields.set(unquote(text.slice(0, colon).trim()), unquote(text.slice(colon + 2).trim()));
+}
+
+// The fields of a one-line flow map (`{a: 1, b: 'x, y'}`), split at commas outside quotes in one pass.
+function flowMapFields(text) {
+  const fields = new Map();
+  const body = text.trim().replace(/^\{|\}$/g, "");
+  let quote = null;
+  let start = 0;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (quote) {
+      if (c === quote) quote = null;
+    } else if (c === "'" || c === '"') quote = c;
+    else if (c === ",") {
+      addField(fields, body.slice(start, i));
+      start = i + 1;
+    }
+  }
+  addField(fields, body.slice(start));
+  return fields;
+}
+
+const PNPM_GITHUB_KEY = "github.com/";
+
+// A version 6 `github.com/u/r/<sha>` key: a GitHub repository at that commit; null for any other key.
+function pnpmGithubKey(depPath) {
+  if (!depPath.startsWith(PNPM_GITHUB_KEY)) return null;
+  const segments = depPath.slice(PNPM_GITHUB_KEY.length).split("/", 4);
+  return segments.length === 3 ? githubCommit(...segments) : null;
+}
+
+// The source a key itself names: a GitHub key with no name, or a key whose version is an address (git, tarball, `file:`), which
+// pins that one package; null when the key is a plain name and version.
+function pnpmKeySource(depPath, keyVersion) {
+  if (keyVersion === undefined) {
+    const github = pnpmGithubKey(depPath);
+    return github ? { classified: github } : null;
+  }
+  if (SEMVER.test(keyVersion)) return null;
+  const codeload = codeloadSource(keyVersion);
+  return codeload ? { classified: codeload } : { source: keyVersion, direct: true };
+}
+
+// A git resolution: the repository, an http(s) one marked as git, at the commit, which is kept only when it is a commit id.
+function pnpmGitSource(resolution) {
+  const repo = resolution.get("repo") ?? "";
+  const commit = resolution.get("commit") ?? "";
+  const source = repo.startsWith("https:") || repo.startsWith("http:") ? `git+${repo}` : repo;
+  return OBJECT_ID.test(commit) ? { source, commit } : { source };
+}
+
+// Where a pnpm entry comes from: a directory is local; a git resolution is its repository; a resolution of another type is one it
+// cannot read; otherwise the key when it names a source, then the resolution's tarball; with only an integrity, no host.
+function pnpmSource(depPath, keyVersion, resolution) {
+  const type = resolution.get("type");
+  if (type === "directory") return { classified: LOCAL };
+  if (type === "git") return pnpmGitSource(resolution);
+  if (type !== undefined) return UNREADABLE_ENTRY;
+  const fromKey = pnpmKeySource(depPath, keyVersion);
+  if (fromKey) return fromKey;
+  const tarball = resolution.get("tarball");
+  return tarball === undefined ? { recordsHost: false } : { source: tarball };
+}
+
+// A pnpm package entry. The key, without a leading `/` and the `(…)` peer suffix, is split at the first `@` past the start, so a
+// scoped name and a `git+ssh://git@…` key split right; a key with no name there takes the entry's `name:` line, and a version
+// that is an address gives way to the entry's `version:` line. An entry with no name is left out.
+function pnpmEntry({ key, line, fields, resolution }) {
+  let depPath = key.startsWith("/") ? key.slice(1) : key;
+  if (depPath.includes("(")) depPath = depPath.slice(0, depPath.indexOf("("));
+  const at = depPath.indexOf("@", 1);
+  const keyVersion = at < 0 ? undefined : depPath.slice(at + 1);
+  const name = at < 0 ? fields.get("name") : depPath.slice(0, at);
+  if (name === undefined) return null;
+  const version = keyVersion !== undefined && SEMVER.test(keyVersion) ? keyVersion : fields.get("version") ?? null;
+  return { name, version, line, ...pnpmSource(depPath, keyVersion, resolution) };
+}
+
+// Each package entry runs from its key to the next key or top-level line; its `resolution` is inline or on the more deeply
+// indented lines after it, up to the entry's next field.
 function readPnpmLock(text) {
   const version = /^lockfileVersion: '?([^'\s]+)'?\s*$/m.exec(text)?.[1];
   if (!PNPM_VERSIONS.includes(version)) throw unsupportedVersion(version);
   const out = [];
   let inPackages = false;
   let entries = 0;
+  let entry = null;
+  const finish = () => {
+    const pkg = entry && pnpmEntry(entry);
+    if (pkg) out.push(pkg);
+    entry = null;
+  };
   linesOf(text).forEach((line, i) => {
-    if (/^\S/.test(line)) inPackages = line === "packages:";
-    if (inPackages && /^ {2}\S/.test(line)) entries++;
-    const match = inPackages && /^ {2}(\S.*):$/.exec(line);
-    if (!match) return;
-    let key = unquote(match[1]).replace(/^\//, "");
-    if (key.includes("(")) key = key.slice(0, key.indexOf("("));
-    const at = key.lastIndexOf("@");
-    if (at > 0) out.push({ name: key.slice(0, at), version: key.slice(at + 1), line: i + 1 });
+    if (/^\S/.test(line)) {
+      finish();
+      inPackages = line === "packages:";
+      return;
+    }
+    if (!inPackages) return;
+    if (/^ {2}\S/.test(line)) {
+      finish();
+      entries++;
+      const match = /^ {2}(\S.*):$/.exec(line);
+      entry = match ? { key: unquote(match[1]), line: i + 1, fields: new Map(), resolution: new Map(), inResolution: false } : null;
+      return;
+    }
+    if (!entry) return;
+    if (/^ {4}\S/.test(line)) {
+      entry.inResolution = line === "    resolution:";
+      if (line.startsWith("    resolution: ")) entry.resolution = flowMapFields(line.slice("    resolution: ".length));
+      else addField(entry.fields, line.slice(4));
+    } else if (entry.inResolution && /^ {6}\S/.test(line)) addField(entry.resolution, line.slice(6));
   });
+  finish();
   return found(out, entries);
 }
 

@@ -549,3 +549,109 @@ test("yarn.lock, Berry: a patch of a git repository or an https tarball is class
     sourced("x", "1.0.0", "yarn.lock", 4, "url", "https://files.example.com/x-1.0.0.tgz"),
   ]);
 });
+
+test("pnpm-lock.yaml version 9 sources: integrity alone is checked; a mirror tarball, git, a codeload link and an https key are not; a directory is local", () => {
+  const file = "pnpm-lock.yaml";
+  assert.deepEqual(one(file, "pnpm-lock.v9.sources.yaml"), {
+    ...EMPTY,
+    packages: [npm("js-tokens", "4.0.0", file, 39)],
+    sourced: [
+      sourced("@scope/thing", "2.0.0", file, 35, "url", "https://files.example.com/thing-2.0.0.tgz"),
+      sourced("left-pad", "1.3.0", file, 42, "git", "git@github.com:someone/left-pad.git", { commit: SHA1 }),
+      sourced("lodash", "4.17.21", file, 46, "host", "https://registry.npmmirror.com"),
+      sourced("other", "2.1.0", file, 56, "git", "https://gitlab.com/someone/other.git", { commit: SHA1 }),
+      sourced("tiny", "1.0.0", file, 60, "git", "https://github.com/someone/tiny", { commit: SHA1 }),
+    ],
+  });
+});
+
+test("pnpm-lock.yaml version 6 sources: a github.com/u/r/<sha> key is git, named by the entry's name line", () => {
+  const file = "pnpm-lock.yaml";
+  assert.deepEqual(one(file, "pnpm-lock.v6.sources.yaml"), {
+    ...EMPTY,
+    packages: [npm("chalk", "2.4.2", file, 17)],
+    sourced: [sourced("left-pad", "1.3.0", file, 22, "git", "https://github.com/someone/left-pad", { commit: SHA1 })],
+  });
+});
+
+test("the pnpm source fixtures read the same with Windows line endings", () => {
+  const crlf = (name) => fixture(name).replace(/\n/g, "\r\n");
+  for (const name of ["pnpm-lock.v9.sources.yaml", "pnpm-lock.v6.sources.yaml"]) {
+    assert.deepEqual(readPackages([{ path: "pnpm-lock.yaml", text: crlf(name) }]), one("pnpm-lock.yaml", name), name);
+  }
+});
+
+const pnpmLock = (...lines) => ["lockfileVersion: '9.0'", "", "packages:", "", ...lines, ""].join("\n");
+const pnpmRead = (...lines) => readPackages([{ path: "pnpm-lock.yaml", text: pnpmLock(...lines) }]);
+
+test("pnpm-lock.yaml: a credential in a git key or repo is never shown, and a commit that is not a commit id is not kept", () => {
+  const read = pnpmRead(
+    "  x@git+https://SECRET@github.com/u/r.git#SECRETREF:",
+    "    resolution: {commit: SECRETREF, repo: 'https://SECRET@github.com/u/r.git', type: git}",
+  );
+  assert.deepEqual(read, { ...EMPTY, sourced: [sourced("x", null, "pnpm-lock.yaml", 5, "git", "https://github.com/u/r.git")] });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("pnpm-lock.yaml: a resolution on following lines is read up to the next field, so a dependency named like a resolution field is not", () => {
+  const read = pnpmRead(
+    "  a@1.0.0:",
+    "    resolution:",
+    `      commit: ${SHA1}`,
+    "      repo: https://github.com/u/a.git",
+    "      type: git",
+    "    dependencies:",
+    "      tarball: 1.0.0",
+    "      type: 2.0.0",
+    "",
+    "  b@1.0.0:",
+    "    resolution:",
+    "      integrity: sha512-x",
+    "    dependencies:",
+    "      tarball: 1.0.0",
+  );
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [npm("b", "1.0.0", "pnpm-lock.yaml", 14)],
+    sourced: [sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "git", "https://github.com/u/a.git", { commit: SHA1 })],
+  });
+});
+
+test("pnpm-lock.yaml: a file: key is local whatever its resolution; a resolution type it does not know is a source it could not read", () => {
+  const read = pnpmRead(
+    "  local@file:local-1.0.0.tgz:",
+    "    resolution: {integrity: sha512-x, tarball: file:local-1.0.0.tgz}",
+    "    version: 1.0.0",
+    "",
+    "  node@runtime:22.0.0:",
+    "    resolution: {type: variations, variants: SECRET}",
+    "    version: 22.0.0",
+  );
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("node", "22.0.0", "pnpm-lock.yaml", 9, "unreadable", null)],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("pnpm-lock.yaml: a key with no name takes the entry's name line and is classified by its resolution", () => {
+  const read = pnpmRead(
+    "  registry.npmmirror.com/tiny/-/tiny-1.0.0.tgz:",
+    "    resolution: {tarball: https://registry.npmmirror.com/tiny/-/tiny-1.0.0.tgz}",
+    "    name: tiny",
+    "    version: 1.0.0",
+  );
+  assert.deepEqual(read.sourced, [sourced("tiny", "1.0.0", "pnpm-lock.yaml", 5, "host", "https://registry.npmmirror.com")]);
+});
+
+test("pnpm-lock.yaml: resolution fields named like built-in object properties are plain names", () => {
+  const read = pnpmRead("  a@1.0.0:", "    resolution: {__proto__: x, constructor: y, hasOwnProperty: z, integrity: sha512-x}");
+  assert.deepEqual(read, { ...EMPTY, packages: [npm("a", "1.0.0", "pnpm-lock.yaml", 5)] });
+});
+
+test("a pnpm-lock.yaml with a resolution line millions of characters long is read quickly", () => {
+  const long = `    resolution: {integrity: sha512-x, ${"'a, b: c, '".repeat(200000)}${", '".repeat(200000)}}`;
+  const read = quickly(() => pnpmRead("  a@1.0.0:", long));
+  assert.deepEqual(read.packages, [npm("a", "1.0.0", "pnpm-lock.yaml", 5)]);
+});
