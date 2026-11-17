@@ -3,7 +3,7 @@
 "use strict";
 
 const { OBJECT_ID, baseName, isObject, isVendored } = require("./util");
-const { classifySource, NAME_SEGMENT } = require("./packageSources");
+const { classifySource, NAME_SEGMENT, UNREADABLE } = require("./packageSources");
 
 const normalisePyPI = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
 const unquote = (s) => s.replace(/^["']|["']$/g, "");
@@ -82,11 +82,11 @@ function npmAlias(version) {
   return match ? { name: match[1], version: match[2] } : null;
 }
 
-// A version npm resolved from the registry; anything else in a version 1 `version` (a git URL, a tarball URL, `file:`) is the
-// package's source.
+// A version as npm writes one for a package it installed by version. Any other npm version text is never kept or sent to OSV:
+// in a version 1 `version` (a git URL, a tarball URL, `file:`) it is the package's source; anywhere else it is no version at all.
 const SEMVER = /^\d+\.\d+\.\d+([-+][0-9A-Za-z.+-]+)?$/;
-// A source a reader could not make out, whatever the classifier would say.
-const UNREADABLE = { classified: { unreadable: true } };
+// An entry whose source a reader could not make out, whatever the classifier would say.
+const UNREADABLE_ENTRY = Object.freeze({ classified: UNREADABLE });
 
 // Where a version 2 or 3 entry comes from: a bundled entry comes inside its parent, so its own source is not read; one with no
 // `resolved` came from whatever registry the install used.
@@ -162,7 +162,14 @@ function codeloadSource(resolved) {
   if (segments.length !== 4) return null;
   const [user, repo, format, commit] = segments;
   if (!NAME_SEGMENT.test(user) || !NAME_SEGMENT.test(repo) || format !== "tar.gz" || !OBJECT_ID.test(commit)) return null;
-  return { kind: "git", address: `https://github.com/${user}/${repo}`, commit };
+  return { expected: false, kind: "git", address: `https://github.com/${user}/${repo}`, commit };
+}
+
+// The resolution in a Berry `name@<resolution>`: the text after the first `@` past the start, so a scoped name stays whole; null
+// when there is none.
+function afterName(text) {
+  const at = text.indexOf("@", 1);
+  return at < 0 ? null : text.slice(at + 1);
 }
 
 // The resolution a Berry `patch:` patches, URL-decoded, without the patch after `#` or the package name before `@`; null when it
@@ -174,8 +181,7 @@ function berryPatched(resolution) {
   } catch {
     return null;
   }
-  const at = decoded.indexOf("@", 1);
-  return at < 0 ? null : decoded.slice(at + 1);
+  return afterName(decoded);
 }
 
 // A Berry resolution that is not a patch: `npm:` records no host; an http(s) address with `#commit=` is a git repository; any
@@ -190,12 +196,11 @@ function berryResolutionSource(resolution) {
 
 // The source of a Berry `resolution:` value (`name@<resolution>`); a patch is classified by the resolution it patches.
 function berrySource(value) {
-  const at = value.indexOf("@", 1);
-  if (at < 0) return UNREADABLE;
-  const resolution = value.slice(at + 1);
+  const resolution = afterName(value);
+  if (resolution === null) return UNREADABLE_ENTRY;
   if (!resolution.startsWith("patch:")) return berryResolutionSource(resolution);
   const patched = berryPatched(resolution);
-  return patched === null ? UNREADABLE : berryResolutionSource(patched);
+  return patched === null ? UNREADABLE_ENTRY : berryResolutionSource(patched);
 }
 
 function yarnClassicSource(resolved) {
@@ -405,7 +410,7 @@ function verdictOf(ecosystem, entry) {
 function withCheckedVersion(ecosystem, entry) {
   if (ecosystem !== "npm" || entry.version === null || SEMVER.test(entry.version)) return entry;
   const ownSource = entry.source !== undefined || entry.classified !== undefined;
-  return { ...entry, version: null, ...(ownSource ? {} : UNREADABLE) };
+  return { ...entry, version: null, ...(ownSource ? {} : UNREADABLE_ENTRY) };
 }
 
 const packageName = (ecosystem, name) => (ecosystem === "PyPI" ? normalisePyPI(name) : name);
@@ -418,6 +423,24 @@ function sourcedPackage(ecosystem, file, entry, verdict) {
   if (verdict.kind === "git" && verdict.commit) item.commit = verdict.commit;
   if (verdict.text) item.text = verdict.text;
   return item;
+}
+
+// One lockfile's entries sorted by source: those from the official registry, those from anywhere else (local ones dropped), and
+// whether any source could not be read.
+function classifyEntries(ecosystem, file, entries) {
+  const registry = [];
+  const sourced = [];
+  let unreadable = false;
+  for (const readEntry of entries) {
+    const entry = withCheckedVersion(ecosystem, readEntry);
+    const verdict = verdictOf(ecosystem, entry);
+    if (verdict.expected) registry.push(entry);
+    else if (verdict.kind !== "local") {
+      sourced.push(sourcedPackage(ecosystem, file, entry, verdict));
+      unreadable ||= verdict.unreadable === true;
+    }
+  }
+  return { registry, sourced, unreadable };
 }
 
 // files: the text files read; leftOut: the files left out of that list with the reason, so a lockfile among them is said to be
@@ -445,16 +468,9 @@ function readPackages(files, leftOut = []) {
       result.couldNotRead.push({ file: f.path, reason: read.reason });
       continue;
     }
-    let unreadable = false;
-    for (const readEntry of read.entries) {
-      const entry = withCheckedVersion(kind.ecosystem, readEntry);
-      const verdict = verdictOf(kind.ecosystem, entry);
-      if (verdict.expected) add(kind.ecosystem, f.path, entry);
-      else if (verdict.kind !== "local") {
-        result.sourced.push(sourcedPackage(kind.ecosystem, f.path, entry, verdict));
-        unreadable ||= verdict.unreadable === true;
-      }
-    }
+    const { registry, sourced, unreadable } = classifyEntries(kind.ecosystem, f.path, read.entries);
+    for (const entry of registry) add(kind.ecosystem, f.path, entry);
+    for (const item of sourced) result.sourced.push(item);
     if (unreadable) result.couldNotRead.push({ file: f.path, reason: UNREADABLE_SOURCE_REASON });
   }
   const ownLeftOut = leftOut.filter((l) => !isVendored(l.path));

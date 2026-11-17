@@ -333,14 +333,14 @@ const SHA1 = "3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a";
 const UNREADABLE_SOURCE = "a package source it could not read";
 const sourced = (name, version, file, line, kind, address, extra = {}) => ({ ecosystem: "npm", file, line, name, version, kind, address, ...extra });
 
-test("package-lock.json version 3 sources: the registry and entries recording no host are checked; a mirror and git are not; file: and bundled entries are not reported", () => {
+test("package-lock.json version 3 sources: the registry and entries recording no host are checked; a mirror and git are not; file: and bundled entries are not reported as sourced", () => {
   const file = "package-lock.json";
   assert.deepEqual(one(file, "package-lock.v3.sources.json"), {
     ...EMPTY,
-    packages: [npm("bundler", "2.0.0", file, 18), npm("bundled", "0.3.1", file, 26), npm("no-host", "1.0.0", file, 44)],
+    packages: [npm("bundler", "2.0.0", file, 18), npm("bundled", "0.3.1", file, 26), npm("no-host", "1.0.0", file, 45)],
     sourced: [
-      sourced("left-pad", "1.3.0", file, 30, "git", "ssh://github.com/someone/left-pad.git", { commit: SHA1 }),
-      sourced("lodash", "4.17.21", file, 39, "host", "https://registry.npmmirror.com"),
+      sourced("left-pad", "1.3.0", file, 31, "git", "ssh://github.com/someone/left-pad.git", { commit: SHA1 }),
+      sourced("lodash", "4.17.21", file, 40, "host", "https://registry.npmmirror.com"),
     ],
   });
 });
@@ -521,4 +521,31 @@ test("yarn.lock: a second source line in one entry replaces the first entirely",
     "a@^1:", '  version "1.0.0"', `  resolved "https://codeload.github.com/u/r/tar.gz/${SHA1}"`, '  resolved "https://registry.yarnpkg.com/a/-/a-1.0.0.tgz"', "",
   ].join("\n");
   assert.deepEqual(readPackages([{ path: "yarn.lock", text: classic }]), { ...EMPTY, packages: [npm("a", "1.0.0", "yarn.lock", 3)] });
+});
+
+test("a codeload address that is not a GitHub shorthand's tarball is left to the classifier", () => {
+  const text = `# yarn lockfile v1\n\na@^1:\n  version "1.0.0"\n  resolved "https://codeload.github.com/u/r/zip/${SHA1}"\n`;
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text }]).sourced, [sourced("a", "1.0.0", "yarn.lock", 3, "host", "https://codeload.github.com")]);
+});
+
+const berryLock = (resolution) => `__metadata:\n  version: 8\n\n"x@npm:^1":\n  version: 1.0.0\n  resolution: "x@${resolution}"\n`;
+const berrySourced = (resolution) => readPackages([{ path: "yarn.lock", text: berryLock(resolution) }]).sourced;
+
+test("yarn.lock, Berry: a patch that names no package is a source it could not read", () => {
+  assert.deepEqual(berrySourced("patch:nothing#./p.patch"), [sourced("x", "1.0.0", "yarn.lock", 4, "unreadable", null)]);
+});
+
+test("yarn.lock, Berry: a plain http address with #commit= is git, shown with http", () => {
+  assert.deepEqual(berrySourced(`http://git.example/u/r.git#commit=${SHA1}`), [
+    sourced("x", "1.0.0", "yarn.lock", 4, "git", "http://git.example/u/r.git", { commit: SHA1 }),
+  ]);
+});
+
+test("yarn.lock, Berry: a patch of a git repository or an https tarball is classified by what it patches", () => {
+  assert.deepEqual(berrySourced(`patch:x@https%3A//github.com/u/r.git%23commit=${SHA1}#./p.patch`), [
+    sourced("x", "1.0.0", "yarn.lock", 4, "git", "https://github.com/u/r.git", { commit: SHA1 }),
+  ]);
+  assert.deepEqual(berrySourced("patch:x@https%3A//files.example.com/a/x-1.0.0.tgz#./p.patch"), [
+    sourced("x", "1.0.0", "yarn.lock", 4, "url", "https://files.example.com/x-1.0.0.tgz"),
+  ]);
 });

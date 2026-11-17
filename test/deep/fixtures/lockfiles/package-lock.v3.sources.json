@@ -25,6 +25,7 @@
     },
     "node_modules/bundler/node_modules/bundled": {
       "version": "0.3.1",
+      "resolved": "https://registry.npmmirror.com/bundled/-/bundled-0.3.1.tgz",
       "inBundle": true
     },
     "node_modules/left-pad": {
