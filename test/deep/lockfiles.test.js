@@ -250,14 +250,17 @@ test("a lockfile with entries it cannot make out could not be read, rather than 
   assert.deepEqual(read, {
     ...EMPTY,
     couldNotRead: [
-      { file: "yarn.lock", reason: "no packages found in it" },
+      { file: "yarn.lock", reason: "a package source it could not read" },
       { file: "a/pnpm-lock.yaml", reason: "a package source it could not read" },
       { file: "b/package-lock.json", reason: "no packages found in it" },
       { file: "c/package-lock.json", reason: "no packages found in it" },
       { file: "poetry.lock", reason: "no packages found in it" },
       { file: "requirements.txt", reason: "no pinned versions in it" },
     ],
-    sourced: [{ ecosystem: "npm", file: "a/pnpm-lock.yaml", line: 5, name: null, version: null, kind: "unreadable", address: null }],
+    sourced: [
+      { ecosystem: "npm", file: "yarn.lock", line: 3, name: null, version: null, kind: "unreadable", address: null },
+      { ecosystem: "npm", file: "a/pnpm-lock.yaml", line: 5, name: null, version: null, kind: "unreadable", address: null },
+    ],
   });
 });
 
@@ -782,4 +785,81 @@ test("pnpm-lock.yaml: an entry whose name cannot be found is a source it could n
 test("pnpm-lock.yaml: an escaped quote inside a double-quoted flow value does not end it", () => {
   const read = pnpmRead("  a@1.0.0:", '    resolution: {integrity: "x\\", tarball: https://evil.example/a.tgz"}');
   assert.deepEqual(read, { ...EMPTY, packages: [npm("a", "1.0.0", "pnpm-lock.yaml", 5)] });
+});
+
+test("pnpm-lock.yaml: an entry or resolution in a shape pnpm does not write is a source it could not read, never the registry", () => {
+  const read = pnpmRead(
+    "  a@1.0.0:",
+    "    resolution:",
+    "      tarball:",
+    "        https://evil.example/a.tgz",
+    "",
+    "  b@1.0.0:",
+    '    "resolution": {tarball: https://evil.example/b.tgz}',
+    "",
+    "  c@1.0.0: {resolution: {tarball: https://evil.example/c.tgz}}",
+    "",
+    "  d@1.0.0:",
+    "    resolutions: {tarball: https://evil.example/d.tgz}",
+    "    resolution: {integrity: sha512-x}",
+    "",
+    "  e@1.0.0:",
+    "    resolution:",
+    "      'tarball': https://evil.example/e.tgz",
+    "",
+    "  f@1.0.0:",
+    "      tarball: https://evil.example/f.tgz",
+  );
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [npm("d", "1.0.0", "pnpm-lock.yaml", 15)],
+    couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
+    sourced: [
+      sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null),
+      sourced("b", "1.0.0", "pnpm-lock.yaml", 10, "host", "https://evil.example"),
+      unnamed(13),
+      sourced("e", "1.0.0", "pnpm-lock.yaml", 19, "unreadable", null),
+      sourced("f", "1.0.0", "pnpm-lock.yaml", 23, "unreadable", null),
+    ],
+  });
+  assert.ok(!JSON.stringify(read).includes("c.tgz"));
+});
+
+test("pnpm-lock.yaml: a packages section laid out at other indentations could not be read", () => {
+  const layouts = [
+    "packages:\n\n    a@1.0.0:\n      resolution: {tarball: https://evil.example/a.tgz}\n",
+    "packages:\n\n  a@1.0.0:\n   resolution: {tarball: https://evil.example/a.tgz}\n",
+    "packages:\n\n  a@1.0.0:\n    resolution:\n     tarball: https://evil.example/a.tgz\n",
+    "packages:\n\n  a@1.0.0:\n\tresolution: {tarball: https://evil.example/a.tgz}\n",
+  ];
+  for (const layout of layouts) {
+    const read = readPackages([{ path: "pnpm-lock.yaml", text: `lockfileVersion: '9.0'\n\n${layout}` }]);
+    assert.deepEqual(read, { ...EMPTY, couldNotRead: [{ file: "pnpm-lock.yaml", reason: "not laid out as pnpm writes it" }] }, layout);
+  }
+});
+
+test("pnpm-lock.yaml: comments and blank lines inside packages, at any indentation, are skipped without ending the section", () => {
+  const read = pnpmRead(
+    "  a@1.0.0:",
+    "    resolution: {integrity: sha512-x}",
+    "# a note",
+    "   # another",
+    "  b@1.0.0:",
+    "    resolution: {tarball: https://evil.example/b.tgz}",
+  );
+  assert.deepEqual(read.sourced, [sourced("b", "1.0.0", "pnpm-lock.yaml", 9, "host", "https://evil.example")]);
+});
+
+test("yarn.lock: an entry header that does not end in a colon is a source it could not read with no name, never left out", () => {
+  const classic = '# yarn lockfile v1\n\nleft-pad@^1\n  version "1.3.0"\n  resolved "https://evil.example/SECRET/x.tgz"\n';
+  const berry = '__metadata:\n  version: 8\n\n"left-pad@npm:^1"\n  version: 1.3.0\n  resolution: "left-pad@https://evil.example/SECRET/x.tgz"\n';
+  for (const [text, line] of [[classic, 3], [berry, 4]]) {
+    const read = readPackages([{ path: "yarn.lock", text }]);
+    assert.deepEqual(read, {
+      ...EMPTY,
+      couldNotRead: [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }],
+      sourced: [sourced(null, null, "yarn.lock", line, "unreadable", null)],
+    });
+    assert.ok(!JSON.stringify(read).includes("SECRET"));
+  }
 });

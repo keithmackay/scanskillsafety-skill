@@ -87,6 +87,8 @@ function npmAlias(version) {
 const SEMVER = /^\d+\.\d+\.\d+([-+][0-9A-Za-z.+-]+)?$/;
 // An entry whose source a reader could not make out, whatever the classifier would say.
 const UNREADABLE_ENTRY = Object.freeze({ classified: UNREADABLE });
+// An entry it cannot even name: reported as a source it could not read, with nothing from it kept, so it is never left out.
+const unnamedEntry = (line) => ({ name: null, version: null, line, ...UNREADABLE_ENTRY });
 
 // Where a version 2 or 3 entry comes from: a bundled entry comes inside its parent, so its own source is not read; one with no
 // `resolved` came from whatever registry the install used.
@@ -214,7 +216,7 @@ function addressSource(address, direct = false) {
 }
 
 // Each entry runs from its header to the next header or the end of the file, so its source, on a line after its version, is
-// carried with it.
+// carried with it. A header that does not end in `:` is an entry it cannot name.
 function readYarnLock(text) {
   const lines = linesOf(text);
   const berry = lines.includes("__metadata:");
@@ -235,6 +237,7 @@ function readYarnLock(text) {
       const spec = unquote(line.replace(/:$/, "").split(/,\s*/)[0]);
       const skipped = spec === "__metadata" || spec.slice(spec.indexOf("@", 1)).includes("@workspace:");
       if (!skipped) entries++;
+      if (!skipped && !line.endsWith(":")) out.push(unnamedEntry(i + 1));
       entry = skipped || !line.endsWith(":") ? null : { name: yarnSpecName(spec), line: i + 1 };
       return;
     }
@@ -249,12 +252,17 @@ function readYarnLock(text) {
 
 const PNPM_VERSIONS = ["6.0", "6.1", "9.0"];
 
-// One `name: value` field added to a Map, so an input name is never taken for an object property; given `names`, only those.
-function addField(fields, text, names = null) {
-  const colon = text.indexOf(": ");
-  if (colon <= 0) return;
-  const name = unquote(text.slice(0, colon).trim());
-  if (names === null || names.includes(name)) fields.set(name, unquote(text.slice(colon + 2).trim()));
+// A `key: value` or `key:` line's key, as written, and its value, both trimmed; null for any other text.
+function fieldOf(text) {
+  const sep = text.indexOf(": ");
+  if (sep > 0) return { key: text.slice(0, sep).trim(), value: text.slice(sep + 2).trim() };
+  return text.length > 1 && text.endsWith(":") ? { key: text.slice(0, -1).trim(), value: "" } : null;
+}
+
+// One `key: value` field added to a Map, so an input name is never taken for an object property.
+function addField(fields, text) {
+  const field = fieldOf(text.trim());
+  if (field) fields.set(unquote(field.key), unquote(field.value));
 }
 
 // The fields of a one-line flow map (`{a: 1, b: 'x, y'}`), split at commas outside quotes in one pass; `\"` inside double quotes
@@ -282,7 +290,11 @@ function flowMapFields(text) {
 const PNPM_GITHUB_KEY = "github.com/";
 // The only fields of an entry read besides its resolution.
 const PNPM_ENTRY_FIELDS = ["name", "version"];
-const RESOLUTION_FIELD = "    resolution:";
+const PNPM_LAYOUT = "not laid out as pnpm writes it";
+// A field under a block resolution: a plain name with a plain value, which never starts like a YAML collection, anchor, alias,
+// block scalar, tag, comment or quoted string.
+const RESOLUTION_CHILD_NAME = /^[A-Za-z]+$/;
+const ODD_VALUE_START = "{[&*|>!#'\"%@`";
 // A URL scheme at the start of a key's version (`git+ssh:`, `https:`, `file:`): one class, so it cannot backtrack.
 const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 
@@ -346,9 +358,10 @@ function pnpmSource(depPath, keyVersion, resolution) {
 // A pnpm package entry. The key loses a leading `/` and the `(…)` peer suffix. An entry with a `name:` line is named by it, and
 // its key must be `<name>@<version>` or an address key, or its source is one it cannot read. Without one, the name before the
 // version is taken only when the version is a version or starts with a scheme, so a key like `user:pw@host/…` never names the
-// entry; an entry with no name is one it cannot read, kept with no name or version, so a key can never hide where a package comes
-// from. A version that is an address gives way to the entry's `version:` line.
+// entry; an entry with no name (a key line it could not read among them) is one it cannot read, kept with no name or version, so
+// a key can never hide where a package comes from. A version that is an address gives way to the entry's `version:` line.
 function pnpmEntry({ key, line, fields, resolution, unreadable }) {
+  if (key === null) return unnamedEntry(line);
   let depPath = key.startsWith("/") ? key.slice(1) : key;
   if (depPath.includes("(")) depPath = depPath.slice(0, depPath.indexOf("("));
   const named = fields.get("name");
@@ -357,23 +370,60 @@ function pnpmEntry({ key, line, fields, resolution, unreadable }) {
   const keyVersion = at < 0 ? undefined : depPath.slice(at);
   const keyNamed = keyVersion !== undefined && (SEMVER.test(keyVersion) || SCHEME.test(keyVersion));
   const name = named ?? (keyNamed ? depPath.slice(0, at - 1) : undefined);
-  if (name === undefined) return { name: null, version: null, line, ...UNREADABLE_ENTRY };
+  if (name === undefined) return unnamedEntry(line);
   const version = keyVersion !== undefined && SEMVER.test(keyVersion) ? keyVersion : fields.get("version") ?? null;
   const readable = !unreadable && (address || keyVersion !== undefined);
   return { name, version, line, ...(readable ? pnpmSource(depPath, keyVersion, resolution) : UNREADABLE_ENTRY) };
 }
 
-// A `resolution:` value: nothing (its fields follow on more deeply indented lines) or a one-line flow map; any other shape (a
-// comment, an anchor, a map split across lines) is one it cannot read.
+// A 2-space line in packages: an entry key ending in `:`, or a line it cannot read as one, which still stands for an entry.
+function pnpmEntryStart(line, lineNumber) {
+  const match = /^ {2}(\S.*):$/.exec(line);
+  const key = match ? unquote(match[1]) : null;
+  return { key, line: lineNumber, field: null, inResolution: false, fields: new Map(), resolution: new Map(), unreadable: false };
+}
+
+// A `resolution:` value: nothing (its fields follow on the lines below) or a one-line flow map; any other shape (a comment, an
+// anchor, a map split across lines) is one it cannot read.
 function readResolution(entry, value) {
-  const text = value.trim();
-  if (text === "") entry.inResolution = true;
-  else if (text.startsWith("{") && text.endsWith("}")) entry.resolution = flowMapFields(text);
+  if (value === "") entry.inResolution = true;
+  else if (value.startsWith("{") && value.endsWith("}")) entry.resolution = flowMapFields(value);
   else entry.unreadable = true;
 }
 
-// Each package entry runs from its key to the next key or top-level line; its `resolution` is inline or on the more deeply
-// indented lines after it, up to the entry's next field.
+// A 4-space field of an entry: `resolution` (its name unquoted, so `"resolution"` is it and `resolutions` is not), `name` and
+// `version` are read; any other field is passed over with the lines below it. A line that is no field is one it cannot read.
+function readPnpmField(entry, text) {
+  const field = fieldOf(text);
+  entry.field = field ? unquote(field.key) : null;
+  entry.inResolution = false;
+  if (!field) entry.unreadable = true;
+  else if (entry.field === "resolution") readResolution(entry, field.value);
+  else if (PNPM_ENTRY_FIELDS.includes(entry.field)) {
+    if (field.value === "") entry.unreadable = true;
+    else entry.fields.set(entry.field, unquote(field.value));
+  }
+}
+
+// A line deeper than an entry's fields: passed over under a field other than `resolution`; under a block resolution, a 6-space
+// plain `name: value`; anywhere else, or in any other shape, one it cannot read.
+function readPnpmDeeperLine(entry, indent, text) {
+  if (entry.field !== null && entry.field !== "resolution") return;
+  const field = entry.inResolution && indent === 6 ? fieldOf(text) : null;
+  const plain = field && RESOLUTION_CHILD_NAME.test(field.key) && field.value !== "" && !ODD_VALUE_START.includes(field.value[0]);
+  if (plain) entry.resolution.set(field.key, field.value);
+  else entry.unreadable = true;
+}
+
+const leadingSpaces = (line) => {
+  let n = 0;
+  while (line[n] === " ") n++;
+  return n;
+};
+
+// The packages section is read strictly, line by line, as pnpm writes it: comments and blank lines skipped; entry keys at 2
+// spaces; their fields at 4; a resolution's fields at 6. A tab, or an odd indentation before 6 or before the first entry, means
+// the section is not one it can read.
 function readPnpmLock(text) {
   const version = /^lockfileVersion: '?([^'\s]+)'?\s*$/m.exec(text)?.[1];
   if (!PNPM_VERSIONS.includes(version)) throw unsupportedVersion(version);
@@ -385,27 +435,24 @@ function readPnpmLock(text) {
     if (entry) out.push(pnpmEntry(entry));
     entry = null;
   };
-  linesOf(text).forEach((line, i) => {
-    if (/^\S/.test(line)) {
+  linesOf(text).forEach((rawLine, i) => {
+    const line = rawLine.trimEnd();
+    const indent = leadingSpaces(line);
+    if (line === "" || line[indent] === "#") return;
+    if (indent === 0 && line[0] !== "\t") {
       finish();
       inPackages = line === "packages:";
       return;
     }
     if (!inPackages) return;
-    if (/^ {2}\S/.test(line)) {
+    const odd = line[indent] === "\t" || (indent < 6 && indent % 2 === 1) || (entry === null && indent !== 2);
+    if (odd) throw new Unreadable(PNPM_LAYOUT);
+    if (indent === 2) {
       finish();
       entries++;
-      const match = /^ {2}(\S.*):$/.exec(line);
-      const fresh = { fields: new Map(), resolution: new Map(), inResolution: false, unreadable: false };
-      entry = match ? { key: unquote(match[1]), line: i + 1, ...fresh } : null;
-      return;
-    }
-    if (!entry) return;
-    if (/^ {4}\S/.test(line)) {
-      entry.inResolution = false;
-      if (line.startsWith(RESOLUTION_FIELD)) readResolution(entry, line.slice(RESOLUTION_FIELD.length));
-      else addField(entry.fields, line.slice(4), PNPM_ENTRY_FIELDS);
-    } else if (entry.inResolution && /^ {6}\S/.test(line)) addField(entry.resolution, line.slice(6));
+      entry = pnpmEntryStart(line, i + 1);
+    } else if (indent === 4) readPnpmField(entry, line.slice(4));
+    else readPnpmDeeperLine(entry, indent, line.slice(indent));
   });
   finish();
   return found(out, entries);
