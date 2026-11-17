@@ -42,10 +42,14 @@ test("runClaude: a program that is not there resolves as missing", async () => {
 test("runClaude: a call that keeps running through SIGTERM settles at its time limit and is killed after the grace period", { skip }, async () => {
   const { env, log } = fakeEnv({ FAKE_CLAUDE_MODE: "stubborn" });
   const started = Date.now();
-  const run = await runClaude({ args: [], prompt: "x", timeoutMs: 500, killAfterMs: 500, command: FAKE, env });
+  // The time limit leaves the fake time to start and log itself on a busy machine; a SIGTERM before Node has started would end it
+  // before it could ignore the signal.
+  const run = await runClaude({ args: [], prompt: "x", timeoutMs: 1500, killAfterMs: 500, command: FAKE, env });
   assert.equal(run.timedOut, true);
-  assert.ok(Date.now() - started < 2000, "settles without waiting for the child to end");
-  const [{ pid }] = fakeClaudeCalls(log);
+  assert.ok(Date.now() - started < 3000, "settles without waiting for the child to end");
+  const calls = fakeClaudeCalls(log);
+  assert.equal(calls.length, 1, "the fake started and logged itself before the time limit");
+  const [{ pid }] = calls;
   const alive = () => {
     try {
       process.kill(pid, 0);
