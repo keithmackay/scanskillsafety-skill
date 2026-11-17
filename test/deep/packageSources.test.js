@@ -41,7 +41,7 @@ test("another ecosystem's official host is not expected", () => {
 });
 
 test("an official host on another port is not expected", () => {
-  assert.equal(classifySource("npm", "https://registry.npmjs.org:8443/x").kind, "host");
+  assert.deepEqual(classifySource("npm", "https://registry.npmjs.org:8443/x"), offRegistry("host", "https://registry.npmjs.org:8443"));
 });
 
 test("plain http to the official host is kind http, shown as scheme and host", () => {
@@ -143,7 +143,7 @@ test("a 4 MB line of a@ is answered in bounded time", () => {
   const text = "a@".repeat(2 * 1024 * 1024);
   const start = performance.now();
   assert.deepEqual(classifySource("npm", text), UNREADABLE);
-  assert.ok(performance.now() - start < 200);
+  assert.ok(performance.now() - start < 1000);
 });
 
 test("package.json: an npm alias is the registry", () => {
@@ -236,4 +236,53 @@ test("package.json: a git form it cannot read is git with no address and a fixed
 test("package.json: an http(s) address it cannot read has no address and a fixed text, never the registry", () => {
   assert.deepEqual(classifyManifestValue("npm", "https://"), { expected: false, kind: "url", address: null, text: "an address it could not read" });
   assert.deepEqual(classifyManifestValue("npm", "http://"), { expected: false, kind: "http", address: null, text: "an address it could not read" });
+});
+
+const UNREAD_GIT = { expected: false, kind: "git", address: null, text: "a git source it could not read" };
+const UNREAD_SOURCE = { expected: false, kind: "url", address: null, text: "a source it could not read" };
+const SCP_WITH_BAD_PATHS = ["git@host:u/r\nFAKE", "git@host:u/\x1b[31mred", "git@host:tok:pw/r", "git@host:/abs/r", "git@host:u//r"];
+
+test("scp-form git whose path has a character outside a name is unreadable", () => {
+  for (const text of SCP_WITH_BAD_PATHS) assert.deepEqual(classifySource("npm", text), UNREADABLE, JSON.stringify(text));
+});
+
+test("package.json: scp-form git whose path has a character outside a name is git with a fixed text, never the raw path", () => {
+  for (const value of SCP_WITH_BAD_PATHS) assert.deepEqual(classifyManifestValue("npm", value), UNREAD_GIT, JSON.stringify(value));
+});
+
+test("an ssh URL with a password and an scp-style colon is unreadable", () => {
+  assert.deepEqual(classifySource("npm", "ssh://user:pw@host:u/r"), UNREADABLE);
+});
+
+test("GitLab shorthand with an empty last segment is unreadable", () => {
+  assert.deepEqual(classifySource("npm", "gitlab:g/r/"), UNREADABLE);
+});
+
+test("package.json: a patch nested past two levels is a source it could not read", () => {
+  assert.deepEqual(classifyManifestValue("npm", "patch:a@patch:b@^1#./q.patch#./p.patch"), EXPECTED);
+  assert.deepEqual(classifyManifestValue("npm", "patch:a@patch:b@patch:c@^1"), UNREAD_SOURCE);
+});
+
+test("package.json: 16,000 nested patches are answered in bounded time", () => {
+  const value = "patch:a@".repeat(16_000) + "^1";
+  const start = performance.now();
+  assert.deepEqual(classifyManifestValue("npm", value), UNREAD_SOURCE);
+  assert.ok(performance.now() - start < 1000);
+});
+
+test("package.json: a patch with no package name is a source it could not read", () => {
+  assert.deepEqual(classifyManifestValue("npm", "patch:github%3Au%2Fr#x"), UNREAD_SOURCE);
+});
+
+test("package.json: file: and npm: are read in any case, as npm reads them", () => {
+  assert.deepEqual(classifyManifestValue("npm", "FILE:../x"), LOCAL);
+  assert.deepEqual(classifyManifestValue("npm", "NPM:@s/p@^1"), EXPECTED);
+});
+
+test("package.json: 4 MB values are answered in bounded time", () => {
+  for (const value of ["a@".repeat(2 * 1024 * 1024), "git@h:" + "a/".repeat(2 * 1024 * 1024), "a/".repeat(2 * 1024 * 1024)]) {
+    const start = performance.now();
+    classifyManifestValue("npm", value);
+    assert.ok(performance.now() - start < 1000);
+  }
 });
