@@ -251,12 +251,13 @@ test("a lockfile with entries it cannot make out could not be read, rather than 
     ...EMPTY,
     couldNotRead: [
       { file: "yarn.lock", reason: "no packages found in it" },
-      { file: "a/pnpm-lock.yaml", reason: "no packages found in it" },
+      { file: "a/pnpm-lock.yaml", reason: "a package source it could not read" },
       { file: "b/package-lock.json", reason: "no packages found in it" },
       { file: "c/package-lock.json", reason: "no packages found in it" },
       { file: "poetry.lock", reason: "no packages found in it" },
       { file: "requirements.txt", reason: "no pinned versions in it" },
     ],
+    sourced: [{ ecosystem: "npm", file: "a/pnpm-lock.yaml", line: 5, name: null, version: null, kind: "unreadable", address: null }],
   });
 });
 
@@ -733,7 +734,9 @@ test("pnpm-lock.yaml: a git key with a peer suffix is classified without it", ()
   assert.deepEqual(read.sourced, [sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "git", "https://github.com/u/a.git", { commit: SHA1 })]);
 });
 
-test("pnpm-lock.yaml version 6: a tarball key with no name line has no name to show, so it is left out, never named from the key", () => {
+const unnamed = (line) => sourced(null, null, "pnpm-lock.yaml", line, "unreadable", null);
+
+test("pnpm-lock.yaml version 6: a tarball key with no name line is a source it could not read with no name, never named from the key", () => {
   const read = pnpmV6Read(
     "  /chalk@2.4.2:",
     "    resolution: {integrity: sha512-x}",
@@ -745,7 +748,35 @@ test("pnpm-lock.yaml version 6: a tarball key with no name line has no name to s
     "  SECRET:pw@files.example.com/a/p-1.0.0.tgz:",
     "    resolution: {integrity: sha512-x}",
   );
-  assert.deepEqual(read, { ...EMPTY, packages: [npm("chalk", "2.4.2", "pnpm-lock.yaml", 5)] });
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [npm("chalk", "2.4.2", "pnpm-lock.yaml", 5)],
+    couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
+    sourced: [unnamed(8), unnamed(12)],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("pnpm-lock.yaml: an entry whose name cannot be found is a source it could not read, with nothing from it kept", () => {
+  const read = pnpmRead(
+    "  a@1.0.0:",
+    "    resolution: {integrity: sha512-x}",
+    "",
+    "  SECRETNAME:",
+    "    resolution: {tarball: https://evil.example/SECRET/x.tgz}",
+    "    version: 6.6.6-SECRET",
+    "",
+    "  x@latest:",
+    "    resolution: {tarball: https://evil.example/SECRET/y.tgz}",
+  );
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [npm("a", "1.0.0", "pnpm-lock.yaml", 5)],
+    couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
+    sourced: [unnamed(8), unnamed(12)],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+  assert.ok(!JSON.stringify(read).includes("evil"));
 });
 
 test("pnpm-lock.yaml: an escaped quote inside a double-quoted flow value does not end it", () => {

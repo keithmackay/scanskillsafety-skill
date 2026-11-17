@@ -346,7 +346,8 @@ function pnpmSource(depPath, keyVersion, resolution) {
 // A pnpm package entry. The key loses a leading `/` and the `(…)` peer suffix. An entry with a `name:` line is named by it, and
 // its key must be `<name>@<version>` or an address key, or its source is one it cannot read. Without one, the name before the
 // version is taken only when the version is a version or starts with a scheme, so a key like `user:pw@host/…` never names the
-// entry; an entry with no name is left out. A version that is an address gives way to the entry's `version:` line.
+// entry; an entry with no name is one it cannot read, kept with no name or version, so a key can never hide where a package comes
+// from. A version that is an address gives way to the entry's `version:` line.
 function pnpmEntry({ key, line, fields, resolution, unreadable }) {
   let depPath = key.startsWith("/") ? key.slice(1) : key;
   if (depPath.includes("(")) depPath = depPath.slice(0, depPath.indexOf("("));
@@ -356,7 +357,7 @@ function pnpmEntry({ key, line, fields, resolution, unreadable }) {
   const keyVersion = at < 0 ? undefined : depPath.slice(at);
   const keyNamed = keyVersion !== undefined && (SEMVER.test(keyVersion) || SCHEME.test(keyVersion));
   const name = named ?? (keyNamed ? depPath.slice(0, at - 1) : undefined);
-  if (name === undefined) return null;
+  if (name === undefined) return { name: null, version: null, line, ...UNREADABLE_ENTRY };
   const version = keyVersion !== undefined && SEMVER.test(keyVersion) ? keyVersion : fields.get("version") ?? null;
   const readable = !unreadable && (address || keyVersion !== undefined);
   return { name, version, line, ...(readable ? pnpmSource(depPath, keyVersion, resolution) : UNREADABLE_ENTRY) };
@@ -381,8 +382,7 @@ function readPnpmLock(text) {
   let entries = 0;
   let entry = null;
   const finish = () => {
-    const pkg = entry && pnpmEntry(entry);
-    if (pkg) out.push(pkg);
+    if (entry) out.push(pnpmEntry(entry));
     entry = null;
   };
   linesOf(text).forEach((line, i) => {
