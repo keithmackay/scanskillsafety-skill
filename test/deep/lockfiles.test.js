@@ -632,6 +632,7 @@ test("pnpm-lock.yaml: a file: key is local whatever its resolution; a resolution
     couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
     sourced: [sourced("node", "22.0.0", "pnpm-lock.yaml", 9, "unreadable", null)],
   });
+  assert.ok(read.sourced.every((item) => item.kind !== "local"));
   assert.ok(!JSON.stringify(read).includes("SECRET"));
 });
 
@@ -668,13 +669,86 @@ test("pnpm-lock.yaml version 6: a tarball key is its address without the protoco
   assert.deepEqual(read, { ...EMPTY, packages: [npm("@s/p", "1.0.0", "pnpm-lock.yaml", 5)] });
 });
 
-test("pnpm-lock.yaml version 6: a tarball key holding a credential is shown by its host only, and its name comes from the name line", () => {
+test("pnpm-lock.yaml version 6: a key holding a credential before an @ is a source it could not read, named by the name line, never shown", () => {
   const read = pnpmV6Read(
     "  SECRET:pw@files.example.com/a/p-1.0.0.tgz:",
     "    resolution: {integrity: sha512-x}",
     "    name: p",
     "    version: 1.0.0",
   );
-  assert.deepEqual(read, { ...EMPTY, sourced: [sourced("p", "1.0.0", "pnpm-lock.yaml", 5, "host", "https://files.example.com")] });
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("p", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null)],
+  });
   assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("pnpm-lock.yaml: a resolution written in any shape but a one-line flow map or a block is a source it could not read", () => {
+  const read = pnpmRead(
+    "  a@1.0.0:",
+    "    resolution: # mirror",
+    "      tarball: https://evil.example/a-1.0.0.tgz",
+    "",
+    "  b@1.0.0:",
+    "    resolution: &r",
+    "      tarball: https://evil.example/b-1.0.0.tgz",
+    "",
+    "  c@1.0.0:",
+    "    resolution: {integrity: sha512-x,",
+    "      tarball: https://evil.example/c-1.0.0.tgz}",
+    "",
+    "  d@1.0.0:",
+    "    resolution:   ",
+    "      tarball: https://evil.example/d-1.0.0.tgz",
+  );
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
+    sourced: [
+      sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null),
+      sourced("b", "1.0.0", "pnpm-lock.yaml", 9, "unreadable", null),
+      sourced("c", "1.0.0", "pnpm-lock.yaml", 13, "unreadable", null),
+      sourced("d", "1.0.0", "pnpm-lock.yaml", 17, "host", "https://evil.example"),
+    ],
+  });
+});
+
+test("pnpm-lock.yaml: a key that is neither the name line's name with a version nor a host and path is a source it could not read", () => {
+  const read = pnpmRead("  alias@1.0.0:", "    resolution: {integrity: sha512-x}", "    name: real", "    version: 1.0.0");
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("real", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null)],
+  });
+});
+
+test("pnpm-lock.yaml: a git resolution with no repository is a source it could not read", () => {
+  const read = pnpmRead("  a@1.0.0:", `    resolution: {commit: ${SHA1}, type: git}`);
+  assert.deepEqual(read.sourced, [sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null)]);
+});
+
+test("pnpm-lock.yaml: a git key with a peer suffix is classified without it", () => {
+  const read = pnpmRead(`  a@git+https://github.com/u/a.git#${SHA1}(react@18.2.0):`, "    resolution: {integrity: sha512-x}", "    version: 1.0.0");
+  assert.deepEqual(read.sourced, [sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "git", "https://github.com/u/a.git", { commit: SHA1 })]);
+});
+
+test("pnpm-lock.yaml version 6: a tarball key with no name line has no name to show, so it is left out, never named from the key", () => {
+  const read = pnpmV6Read(
+    "  /chalk@2.4.2:",
+    "    resolution: {integrity: sha512-x}",
+    "",
+    "  registry.npmmirror.com/@s/p/-/p-1.0.0.tgz:",
+    "    resolution: {integrity: sha512-x}",
+    "    version: 1.0.0",
+    "",
+    "  SECRET:pw@files.example.com/a/p-1.0.0.tgz:",
+    "    resolution: {integrity: sha512-x}",
+  );
+  assert.deepEqual(read, { ...EMPTY, packages: [npm("chalk", "2.4.2", "pnpm-lock.yaml", 5)] });
+});
+
+test("pnpm-lock.yaml: an escaped quote inside a double-quoted flow value does not end it", () => {
+  const read = pnpmRead("  a@1.0.0:", '    resolution: {integrity: "x\\", tarball: https://evil.example/a.tgz"}');
+  assert.deepEqual(read, { ...EMPTY, packages: [npm("a", "1.0.0", "pnpm-lock.yaml", 5)] });
 });

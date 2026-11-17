@@ -207,9 +207,10 @@ function berrySource(value) {
   return patched === null ? UNREADABLE_ENTRY : berryResolutionSource(patched);
 }
 
-function yarnClassicSource(resolved) {
-  const codeload = codeloadSource(resolved);
-  return codeload ? { classified: codeload } : { source: resolved };
+// An address a lockfile records: a codeload tarball is the GitHub repository it came from; any other is left to the classifier.
+function addressSource(address, direct = false) {
+  const codeload = codeloadSource(address);
+  return codeload ? { classified: codeload } : { source: address, direct };
 }
 
 // Each entry runs from its header to the next header or the end of the file, so its source, on a line after its version, is
@@ -220,7 +221,7 @@ function readYarnLock(text) {
   if (!berry && !text.includes("# yarn lockfile v1")) throw new Unreadable("not a Yarn lockfile it can read");
   const versionLine = berry ? /^ {2}version: "?([^"\s]+)"?$/ : /^ {2}version "([^"]+)"$/;
   const sourceLine = berry ? "  resolution: " : "  resolved ";
-  const sourceOf = berry ? berrySource : yarnClassicSource;
+  const sourceOf = berry ? berrySource : addressSource;
   const out = [];
   let entry = null;
   let entries = 0;
@@ -248,22 +249,26 @@ function readYarnLock(text) {
 
 const PNPM_VERSIONS = ["6.0", "6.1", "9.0"];
 
-// One `name: value` field added to a Map, so an input name is never taken for an object property.
-function addField(fields, text) {
+// One `name: value` field added to a Map, so an input name is never taken for an object property; given `names`, only those.
+function addField(fields, text, names = null) {
   const colon = text.indexOf(": ");
-  if (colon > 0) fields.set(unquote(text.slice(0, colon).trim()), unquote(text.slice(colon + 2).trim()));
+  if (colon <= 0) return;
+  const name = unquote(text.slice(0, colon).trim());
+  if (names === null || names.includes(name)) fields.set(name, unquote(text.slice(colon + 2).trim()));
 }
 
-// The fields of a one-line flow map (`{a: 1, b: 'x, y'}`), split at commas outside quotes in one pass.
+// The fields of a one-line flow map (`{a: 1, b: 'x, y'}`), split at commas outside quotes in one pass; `\"` inside double quotes
+// does not end them.
 function flowMapFields(text) {
   const fields = new Map();
-  const body = text.trim().replace(/^\{|\}$/g, "");
+  const body = text.slice(1, -1);
   let quote = null;
   let start = 0;
   for (let i = 0; i < body.length; i++) {
     const c = body[i];
     if (quote) {
-      if (c === quote) quote = null;
+      if (quote === '"' && c === "\\") i++;
+      else if (c === quote) quote = null;
     } else if (c === "'" || c === '"') quote = c;
     else if (c === ",") {
       addField(fields, body.slice(start, i));
@@ -275,6 +280,11 @@ function flowMapFields(text) {
 }
 
 const PNPM_GITHUB_KEY = "github.com/";
+// The only fields of an entry read besides its resolution.
+const PNPM_ENTRY_FIELDS = ["name", "version"];
+const RESOLUTION_FIELD = "    resolution:";
+// A URL scheme at the start of a key's version (`git+ssh:`, `https:`, `file:`): one class, so it cannot backtrack.
+const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 
 // A version 6 `github.com/u/r/<sha>` key: a GitHub repository at that commit; null for any other key.
 function pnpmGithubKey(depPath) {
@@ -283,16 +293,28 @@ function pnpmGithubKey(depPath) {
   return segments.length === 3 ? githubCommit(...segments) : null;
 }
 
-// The source a key itself names: a GitHub key with no name, or a key whose version is an address (git, tarball, `file:`), which
-// pins that one package; null when the key is a plain name and version.
+// A version 6 tarball or git key, an address without its protocol: its first `/` segment looks like a host (a `.`, no `@`).
+function isAddressKey(depPath) {
+  const host = depPath.split("/", 1)[0];
+  return host.length < depPath.length && host.includes(".") && !host.includes("@");
+}
+
+// Where a key's version starts after the `@` that ends its name: after the name line's name when there is one, otherwise after
+// the first `@` past the start, so a scoped name and a `git+ssh://git@…` key split right; -1 when there is no such `@`.
+function keyVersionAt(depPath, named) {
+  if (named !== undefined) return depPath.startsWith(`${named}@`) ? named.length + 1 : -1;
+  const at = depPath.indexOf("@", 1);
+  return at < 0 ? -1 : at + 1;
+}
+
+// The source a key itself names: an address key (a GitHub repository at a commit, or a tarball read as https), or a version that
+// is an address (git, tarball, `file:`), which pins that one package; null when the version is a plain version.
 function pnpmKeySource(depPath, keyVersion) {
   if (keyVersion === undefined) {
     const github = pnpmGithubKey(depPath);
     return github ? { classified: github } : null;
   }
-  if (SEMVER.test(keyVersion)) return null;
-  const codeload = codeloadSource(keyVersion);
-  return codeload ? { classified: codeload } : { source: keyVersion, direct: true };
+  return SEMVER.test(keyVersion) ? null : addressSource(keyVersion, true);
 }
 
 // A git resolution: the repository, an http(s) one marked as git, at the commit, which is kept only when it is a commit id.
@@ -303,9 +325,12 @@ function pnpmGitSource(resolution) {
   return OBJECT_ID.test(commit) ? { source, commit } : { source };
 }
 
-// Where a pnpm entry comes from: a directory is local; a git resolution is its repository; a resolution of another type is one it
-// cannot read; otherwise the key when it names a source, then the resolution's tarball; then a key that is an address without
-// its protocol (version 6 tarballs), read as https; with only an integrity, no host.
+// Where a pnpm entry comes from (keyVersion is undefined for an address key), the first that applies:
+// - a `directory` resolution is local; a `git` one is its repository; one of any other type is one it cannot read;
+// - the key, when it names a source;
+// - the resolution's tarball;
+// - an address key, read as https;
+// - with only an integrity, no host.
 function pnpmSource(depPath, keyVersion, resolution) {
   const type = resolution.get("type");
   if (type === "directory") return { classified: LOCAL };
@@ -314,24 +339,36 @@ function pnpmSource(depPath, keyVersion, resolution) {
   const fromKey = pnpmKeySource(depPath, keyVersion);
   if (fromKey) return fromKey;
   const tarball = resolution.get("tarball");
-  if (tarball !== undefined) return { source: tarball };
-  return keyVersion === undefined ? { source: `https://${depPath}` } : { recordsHost: false };
+  if (tarball !== undefined) return addressSource(tarball);
+  return keyVersion === undefined ? addressSource(`https://${depPath}`) : { recordsHost: false };
 }
 
 // A pnpm package entry. The key loses a leading `/` and the `(…)` peer suffix. An entry with a `name:` line is named by it, and
-// its key is `<name>@<version>` or else an address (version 6 tarball and git keys, which can hold a credential before an `@`);
-// one without is split at the first `@` past the start, so a scoped name and a `git+ssh://git@…` key split right. A version that
-// is an address gives way to the entry's `version:` line. An entry with no name is left out.
-function pnpmEntry({ key, line, fields, resolution }) {
+// its key must be `<name>@<version>` or an address key, or its source is one it cannot read. Without one, the name before the
+// version is taken only when the version is a version or starts with a scheme, so a key like `user:pw@host/…` never names the
+// entry; an entry with no name is left out. A version that is an address gives way to the entry's `version:` line.
+function pnpmEntry({ key, line, fields, resolution, unreadable }) {
   let depPath = key.startsWith("/") ? key.slice(1) : key;
   if (depPath.includes("(")) depPath = depPath.slice(0, depPath.indexOf("("));
   const named = fields.get("name");
-  const at = named === undefined ? depPath.indexOf("@", 1) : depPath.startsWith(`${named}@`) ? named.length : -1;
-  const keyVersion = at < 0 ? undefined : depPath.slice(at + 1);
-  const name = named ?? (at < 0 ? undefined : depPath.slice(0, at));
+  const address = isAddressKey(depPath);
+  const at = address ? -1 : keyVersionAt(depPath, named);
+  const keyVersion = at < 0 ? undefined : depPath.slice(at);
+  const keyNamed = keyVersion !== undefined && (SEMVER.test(keyVersion) || SCHEME.test(keyVersion));
+  const name = named ?? (keyNamed ? depPath.slice(0, at - 1) : undefined);
   if (name === undefined) return null;
   const version = keyVersion !== undefined && SEMVER.test(keyVersion) ? keyVersion : fields.get("version") ?? null;
-  return { name, version, line, ...pnpmSource(depPath, keyVersion, resolution) };
+  const readable = !unreadable && (address || keyVersion !== undefined);
+  return { name, version, line, ...(readable ? pnpmSource(depPath, keyVersion, resolution) : UNREADABLE_ENTRY) };
+}
+
+// A `resolution:` value: nothing (its fields follow on more deeply indented lines) or a one-line flow map; any other shape (a
+// comment, an anchor, a map split across lines) is one it cannot read.
+function readResolution(entry, value) {
+  const text = value.trim();
+  if (text === "") entry.inResolution = true;
+  else if (text.startsWith("{") && text.endsWith("}")) entry.resolution = flowMapFields(text);
+  else entry.unreadable = true;
 }
 
 // Each package entry runs from its key to the next key or top-level line; its `resolution` is inline or on the more deeply
@@ -359,14 +396,15 @@ function readPnpmLock(text) {
       finish();
       entries++;
       const match = /^ {2}(\S.*):$/.exec(line);
-      entry = match ? { key: unquote(match[1]), line: i + 1, fields: new Map(), resolution: new Map(), inResolution: false } : null;
+      const fresh = { fields: new Map(), resolution: new Map(), inResolution: false, unreadable: false };
+      entry = match ? { key: unquote(match[1]), line: i + 1, ...fresh } : null;
       return;
     }
     if (!entry) return;
     if (/^ {4}\S/.test(line)) {
-      entry.inResolution = line === "    resolution:";
-      if (line.startsWith("    resolution: ")) entry.resolution = flowMapFields(line.slice("    resolution: ".length));
-      else addField(entry.fields, line.slice(4));
+      entry.inResolution = false;
+      if (line.startsWith(RESOLUTION_FIELD)) readResolution(entry, line.slice(RESOLUTION_FIELD.length));
+      else addField(entry.fields, line.slice(4), PNPM_ENTRY_FIELDS);
     } else if (entry.inResolution && /^ {6}\S/.test(line)) addField(entry.resolution, line.slice(6));
   });
   finish();
