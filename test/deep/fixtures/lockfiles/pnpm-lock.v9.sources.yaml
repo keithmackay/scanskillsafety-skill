@@ -33,7 +33,7 @@ importers:
 packages:
 
   '@scope/thing@https://files.example.com/a/thing-2.0.0.tgz':
-    resolution: {tarball: https://files.example.com/a/thing-2.0.0.tgz}
+    resolution: {integrity: sha512-3dVvtVMS0a5mz6ifZXr8Es/n6ktGVBRmiyP2gQVxZ9mmJTEnUSVOjU7ssKj8uwFNOd0iGfuHWk9wNlZBb7ePcw==, tarball: https://files.example.com/a/thing-2.0.0.tgz}
     version: 2.0.0
 
   js-tokens@4.0.0:

@@ -304,7 +304,8 @@ function pnpmGitSource(resolution) {
 }
 
 // Where a pnpm entry comes from: a directory is local; a git resolution is its repository; a resolution of another type is one it
-// cannot read; otherwise the key when it names a source, then the resolution's tarball; with only an integrity, no host.
+// cannot read; otherwise the key when it names a source, then the resolution's tarball; then a key that is an address without
+// its protocol (version 6 tarballs), read as https; with only an integrity, no host.
 function pnpmSource(depPath, keyVersion, resolution) {
   const type = resolution.get("type");
   if (type === "directory") return { classified: LOCAL };
@@ -313,18 +314,21 @@ function pnpmSource(depPath, keyVersion, resolution) {
   const fromKey = pnpmKeySource(depPath, keyVersion);
   if (fromKey) return fromKey;
   const tarball = resolution.get("tarball");
-  return tarball === undefined ? { recordsHost: false } : { source: tarball };
+  if (tarball !== undefined) return { source: tarball };
+  return keyVersion === undefined ? { source: `https://${depPath}` } : { recordsHost: false };
 }
 
-// A pnpm package entry. The key, without a leading `/` and the `(…)` peer suffix, is split at the first `@` past the start, so a
-// scoped name and a `git+ssh://git@…` key split right; a key with no name there takes the entry's `name:` line, and a version
-// that is an address gives way to the entry's `version:` line. An entry with no name is left out.
+// A pnpm package entry. The key loses a leading `/` and the `(…)` peer suffix. An entry with a `name:` line is named by it, and
+// its key is `<name>@<version>` or else an address (version 6 tarball and git keys, which can hold a credential before an `@`);
+// one without is split at the first `@` past the start, so a scoped name and a `git+ssh://git@…` key split right. A version that
+// is an address gives way to the entry's `version:` line. An entry with no name is left out.
 function pnpmEntry({ key, line, fields, resolution }) {
   let depPath = key.startsWith("/") ? key.slice(1) : key;
   if (depPath.includes("(")) depPath = depPath.slice(0, depPath.indexOf("("));
-  const at = depPath.indexOf("@", 1);
+  const named = fields.get("name");
+  const at = named === undefined ? depPath.indexOf("@", 1) : depPath.startsWith(`${named}@`) ? named.length : -1;
   const keyVersion = at < 0 ? undefined : depPath.slice(at + 1);
-  const name = at < 0 ? fields.get("name") : depPath.slice(0, at);
+  const name = named ?? (at < 0 ? undefined : depPath.slice(0, at));
   if (name === undefined) return null;
   const version = keyVersion !== undefined && SEMVER.test(keyVersion) ? keyVersion : fields.get("version") ?? null;
   return { name, version, line, ...pnpmSource(depPath, keyVersion, resolution) };

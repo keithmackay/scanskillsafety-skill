@@ -655,3 +655,26 @@ test("a pnpm-lock.yaml with a resolution line millions of characters long is rea
   const read = quickly(() => pnpmRead("  a@1.0.0:", long));
   assert.deepEqual(read.packages, [npm("a", "1.0.0", "pnpm-lock.yaml", 5)]);
 });
+
+const pnpmV6Read = (...lines) => readPackages([{ path: "pnpm-lock.yaml", text: ["lockfileVersion: '6.0'", "", "packages:", "", ...lines, ""].join("\n") }]);
+
+test("pnpm-lock.yaml version 6: a tarball key is its address without the protocol, named by the entry's name line", () => {
+  const read = pnpmV6Read(
+    "  registry.npmjs.org/@s/p/-/p-1.0.0.tgz:",
+    "    resolution: {integrity: sha512-x}",
+    "    name: '@s/p'",
+    "    version: 1.0.0",
+  );
+  assert.deepEqual(read, { ...EMPTY, packages: [npm("@s/p", "1.0.0", "pnpm-lock.yaml", 5)] });
+});
+
+test("pnpm-lock.yaml version 6: a tarball key holding a credential is shown by its host only, and its name comes from the name line", () => {
+  const read = pnpmV6Read(
+    "  SECRET:pw@files.example.com/a/p-1.0.0.tgz:",
+    "    resolution: {integrity: sha512-x}",
+    "    name: p",
+    "    version: 1.0.0",
+  );
+  assert.deepEqual(read, { ...EMPTY, sourced: [sourced("p", "1.0.0", "pnpm-lock.yaml", 5, "host", "https://files.example.com")] });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
