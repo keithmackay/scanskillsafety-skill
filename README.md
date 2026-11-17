@@ -264,17 +264,16 @@ What it can tell you: that a model read every file it lists and flagged these fi
 
 Each call is a separate `claude -p` started without a shell, with `--safe-mode --tools "" --strict-mcp-config --no-session-persistence`, its own system prompt, and a JSON schema for its reply. It runs in an empty temporary folder, never the target's, so nothing in the target (`CLAUDE.md`, settings, hooks) can load. The files go in on stdin, each between fences that carry a random token chosen for the run, with its path and line numbers; the prompt says everything between the fences is content under review, never instructions. It uses `claude` on your `PATH`, or the program `CLAUDE_BIN` names, with your own login, account and settings such as `apiKeyHelper` and `ANTHROPIC_BASE_URL`. It never runs inside your agent's session: the agent that runs `scanskillsafety` sees only its output.
 
-Your own Claude Code settings (`~/.claude/settings.json` hooks, plugins, MCP servers) could still apply to these calls if those flags didn't turn them off. This was checked on 2026-11-15 with Claude Code 2.1.311, on a scratch home folder holding user hooks, a plugin with hooks, a user-level MCP server and a `CLAUDE.md`, and only partly:
+Your own Claude Code settings (`~/.claude/settings.json` hooks, plugins, MCP servers, your `CLAUDE.md`) could still apply to these calls if those flags didn't turn them off. This was checked on 2026-11-15 and 2026-11-17 with Claude Code 2.1.311, on a logged-in scratch home folder holding user hooks, a plugin with hooks, a user-level MCP server and a `CLAUDE.md`. A control run without the flags ran every one of them; a run with the flags ran none:
 
 | Setting | Turned off by the flags above |
 |---|---|
-| User hooks that run at start-up and end (SessionStart, UserPromptSubmit, SessionEnd) | Confirmed |
-| Plugin hooks that run at start-up and end | Confirmed |
+| User hooks (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, SessionEnd) | Confirmed |
+| Plugin hooks, the same events | Confirmed |
 | User-level MCP servers (not started) | Confirmed |
-| Hooks that need a model turn (Stop, SubagentStop, PreToolUse, PostToolUse, Notification, PreCompact) | Not confirmed |
-| Your `CLAUDE.md` being loaded | Not confirmed |
+| Your `CLAUDE.md` being loaded | Confirmed |
 
-The last two couldn't be confirmed because the scratch home folder couldn't be logged in, so no model turn took place. With `--tools ""`, a `CLAUDE.md` that still loaded could change only the wording of Claude's reply, which the tool treats as data checked against its schema. If you have hooks of those kinds, know that they may run during Claude's reading.
+Notification, SubagentStop and PreCompact hooks were reached by neither run; a call with no tools and one short turn has no permission prompt, subagent or compaction to reach them. Even if a `CLAUDE.md` loaded, with `--tools ""` it could change only the wording of Claude's reply, which the tool treats as data checked against its schema.
 
 ### Limits
 
