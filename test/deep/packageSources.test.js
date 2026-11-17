@@ -197,3 +197,43 @@ test("package.json: ranges and tags are the registry", () => {
     assert.deepEqual(classifyManifestValue("npm", value), EXPECTED, value);
   }
 });
+
+test("git+ssh with an scp-style colon after the host is git, shown in scp form, with its commit", () => {
+  assert.deepEqual(classifySource("npm", "git+ssh://git@github.com:u/r.git"), offRegistry("git", "git@github.com:u/r.git"));
+  assert.deepEqual(
+    classifySource("npm", `git+ssh://git@github.com:u/r.git#${SHA1}`),
+    offRegistry("git", "git@github.com:u/r.git", { commit: SHA1 }),
+  );
+  assert.deepEqual(classifySource("npm", "ssh://deploy@host:u/r"), offRegistry("git", "host:u/r"));
+});
+
+test("GitLab shorthand keeps its subgroups", () => {
+  assert.deepEqual(classifySource("npm", "gitlab:group/sub/r"), offRegistry("git", "https://gitlab.com/group/sub/r"));
+});
+
+test("gist shorthand with a user is shown by the gist's id", () => {
+  assert.deepEqual(classifySource("npm", "gist:u/abc123"), offRegistry("git", "https://gist.github.com/abc123"));
+});
+
+test("package.json: git+ssh with an scp-style colon is git, with or without a ref", () => {
+  for (const value of ["git+ssh://git@github.com:u/r.git", "git+ssh://git@github.com:u/r.git#semver:^1"]) {
+    assert.deepEqual(classifyManifestValue("npm", value), offRegistry("git", "git@github.com:u/r.git"), value);
+  }
+});
+
+test("package.json: GitLab subgroups and a gist with a user are git", () => {
+  assert.deepEqual(classifyManifestValue("npm", "gitlab:group/sub/r"), offRegistry("git", "https://gitlab.com/group/sub/r"));
+  assert.deepEqual(classifyManifestValue("npm", "gist:u/abc123"), offRegistry("git", "https://gist.github.com/abc123"));
+});
+
+test("package.json: a git form it cannot read is git with no address and a fixed text, never the registry or the raw value", () => {
+  const unread = { expected: false, kind: "git", address: null, text: "a git source it could not read" };
+  for (const value of ["git+file:///tmp/r", "git+https://", "git://", "ssh://", "github:u/r/x", "bitbucket:u", "GitHub:tok@u/r"]) {
+    assert.deepEqual(classifyManifestValue("npm", value), unread, value);
+  }
+});
+
+test("package.json: an http(s) address it cannot read has no address and a fixed text, never the registry", () => {
+  assert.deepEqual(classifyManifestValue("npm", "https://"), { expected: false, kind: "url", address: null, text: "an address it could not read" });
+  assert.deepEqual(classifyManifestValue("npm", "http://"), { expected: false, kind: "http", address: null, text: "an address it could not read" });
+});

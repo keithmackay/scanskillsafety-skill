@@ -9,16 +9,28 @@ const OFFICIAL_HOSTS = { npm: ["registry.npmjs.org", "registry.yarnpkg.com"], Py
 
 const LOCAL_PREFIXES = ["file:", "link:", "workspace:", "portal:", "catalog:", "./", "../", "/", "~/"];
 const GIT_SCHEMES = ["git+https:", "git+ssh:", "git+http:", "git:", "ssh:"];
+const SSH_SCHEMES = ["git+ssh:", "ssh:"];
 const SHORTHAND_HOSTS = new Map([
   ["github:", "https://github.com"],
   ["gitlab:", "https://gitlab.com"],
   ["bitbucket:", "https://bitbucket.org"],
 ]);
 const GIST_PREFIX = "gist:";
+// How many path segments each shorthand takes: GitLab allows subgroups; a gist may name its user before its id.
+const SHORTHAND_SEGMENTS = new Map([
+  ["github:", { min: 2, max: 2 }],
+  ["gitlab:", { min: 2, max: Infinity }],
+  ["bitbucket:", { min: 2, max: 2 }],
+  [GIST_PREFIX, { min: 1, max: 2 }],
+]);
+// Every value starting with one of these is a git source, read or not, so never a version range.
+const GIT_FORMS = ["git+", "git:", "ssh:", ...SHORTHAND_SEGMENTS.keys()];
 // One segment of a shorthand or scp-form name: a single character class, so it cannot backtrack.
 const NAME_SEGMENT = /^[A-Za-z0-9._-]+$/;
 const SCP_HOST = /^[A-Za-z0-9.-]+$/;
 const EXEC_TEXT = "a script that produces the package";
+const UNREAD_GIT_TEXT = "a git source it could not read";
+const UNREAD_ADDRESS_TEXT = "an address it could not read";
 
 const EXPECTED = Object.freeze({ expected: true });
 const LOCAL = Object.freeze({ expected: false, kind: "local" });
@@ -29,6 +41,10 @@ const isLocal = (text) => LOCAL_PREFIXES.some((prefix) => text.startsWith(prefix
 const before = (text, mark) => (text.indexOf(mark) < 0 ? text : text.slice(0, text.indexOf(mark)));
 // The text without its query string and fragment.
 const withoutQuery = (text) => before(before(text, "#"), "?");
+const startsWithAny = (text, prefixes) => {
+  const lower = text.slice(0, 16).toLowerCase();
+  return prefixes.some((prefix) => lower.startsWith(prefix));
+};
 
 // The commit a source's fragment names: exactly 40 or 64 hex, or `commit=` followed by that (Yarn berry). Any other fragment is a
 // branch, a tag or something else that is not a commit.
@@ -53,26 +69,26 @@ function parseUrl(text) {
   }
 }
 
-// `github:u/r`, `gitlab:u/r`, `bitbucket:u/r` and `gist:<id>`, shown as the repository's address.
+// `github:u/r`, `gitlab:group/sub/r`, `bitbucket:u/r` and `gist:[<user>/]<id>`, shown as the repository's address.
 function shorthand(text) {
   const lower = text.slice(0, 10).toLowerCase();
-  const prefix = [...SHORTHAND_HOSTS.keys(), GIST_PREFIX].find((p) => lower.startsWith(p));
+  const prefix = [...SHORTHAND_SEGMENTS.keys()].find((p) => lower.startsWith(p));
   if (!prefix) return null;
   const segments = withoutQuery(text.slice(prefix.length)).split("/");
-  if (prefix === GIST_PREFIX) {
-    return segments.length === 1 && NAME_SEGMENT.test(segments[0]) ? gitResult(text, `https://gist.github.com/${segments[0]}`) : UNREADABLE;
-  }
-  if (segments.length !== 2 || !segments.every((s) => NAME_SEGMENT.test(s))) return UNREADABLE;
-  return gitResult(text, `${SHORTHAND_HOSTS.get(prefix)}/${segments[0]}/${segments[1]}`);
+  const { min, max } = SHORTHAND_SEGMENTS.get(prefix);
+  if (segments.length < min || segments.length > max || !segments.every((s) => NAME_SEGMENT.test(s))) return UNREADABLE;
+  if (prefix === GIST_PREFIX) return gitResult(text, `https://gist.github.com/${segments[segments.length - 1]}`);
+  return gitResult(text, `${SHORTHAND_HOSTS.get(prefix)}/${segments.join("/")}`);
 }
 
-// A git URL with a scheme: shown with the transport after any `git+`, the host and the path.
+// A git URL with a scheme: shown with the transport after any `git+`, the host and the path. An ssh URL with an scp-style colon
+// after the host (`git+ssh://git@host:u/r.git`), which is not a URL, is read as scp form.
 function gitUrl(text) {
-  const lower = text.slice(0, 12).toLowerCase();
-  if (!GIT_SCHEMES.some((scheme) => lower.startsWith(scheme))) return null;
-  const url = parseUrl(lower.startsWith("git+") ? text.slice("git+".length) : text);
-  if (!url || !url.host) return UNREADABLE;
-  return gitResult(text, `${url.protocol}//${url.host}${url.pathname}`);
+  if (!startsWithAny(text, GIT_SCHEMES)) return null;
+  const url = parseUrl(startsWithAny(text, ["git+"]) ? text.slice("git+".length) : text);
+  if (url && url.host) return gitResult(text, `${url.protocol}//${url.host}${url.pathname}`);
+  const authority = text.indexOf("://");
+  return (startsWithAny(text, SSH_SCHEMES) && authority >= 0 && scpForm(text.slice(authority + 3))) || UNREADABLE;
 }
 
 // An http(s) address: the official registry, a mirror (host), plain http, or one archive on another host (url).
@@ -125,8 +141,9 @@ function isGithubShorthand(value) {
   return segments.length === 2 && segments.every((s) => NAME_SEGMENT.test(s)) && !value.startsWith("@");
 }
 
-// A package.json dependency value, in the order the package managers read it. A value that is none of the source forms is a
-// version range or a tag, so the registry: this never answers unreadable.
+// A package.json dependency value, in the order the package managers read it. A git or http(s) value it cannot read is reported
+// with a fixed text in place of the address; a value that is none of the source forms is a version range or a tag, so the
+// registry: this never answers unreadable.
 function classifyManifestValue(ecosystem, value) {
   let resolution = value;
   while (resolution.startsWith("patch:")) resolution = patchedResolution(resolution);
@@ -137,8 +154,10 @@ function classifyManifestValue(ecosystem, value) {
   const gitText = isGithubShorthand(resolution) ? `github:${resolution}` : resolution;
   const git = shorthand(gitText) ?? gitUrl(gitText) ?? scpForm(gitText);
   if (git && git.kind === "git") return git;
+  if (startsWithAny(resolution, GIT_FORMS)) return { expected: false, kind: "git", address: null, text: UNREAD_GIT_TEXT };
   const web = webUrl(ecosystem, resolution, true);
   if (web && !web.unreadable) return web;
+  if (web) return { expected: false, kind: startsWithAny(resolution, ["https:"]) ? "url" : "http", address: null, text: UNREAD_ADDRESS_TEXT };
   return EXPECTED;
 }
 
