@@ -7,8 +7,8 @@ const { OBJECT_ID } = require("./util");
 // The only registries a package is expected to come from. Mirrors are not: nothing vouches for the bytes a mirror serves.
 const OFFICIAL_HOSTS = { npm: ["registry.npmjs.org", "registry.yarnpkg.com"], PyPI: ["pypi.org", "files.pythonhosted.org"] };
 
-// npm reads `file:` and `npm:` in any case; Yarn's and pnpm's own protocols (`link:`, `workspace:`, `portal:`, `catalog:`,
-// `jsr:`, `exec:`, `patch:`) are matched case-sensitively, as those package managers match them.
+// npm reads `file:` and `npm:` in any case; the other protocols (`link:`, `workspace:`, `portal:`, `catalog:`, `jsr:`, `exec:`,
+// `patch:`) are matched as written.
 const LOCAL_PREFIXES = ["link:", "workspace:", "portal:", "catalog:", "./", "../", "/", "~/"];
 const GIT_SCHEMES = ["git+https:", "git+ssh:", "git+http:", "git:", "ssh:"];
 const SSH_SCHEMES = ["git+ssh:", "ssh:"];
