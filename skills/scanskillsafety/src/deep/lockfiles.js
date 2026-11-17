@@ -2,7 +2,8 @@
 // ABOUTME: names from its manifests when it has none; formats it cannot read are listed, never ignored.
 "use strict";
 
-const { baseName, isObject, isVendored } = require("./util");
+const { OBJECT_ID, baseName, isObject, isVendored } = require("./util");
+const { classifySource, NAME_SEGMENT } = require("./packageSources");
 
 const normalisePyPI = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
 const unquote = (s) => s.replace(/^["']|["']$/g, "");
@@ -81,6 +82,29 @@ function npmAlias(version) {
   return match ? { name: match[1], version: match[2] } : null;
 }
 
+// A version npm resolved from the registry; anything else in a version 1 `version` (a git URL, a tarball URL, `file:`) is the
+// package's source.
+const SEMVER = /^\d+\.\d+\.\d+([-+][0-9A-Za-z.+-]+)?$/;
+// A source a reader could not make out, whatever the classifier would say.
+const UNREADABLE = { classified: { unreadable: true } };
+
+// Where a version 2 or 3 entry comes from: a bundled entry comes inside its parent, so its own source is not read; one with no
+// `resolved` came from whatever registry the install used.
+function npmSource(entry) {
+  if (entry.inBundle === true) return {};
+  return entry.resolved === undefined ? { recordsHost: false } : { source: entry.resolved };
+}
+
+// A version 1 entry: an alias by its real name; a version that is a source is classified from it and not kept, so a credential
+// in it is never shown.
+function npmV1Entry(name, entry) {
+  const source = entry.resolved === undefined ? {} : { source: entry.resolved };
+  const alias = npmAlias(entry.version);
+  if (alias) return { ...alias, ...source };
+  if (!SEMVER.test(entry.version)) return { name, version: null, source: entry.version, direct: true };
+  return { name, version: entry.version, ...source };
+}
+
 function readNpmLock(text) {
   const json = parseJson(text);
   const version = json && json.lockfileVersion;
@@ -94,6 +118,7 @@ function readNpmLock(text) {
         name: typeof entry.name === "string" ? entry.name : key.slice(key.lastIndexOf("node_modules/") + "node_modules/".length),
         version: entry.version,
         line: lineOf(key),
+        ...npmSource(entry),
       }));
     return found(packages, entries.length);
   }
@@ -109,7 +134,7 @@ function readNpmLock(text) {
         continue;
       }
       if (!isObject(entry) || typeof entry.version !== "string") continue;
-      out.push({ ...(npmAlias(entry.version) ?? { name, version: entry.version }), line: lineOf(name) });
+      out.push({ ...npmV1Entry(name, entry), line: lineOf(name) });
       stack.push(dependenciesOf(entry).reverse());
     }
     return found(out, dependenciesOf(json).length);
@@ -129,28 +154,88 @@ function yarnSpecName(spec) {
   return spec.slice(0, at);
 }
 
+const CODELOAD = "https://codeload.github.com/";
+
+// A GitHub shorthand that Yarn classic resolved to a codeload tarball (`https://codeload.github.com/u/r/tar.gz/<sha>`): a git
+// source, shown as the repository, with the commit from the path. Anything else on codeload is left to the classifier.
+function codeloadSource(resolved) {
+  if (!resolved.startsWith(CODELOAD)) return null;
+  const segments = resolved.slice(CODELOAD.length).split("/", 5);
+  if (segments.length !== 4) return null;
+  const [user, repo, format, commit] = segments;
+  if (!NAME_SEGMENT.test(user) || !NAME_SEGMENT.test(repo) || format !== "tar.gz" || !OBJECT_ID.test(commit)) return null;
+  return { kind: "git", address: `https://github.com/${user}/${repo}`, commit };
+}
+
+// The resolution a Berry `patch:` patches, URL-decoded, without the patch after `#` or the package name before `@`; null when it
+// cannot be decoded or names no package.
+function berryPatched(resolution) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(resolution.slice("patch:".length).split("#", 1)[0]);
+  } catch {
+    return null;
+  }
+  const at = decoded.indexOf("@", 1);
+  return at < 0 ? null : decoded.slice(at + 1);
+}
+
+// A Berry resolution that is not a patch: `npm:` records no host; an http(s) address with `#commit=` is a git repository; any
+// other http(s) address pins one archive; the rest (git URLs, local protocols, a patch inside a patch) is left to the classifier.
+function berryResolutionSource(resolution) {
+  if (resolution.startsWith("npm:")) return { recordsHost: false };
+  if (!resolution.startsWith("https:") && !resolution.startsWith("http:")) return { source: resolution };
+  const hash = resolution.indexOf("#");
+  if (hash >= 0 && resolution.startsWith("commit=", hash + 1)) return { source: `git+${resolution}` };
+  return { source: resolution, direct: true };
+}
+
+// The source of a Berry `resolution:` value (`name@<resolution>`); a patch is classified by the resolution it patches.
+function berrySource(value) {
+  const at = value.indexOf("@", 1);
+  if (at < 0) return UNREADABLE;
+  const resolution = value.slice(at + 1);
+  if (!resolution.startsWith("patch:")) return berryResolutionSource(resolution);
+  const patched = berryPatched(resolution);
+  return patched === null ? UNREADABLE : berryResolutionSource(patched);
+}
+
+function yarnClassicSource(resolved) {
+  const codeload = codeloadSource(resolved);
+  return codeload ? { classified: codeload } : { source: resolved };
+}
+
+// Each entry runs from its header to the next header or the end of the file, so its source, on a line after its version, is
+// carried with it.
 function readYarnLock(text) {
   const lines = linesOf(text);
   const berry = lines.includes("__metadata:");
   if (!berry && !text.includes("# yarn lockfile v1")) throw new Unreadable("not a Yarn lockfile it can read");
   const versionLine = berry ? /^ {2}version: "?([^"\s]+)"?$/ : /^ {2}version "([^"]+)"$/;
+  const sourceLine = berry ? "  resolution: " : "  resolved ";
+  const sourceOf = berry ? berrySource : yarnClassicSource;
   const out = [];
   let entry = null;
   let entries = 0;
+  const finish = () => {
+    if (entry && entry.version !== undefined) out.push(entry);
+    entry = null;
+  };
   lines.forEach((line, i) => {
     if (/^[^\s#]/.test(line)) {
+      finish();
       const spec = unquote(line.replace(/:$/, "").split(/,\s*/)[0]);
       const skipped = spec === "__metadata" || spec.slice(spec.indexOf("@", 1)).includes("@workspace:");
       if (!skipped) entries++;
       entry = skipped || !line.endsWith(":") ? null : { name: yarnSpecName(spec), line: i + 1 };
       return;
     }
-    const match = entry && versionLine.exec(line);
-    if (match) {
-      out.push({ ...entry, version: match[1] });
-      entry = null;
-    }
+    if (!entry) return;
+    const match = versionLine.exec(line);
+    if (match && entry.version === undefined) entry.version = match[1];
+    else if (line.startsWith(sourceLine)) Object.assign(entry, sourceOf(unquote(line.slice(sourceLine.length))));
   });
+  finish();
   return found(out, entries);
 }
 
@@ -306,13 +391,37 @@ function readSafely(read, text) {
   }
 }
 
+const UNREADABLE_SOURCE_REASON = "a package source it could not read";
+
+// What a reader's entry is: the reader's own verdict when it decided, the classifier's on its source, or the registry when it
+// names no source. A commit the reader found wins over one in the text, and only a git source keeps one.
+function verdictOf(ecosystem, entry) {
+  if (entry.classified) return entry.classified;
+  if (entry.source === undefined) return { expected: true };
+  const verdict = classifySource(ecosystem, entry.source, { direct: entry.direct === true });
+  return verdict.kind === "git" && entry.commit ? { ...verdict, commit: entry.commit } : verdict;
+}
+
+const packageName = (ecosystem, name) => (ecosystem === "PyPI" ? normalisePyPI(name) : name);
+
+// A package from a source other than the official registry, as read from one file; an unreadable source has no address.
+function sourcedPackage(ecosystem, file, entry, verdict) {
+  const item = { ecosystem, file, line: entry.line, name: packageName(ecosystem, entry.name), version: entry.version };
+  if (verdict.unreadable) return { ...item, kind: "unreadable", address: null };
+  Object.assign(item, { kind: verdict.kind, address: verdict.address });
+  if (verdict.kind === "git" && verdict.commit) item.commit = verdict.commit;
+  if (verdict.text) item.text = verdict.text;
+  return item;
+}
+
 // files: the text files read; leftOut: the files left out of that list with the reason, so a lockfile among them is said to be
-// unchecked rather than missed.
+// unchecked rather than missed. packages are those from the official registry, de-duplicated, for OSV; sourced lists every one
+// from elsewhere, file by file, before any de-duplication, so a mirror's copy is reported whichever file names the package first.
 function readPackages(files, leftOut = []) {
-  const result = { packages: [], namesOnly: [], couldNotRead: [], notChecked: [] };
+  const result = { packages: [], namesOnly: [], couldNotRead: [], notChecked: [], sourced: [], notRecorded: [] };
   const seen = new Set();
   const add = (ecosystem, file, { name, version, line }) => {
-    const pkg = { ecosystem, name: ecosystem === "PyPI" ? normalisePyPI(name) : name, version, file, line };
+    const pkg = { ecosystem, name: packageName(ecosystem, name), version, file, line };
     const key = `${pkg.ecosystem}\0${pkg.name}\0${pkg.version}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -326,8 +435,20 @@ function readPackages(files, leftOut = []) {
     if (!kind) continue;
     locked.add(kind.ecosystem);
     const read = readSafely(kind.read, f.text);
-    if (read.reason) result.couldNotRead.push({ file: f.path, reason: read.reason });
-    else for (const entry of read.entries) add(kind.ecosystem, f.path, entry);
+    if (read.reason) {
+      result.couldNotRead.push({ file: f.path, reason: read.reason });
+      continue;
+    }
+    let unreadable = false;
+    for (const entry of read.entries) {
+      const verdict = verdictOf(kind.ecosystem, entry);
+      if (verdict.expected) add(kind.ecosystem, f.path, entry);
+      else if (verdict.kind !== "local") {
+        result.sourced.push(sourcedPackage(kind.ecosystem, f.path, entry, verdict));
+        unreadable ||= verdict.unreadable === true;
+      }
+    }
+    if (unreadable) result.couldNotRead.push({ file: f.path, reason: UNREADABLE_SOURCE_REASON });
   }
   const ownLeftOut = leftOut.filter((l) => !isVendored(l.path));
   result.notChecked.push(...ownLeftOut.filter((l) => NOT_CHECKED.has(baseName(l.path))).map((l) => l.path));

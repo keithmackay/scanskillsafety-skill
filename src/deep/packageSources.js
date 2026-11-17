@@ -178,4 +178,4 @@ function classifyManifestValue(ecosystem, value) {
   return EXPECTED;
 }
 
-module.exports = { classifySource, classifyManifestValue, commitFrom, OFFICIAL_HOSTS };
+module.exports = { classifySource, classifyManifestValue, commitFrom, OFFICIAL_HOSTS, NAME_SEGMENT };
