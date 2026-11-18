@@ -183,11 +183,32 @@ function eggName(address) {
   return egg !== undefined && EGG_NAME.test(egg.slice(4)) ? egg.slice(4) : null;
 }
 
+const WHEEL = /\.whl$/i;
+const SDIST = /\.(?:tar\.gz|zip)$/i;
+
+// The name and version an archive's file name gives: a wheel's are its first two `-` parts (of at least five), a source archive's
+// the text either side of its last `-`. null when the file is neither or the name is not one.
+function archiveNameAndVersion(address) {
+  const path = address.split("#", 1)[0].split("?", 1)[0];
+  const file = path.slice(path.lastIndexOf("/") + 1);
+  let parts = null;
+  if (WHEEL.test(file)) {
+    const fields = file.slice(0, -".whl".length).split("-");
+    if (fields.length >= 5) parts = fields;
+  } else if (SDIST.test(file)) {
+    const stem = file.replace(SDIST, "");
+    const dash = stem.lastIndexOf("-");
+    if (dash > 0) parts = [stem.slice(0, dash), stem.slice(dash + 1)];
+  }
+  return parts && EGG_NAME.test(parts[0]) ? { name: parts[0], version: parts[1] } : null;
+}
+
 // A path without the `[extras]` pip allows after it.
 const withoutExtras = (path) => (path.endsWith("]") && path.includes("[") ? path.slice(0, path.lastIndexOf("[")) : path);
 
 // One address a requirement installs from: a version control address, a URL (one archive), or a path. A path inside the project
-// gives nothing; so does the official registry when the requirement names no package.
+// gives nothing. An archive on the official registry with no name given is the package its file name names, checked by that
+// name and the version, when it is one.
 function addressEntries(address, name, line, folder) {
   if (address === "" || /\s/.test(address)) return [unreadableRequirement(name, line)];
   const verdict =
@@ -197,7 +218,11 @@ function addressEntries(address, name, line, folder) {
       : pythonAddress(withoutExtras(address), folder, { pathField: true }));
   const named = name ?? eggName(address);
   if (verdict.unreadable) return [unreadableRequirement(named, line)];
-  if (verdict.kind === "local" || (verdict.expected && named === null)) return [];
+  if (verdict.kind === "local") return [];
+  if (verdict.expected && named === null) {
+    const archive = archiveNameAndVersion(address);
+    return archive ? [{ ...archive, line, classified: verdict }] : [];
+  }
   return [{ name: named, version: null, line, classified: verdict }];
 }
 
