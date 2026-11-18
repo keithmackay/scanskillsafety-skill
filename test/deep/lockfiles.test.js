@@ -1430,3 +1430,33 @@ test("Python lockfiles: a path is measured from the repository root, so one into
   const project = uvLock('source = { editable = "../packages/t" }');
   assert.deepEqual(readPackages([{ path: "api/uv.lock", text: project }]), EMPTY);
 });
+
+test("poetry.lock: package = [], as Poetry writes a lockfile with no dependencies, holds none; any other top-level package value could not be read", () => {
+  assert.deepEqual(one("poetry.lock", "poetry.empty.lock"), EMPTY);
+  assert.deepEqual(readPackages([{ path: "poetry.lock", text: fixture("poetry.empty.lock").replace(/\n/g, "\r\n") }]), EMPTY);
+  const odd = [
+    ["poetry.lock", 'package = ["x"]\n', POETRY_LAYOUT],
+    ["poetry.lock", 'package = [{ name = "a", version = "1.0.0", source = { type = "legacy", url = "https://evil.example/simple" } }]\n', POETRY_LAYOUT],
+    ["poetry.lock", "package=[]\n", POETRY_LAYOUT],
+    ["poetry.lock", "package = [ ]\n", POETRY_LAYOUT],
+    ["poetry.lock", "package = [] # none\n", POETRY_LAYOUT],
+    ["poetry.lock", 'package = []\n\n[[package]]\nname = "a"\nversion = "1.0.0"\n', POETRY_LAYOUT],
+    ["poetry.lock", 'package = []\n\n[package.source]\ntype = "legacy"\nurl = "https://evil.example/simple"\n', POETRY_LAYOUT],
+    ["uv.lock", "version = 1\npackage = []\n", UV_LAYOUT],
+  ];
+  for (const [file, text, reason] of odd) {
+    const read = readPackages([{ path: file, text }]);
+    assert.deepEqual(read, { ...EMPTY, couldNotRead: [{ file, reason }] }, text);
+  }
+});
+
+test("a uv.lock or poetry.lock with no [[package]] block at all could not be read: no packages found in it", () => {
+  const files = [
+    ["uv.lock", 'version = 1\nrequires-python = ">=3.10"\n'],
+    ["poetry.lock", '[metadata]\nlock-version = "2.0"\n'],
+    ["poetry.lock", ""],
+  ];
+  for (const [file, text] of files) {
+    assert.deepEqual(readPackages([{ path: file, text }]), { ...EMPTY, couldNotRead: [{ file, reason: "no packages found in it" }] }, text);
+  }
+});

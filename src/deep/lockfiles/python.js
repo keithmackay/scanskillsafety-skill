@@ -128,6 +128,7 @@ function uvOrigin(block, folder) {
 const POETRY = {
   tool: "Poetry",
   sourceTable: true,
+  writesEmptyList: true,
   otherTables: new Set(["dependencies", "extras"]),
   foreignFields: ["source", "sdist", "wheels"],
   origin: poetryOrigin,
@@ -135,6 +136,7 @@ const POETRY = {
 const UV = {
   tool: "uv",
   sourceTable: false,
+  writesEmptyList: false,
   otherTables: new Set(["optional-dependencies", "dev-dependencies", "metadata", "group-requires-python"]),
   foreignFields: [],
   origin: uvOrigin,
@@ -175,15 +177,22 @@ function readSourceField(block, { key, exact, value }) {
   else block.unreadable = true;
 }
 
+// `package = []` written as Poetry writes it for a project with no dependencies.
+const isEmptyPackageList = ({ key, exact, value }) =>
+  key === "package" && exact && value.kind === "array" && value.items.length === 0 && value.exact;
+
 // poetry.lock and uv.lock, read statement by statement. Each [[package]] block runs through its sub-tables until the next
-// [[package]] or another top-level table. Before the first table, a key is a bare name other than `package`; a package sub-table
-// with no block before it, among other tables, means the file is not one it can read. In a block, every field of its own table
-// and of Poetry's [package.source] must be written as the tool writes it, or the block is one it cannot read; a sub-table it does
-// not know is one too.
+// [[package]] or another top-level table. Before the first table, a key is a bare name other than `package`, except Poetry's
+// `package = []`, after which no package table may follow; a package sub-table with no block before it, among other tables, means
+// the file is not one it can read, and a file with neither blocks nor that empty list is one with no packages found in it. In a
+// block, every field of its own table and of Poetry's [package.source] must be written as the tool writes it, or the block is one
+// it cannot read; a sub-table it does not know is one too.
 function readPackageBlocks(text, format, folder) {
   const layout = `not laid out as ${format.tool} writes it`;
   const out = [];
   let block = null;
+  let blocks = 0;
+  let emptyList = false;
   let table = "root";
   const finish = () => {
     if (!block) return;
@@ -197,8 +206,10 @@ function readPackageBlocks(text, format, folder) {
       if (top !== "package") {
         finish();
         table = "other";
-      } else if (statement.array && sub === undefined) {
+      } else if (emptyList) throw new Unreadable(layout);
+      else if (statement.array && sub === undefined) {
         finish();
+        blocks++;
         block = { line: statement.line, fields: new Map(), source: null, unreadable: false };
         table = "block";
       } else if (!block) throw new Unreadable(layout);
@@ -211,11 +222,13 @@ function readPackageBlocks(text, format, folder) {
         table = "other";
       }
     } else if (table === "root") {
-      if (statement.key === null || statement.key === "package") throw new Unreadable(layout);
+      if (format.writesEmptyList && !emptyList && isEmptyPackageList(statement)) emptyList = true;
+      else if (statement.key === null || statement.key === "package") throw new Unreadable(layout);
     } else if (table === "block") readBlockField(block, statement);
     else if (table === "source") readSourceField(block, statement);
   }
   finish();
+  if (blocks === 0 && !emptyList) throw new Unreadable("no packages found in it");
   return out;
 }
 
