@@ -1906,6 +1906,8 @@ test("npm and pnpm lockfiles: a workspace folder outside the repository is a pat
     { name: "nopath", line: 15, kind: "unreadable", address: null, text: undefined },
     { name: "oddpath", line: 18, kind: "unreadable", address: null, text: undefined },
   ]);
+  const odd = JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" }, "../far": "x", "node_modules/ok": { version: "1.0.0" } } }, null, 2);
+  assert.deepEqual(pick(readPackages([{ path: "package-lock.json", text: odd }])), [{ name: "far", line: 7, ...outside }]);
   const pnpm = ["lockfileVersion: '9.0'", "", "importers:", "", "  .: {}", "", "  packages/a:", "    dependencies: {}", "", "  ../../far:", "    dependencies: {}", "", "  ../sibling: {}", ""].join("\n");
   assert.deepEqual(pick(readPackages([{ path: "app/pnpm-lock.yaml", text: pnpm }])), [{ name: null, line: 10, ...outside }]);
 });
@@ -1927,4 +1929,6 @@ test("pnpm-lock.yaml: the importers section is read strictly; an indentation pnp
     assert.deepEqual(read(...rows).sourced, [bad(name, line)], rows.join("|"));
   }
   assert.deepEqual(read("      a:", "        specifier: ^1.0.0", "        version: 1.0.0", "    dependenciesMeta:", "      a:", "        injected: true").sourced, []);
+  const flow = readPackages([{ path: "pnpm-lock.yaml", text: [...head.slice(0, 5), "    dependencies: {x: {version: 'link:../ext'}}", ""].join("\n") }]);
+  assert.deepEqual(flow.sourced, [bad(null, 6)]);
 });

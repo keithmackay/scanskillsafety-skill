@@ -124,8 +124,7 @@ function sectionValues(section, members, object, nests) {
     if (typeof value === "string") values.push({ name, value, line: member?.text === value ? member.line : null });
     else if (nests && isObject(value)) {
       stack.push({ entries: Object.entries(value), next: 0, object: member?.object, parent: name });
-    }
-    else values.push({ name, value: null, line: member?.line ?? null });
+    } else values.push({ name, value: null, line: member?.line ?? null });
   }
   return values;
 }
@@ -151,6 +150,18 @@ function dependencyFound(packageName, { value, line }, { checked, overrides }, f
   return named.map(({ name, version }) => ({ entry: { name, version, line }, checked: true }));
 }
 
+// What package.json's `workspaces` gives, as an array of folder patterns or as `{ packages: [...] }`: each pattern that leaves
+// the repository, at the line of the array.
+function workspaceFound(json, members, folder) {
+  if (!Object.hasOwn(json, "workspaces")) return [];
+  const member = members(ROOT_OBJECT, "workspaces");
+  const { workspaces } = json;
+  const listed = isObject(workspaces) && Object.hasOwn(workspaces, "packages");
+  const patterns = listed ? workspaces.packages : workspaces;
+  const line = (listed ? members(member?.object, "packages") : member)?.line ?? null;
+  return workspaceEntries(patterns, line, folder).map((entry) => ({ entry, checked: false }));
+}
+
 // package.json's dependencies in every section that can name a source, and the overrides in `pnpm.overrides`. A section that is
 // not an object is one it cannot read.
 function readPackageJson(text, folder = "") {
@@ -167,15 +178,7 @@ function readPackageJson(text, folder = "") {
       sections.push({ name: "pnpm.overrides", value: value.overrides, member: overrides, nests: false });
     }
   }
-  const found = [];
-  if (Object.hasOwn(json, "workspaces")) {
-    const member = members(ROOT_OBJECT, "workspaces");
-    const { workspaces } = json;
-    const listed = isObject(workspaces) && Object.hasOwn(workspaces, "packages");
-    const patterns = listed ? workspaces.packages : workspaces;
-    const line = (listed ? members(member?.object, "packages") : member)?.line ?? null;
-    for (const entry of workspaceEntries(patterns, line, folder)) found.push({ entry, checked: false });
-  }
+  const found = workspaceFound(json, members, folder);
   for (const { name, value, member, nests } of sections) {
     const checked = CHECKED_SECTIONS.has(name);
     if (!isObject(value)) {

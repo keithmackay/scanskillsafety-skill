@@ -709,8 +709,14 @@ test("pyproject.toml: [[tool.uv.sources.a]] tables read as the list a = [{ … }
   assert.deepEqual(mixed.sourced, [unreadable("PyPI", "pyproject.toml")("a", 2)]);
 });
 
-test("package.json: a workspace folder outside the repository is a path outside the project, read up to its first glob character; inside it gives nothing", () => {
+test("package.json: a workspace folder pattern that can reach outside the repository is a path outside the project (a brace or bracket always can; wildcards stand for one name); inside it gives nothing", () => {
   const file = "app/package.json";
+  for (const pattern of ["{packages/a,../ext}", "packages/*/../../../ext", "*/../../ext", "[.][.]/ext"]) {
+    assert.deepEqual(readOne("package.json", JSON.stringify({ workspaces: [pattern] })).sourced, [item("npm", "package.json")(null, 1, "url", null, OUTSIDE)], pattern);
+  }
+  for (const pattern of ["..*", "*", "packages/?/x", "!../../ignored"]) {
+    assert.deepEqual(readOne("package.json", JSON.stringify({ workspaces: [pattern] })).sourced, [], pattern);
+  }
   const array = lines("{", '  "workspaces": ["packages/*", "../shared/*", "../../outside/*", "!../../ignored", "*"]', "}");
   assert.deepEqual(readOne(file, array).sourced, [item("npm", file)(null, 2, "url", null, OUTSIDE)]);
   const object = lines("{", '  "workspaces": {', '    "packages": ["../../far", "libs/**"]', "  }", "}");
@@ -724,6 +730,11 @@ test("package.json: a workspace folder outside the repository is a path outside 
 test("pyproject.toml: a [tool.uv.workspace] member outside the repository is a path outside the project; inside it gives nothing", () => {
   const text = lines("[tool.uv.workspace]", 'members = ["packages/*", "../../outside/*", "../sibling"]', 'exclude = ["../../x"]');
   assert.deepEqual(readOne("py/pyproject.toml", text).sourced, [item("PyPI", "py/pyproject.toml")(null, 2, "url", null, OUTSIDE)]);
+  for (const pattern of ["{a,../x}", "*/../../x", "[.][.]/x"]) {
+    const read = readOne("pyproject.toml", `[tool.uv.workspace]\nmembers = ["${pattern}"]\n`);
+    assert.deepEqual(read.sourced, [item("PyPI", "pyproject.toml")(null, 2, "url", null, OUTSIDE)], pattern);
+  }
+  assert.deepEqual(readOne("pyproject.toml", '[tool.uv.workspace]\nmembers = ["..*"]\n').sourced, []);
   assert.deepEqual(readOne("pyproject.toml", '[tool.uv.workspace]\nmembers = "x"\n').sourced, [unreadable("PyPI", "pyproject.toml")(null, 2)]);
   assert.deepEqual(readOne("pyproject.toml", '[tool.uv.workspace]\nmembers = [1]\n').sourced, [unreadable("PyPI", "pyproject.toml")(null, 2)]);
 });

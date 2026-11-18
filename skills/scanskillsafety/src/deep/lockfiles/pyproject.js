@@ -25,7 +25,7 @@ const isTrue = (value) => value.kind === "scalar" && value.text === "true";
 // The most parts of a key path kept: more than any section that names a source has. One part past it is kept, so a longer path
 // still reads as deeper than every section, without a long path being copied for each value under it.
 const MAX_PATH = 10;
-const joined = (path, more) => path.concat(more.slice(0, MAX_PATH + 1)).slice(0, MAX_PATH + 1);
+const cappedPath = (path, more) => path.concat(more.slice(0, MAX_PATH + 1)).slice(0, MAX_PATH + 1);
 
 // Every value of a TOML file with its key path (at most MAX_PATH parts and one more): the table it is in, its own dotted key and,
 // for an inline table, each of its entries in turn; an array of tables adds the number of its element to the path, so it never
@@ -36,22 +36,22 @@ function tomlValues(text) {
   const elements = new Map();
   for (const statement of tomlStatements(text, TOML_LAYOUT, { anyLayout: true })) {
     if (statement.header) {
-      table = joined([], statement.header);
+      table = cappedPath([], statement.header);
       if (statement.array) {
         const id = JSON.stringify(table);
         const element = elements.get(id) ?? 0;
         elements.set(id, element + 1);
-        table = joined(table, [element]);
+        table = cappedPath(table, [element]);
       }
       continue;
     }
-    const stack = [{ path: joined(table, statement.path), value: statement.value }];
+    const stack = [{ path: cappedPath(table, statement.path), value: statement.value }];
     while (stack.length > 0) {
       const { path, value } = stack.pop();
       if (value.kind !== "table") values.push({ path, value });
       else {
         for (let k = value.entries.length - 1; k >= 0; k--) {
-          stack.push({ path: joined(path, value.entries[k].path), value: value.entries[k].value });
+          stack.push({ path: cappedPath(path, value.entries[k].path), value: value.entries[k].value });
         }
       }
     }
@@ -230,8 +230,7 @@ function namedIndexes(values, prefix) {
     if (rest === null) continue;
     if (rest.length === 0 && value.kind === "array") {
       value.items.forEach((item, k) => tables.set(`item${k}`, tableFields(item) ?? new Map()));
-    }
-    else if (rest.length === 2 && typeof rest[0] === "number" && typeof rest[1] === "string") {
+    } else if (rest.length === 2 && typeof rest[0] === "number" && typeof rest[1] === "string") {
       if (!tables.has(rest[0])) tables.set(rest[0], new Map());
       tables.get(rest[0]).set(rest[1], value);
     }

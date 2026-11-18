@@ -6,8 +6,10 @@ const { isObject } = require("../util");
 const {
   found,
   jsonKeyLines,
+  jsonMembers,
   OUTSIDE_PROJECT,
   parseJson,
+  ROOT_OBJECT,
   SEMVER,
   staysInside,
   UNREADABLE_ENTRY,
@@ -52,11 +54,20 @@ function readNpmLock(text, folder = "") {
     const out = [];
     const installed = [];
     const packages = [];
+    // The line of a workspace key whose value is not an object, which the key lines do not hold: read only when one is needed.
+    let members = null;
+    const memberLine = (key) => {
+      members ??= jsonMembers(text);
+      return members(members(ROOT_OBJECT, "packages")?.object, key)?.line ?? null;
+    };
     for (const [key, entry] of Object.entries(isObject(json.packages) ? json.packages : {})) {
-      const named = isObject(entry) && typeof entry.name === "string" ? entry.name : null;
       if (!key.includes("node_modules/")) {
         if (key !== "" && !staysInside(folder, key)) {
-          out.push({ name: named, version: null, line: lineOf(key), classified: OUTSIDE_PROJECT });
+          // A workspace is named by its own name, or else by its folder's.
+          const folderName = key.slice(key.lastIndexOf("/") + 1) || null;
+          const named = isObject(entry) && typeof entry.name === "string" ? entry.name : folderName;
+          const line = isObject(entry) ? lineOf(key) : memberLine(key);
+          out.push({ name: named, version: null, line, classified: OUTSIDE_PROJECT });
         }
       } else if (entry && entry.link) {
         const linked = typeof entry.resolved === "string" ? staysInside(folder, entry.resolved) : null;

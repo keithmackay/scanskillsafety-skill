@@ -196,9 +196,10 @@ const IMPORTER_DEPENDENCY_SECTIONS = ["dependencies", "devDependencies", "option
 // A line of the importers section, read strictly for where an importer's folder and its dependencies' `link:` versions point: an
 // importer's folder at 2 spaces (`key:` or `key: {}`), a section at 4, and in a dependency section a dependency's `name:` at 6
 // and its fields at 8. Lines under another section are passed over. An odd indentation, a line that is no field where one is
-// read, or a line deeper than a dependency's fields means the file is not one it can read; a dependency written in a flow map, or
-// a version that is not a scalar on its line, is a source it could not read. An importer's folder, or a linked folder read from
-// it, that leaves the repository is a path outside the project; one inside it, whose files are scanned, gives nothing.
+// read, or a line deeper than a dependency's fields means the file is not one it can read; a dependency section or a dependency
+// written in a flow map, or a version that is not a scalar on its line, is a source it could not read. An importer's folder, or a
+// linked folder read from it, that leaves the repository is a path outside the project; one inside it, whose files are scanned,
+// gives nothing.
 function readImporterLine(importers, indent, text, lineNumber, folder) {
   if (indent % 2 === 1) throw new Unreadable(PNPM_LAYOUT);
   const field = fieldOf(text);
@@ -215,9 +216,11 @@ function readImporterLine(importers, indent, text, lineNumber, folder) {
     return importers.folder === null ? outside(null) : null;
   }
   if (indent === 4) {
-    importers.section = IMPORTER_DEPENDENCY_SECTIONS.includes(field.key) && field.value === "" ? field.key : null;
+    const dependencySection = IMPORTER_DEPENDENCY_SECTIONS.includes(field.key);
+    importers.section = dependencySection && field.value === "" ? field.key : null;
     importers.dependency = null;
-    return null;
+    const flow = dependencySection && field.value !== "" && field.value !== "{}";
+    return flow ? { name: null, version: null, line: lineNumber, ...UNREADABLE_ENTRY } : null;
   }
   if (indent === 6) {
     importers.dependency = unquote(field.key);

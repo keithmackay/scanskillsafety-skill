@@ -218,16 +218,18 @@ const isPackageArchive = (path) => PACKAGE_ARCHIVE.test(path.split("#", 1)[0].sp
 const bundled = (repositoryPath) =>
   Object.freeze({ expected: false, kind: "bundled", address: repositoryPath === "" ? "." : repositoryPath, text: "a bundled package file the scan cannot read" });
 
-// The first character that makes a workspace pattern a glob.
-const GLOB_CHARACTER = /[*?[{]/;
+// A brace or bracket in a workspace pattern, which can name any folder (`{a,../ext}`, `[.][.]/ext`).
+const BRACE_OR_BRACKET = /[{[]/;
+// A run of wildcards, each run matching within one folder name.
+const WILDCARDS = /[*?]+/g;
 
-// Whether a workspace folder pattern, read from a file's folder, reaches outside the repository: judged on its literal part
-// before the first glob character (none of it, as in `*`, is the file's own folder). A negated pattern (`!…`) adds no folder.
+// Whether a workspace folder pattern, read from a file's folder, can reach outside the repository, as npm and uv expand one: a
+// pattern with a brace or bracket is judged to leave it; otherwise each run of `*` and `?` stands for one folder name and the
+// whole path is measured, so `*/../../ext` leaves and `..*` does not. A negated pattern (`!…`) adds no folder.
 function workspaceOutside(folder, pattern) {
   if (pattern.startsWith("!")) return false;
-  const glob = pattern.search(GLOB_CHARACTER);
-  const literal = glob < 0 ? pattern : pattern.slice(0, glob);
-  return literal !== "" && !staysInside(folder, literal);
+  if (BRACE_OR_BRACKET.test(pattern)) return true;
+  return !staysInside(folder, pattern.replace(WILDCARDS, "x"));
 }
 
 // Local protocols followed by a path: `link:` and `portal:` always; `workspace:` when what follows is a folder (`.`, or a path
