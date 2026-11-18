@@ -4,8 +4,8 @@
 
 const { OBJECT_ID } = require("../util");
 const { classifySource, UNREADABLE } = require("../packageSources");
-const { found, linesOf, Unreadable, UNREADABLE_ENTRY } = require("./shared");
-const { OUTSIDE_PROJECT, pathFrom, pythonAddress } = require("./python");
+const { found, isPackageArchive, linesOf, OUTSIDE_PROJECT, pathFrom, Unreadable, UNREADABLE_ENTRY } = require("./shared");
+const { pythonAddress } = require("./python");
 
 // pip ends a line at each of these as well as at \n and \r\n (Python's splitlines), so
 // a line holding one is read differently by pip than line by line.
@@ -25,7 +25,6 @@ const EXTRAS = /^\[[A-Za-z0-9._,\s-]*\]$/;
 const VERSION_CLAUSE = /^(===|==|!=|<=|>=|~=|<|>)\s*([A-Za-z0-9._*+!-]+)$/;
 const TRUSTED_HOST = /^([A-Za-z0-9.-]+)(?::\d+)?$/;
 const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
-const ARCHIVE = /\.(?:whl|zip|tar|tgz|tar\.gz|tar\.bz2|tbz|tar\.xz|txz)$/i;
 const VCS_PREFIXES = ["git+", "hg+", "svn+", "bzr+"];
 const ENV_INDEX = Object.freeze({ expected: false, kind: "host", address: null, text: "an index set from an environment variable" });
 
@@ -254,7 +253,7 @@ function specifierEntries({ name, rest }, line) {
   return operator === "==" ? [{ name, version, line }] : null;
 }
 
-const looksLikePath = (text) => /^[.~]/.test(text) || text.includes("/") || text.includes("\\") || ARCHIVE.test(text);
+const looksLikePath = (text) => /^[.~]/.test(text) || text.includes("/") || text.includes("\\") || isPackageArchive(text);
 
 // A requirement line's words before its options: a version control address or URL (its marker after "; "), `name @ address`, a
 // path, or a name with a version specifier (its marker after ";"). An environment variable in it is one it cannot read.

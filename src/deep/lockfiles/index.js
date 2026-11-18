@@ -4,7 +4,7 @@
 
 const { baseName, isVendored } = require("../util");
 const { classifySource } = require("../packageSources");
-const { isPep440, SEMVER, Unreadable, UNREADABLE_ENTRY } = require("./shared");
+const { isPep440, localArchiveVerdict, SEMVER, Unreadable, UNREADABLE_ENTRY } = require("./shared");
 const { readNpmLock } = require("./npm");
 const { readYarnLock } = require("./yarn");
 const { readPnpmLock } = require("./pnpm");
@@ -57,11 +57,13 @@ function readSafely(read, file) {
 const UNREADABLE_SOURCE_REASON = "a package source it could not read";
 
 // What a reader's entry is: the reader's own verdict when it decided, the classifier's on its source, or the registry when it
-// names no source. A commit the reader found wins over one in the text, and only a git source keeps one.
-function verdictOf(ecosystem, entry) {
+// names no source. A commit the reader found wins over one in the text, and only a git source keeps one. A local source naming an
+// archive is read from the lockfile's folder.
+function verdictOf(ecosystem, entry, folder) {
   if (entry.classified) return entry.classified;
   if (entry.source === undefined) return { expected: true };
   const verdict = classifySource(ecosystem, entry.source, { direct: entry.direct === true });
+  if (verdict.kind === "local") return localArchiveVerdict(entry.source, folder, verdict);
   return verdict.kind === "git" && entry.commit ? { ...verdict, commit: entry.commit } : verdict;
 }
 
@@ -111,7 +113,7 @@ function classifyEntries(ecosystem, file, entries) {
       continue;
     }
     const entry = withCheckedVersion(ecosystem, readEntry);
-    const verdict = verdictOf(ecosystem, entry);
+    const verdict = verdictOf(ecosystem, entry, folderOf(file));
     if (verdict.expected) registry.push(entry);
     else if (verdict.kind !== "local") {
       sourced.push(sourcedPackage(ecosystem, file, entry, verdict));

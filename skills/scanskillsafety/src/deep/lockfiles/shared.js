@@ -1,5 +1,5 @@
 // ABOUTME: Helpers the lockfile and manifest readers share: line and YAML-field reading, the Unreadable error, JSON key lines,
-// ABOUTME: the semver and PEP 440 tests, unreadable and unnamed entries, and git, GitHub and codeload addresses.
+// ABOUTME: the semver and PEP 440 tests, unreadable and unnamed entries, git, GitHub and codeload addresses, and repository paths.
 "use strict";
 
 const { OBJECT_ID } = require("../util");
@@ -124,6 +124,45 @@ function isPep440(version) {
   return !release.includes("..") && PEP440_SUFFIXES.test(publicPart.slice(release.length));
 }
 
+const OUTSIDE_PROJECT = Object.freeze({ expected: false, kind: "url", address: null, text: "a path outside the project" });
+
+// The path, inside the repository, of a relative path read from a folder; null when it climbs above the repository root.
+function pathFrom(folder, path) {
+  const segments = [];
+  for (const segment of [...folder.split("/"), ...path.split("/")]) {
+    if (segment === "..") {
+      if (segments.length === 0) return null;
+      segments.pop();
+    } else if (segment !== "." && segment !== "") segments.push(segment);
+  }
+  return segments.join("/");
+}
+
+// A relative path that, read from the lockfile's folder, never climbs above the repository root; an absolute path, a home path, a
+// drive or a scheme leaves it.
+function staysInside(folder, path) {
+  if (path === "" || path.startsWith("/") || path.startsWith("~") || path.includes(":") || path.includes("\\")) return false;
+  return pathFrom(folder, path) !== null;
+}
+
+// A package archive by its file name: the forms the spec names and the others pip reads as archives. A `#` fragment, a `?` query
+// or Berry's `::` parameters after the path are not part of it.
+const PACKAGE_ARCHIVE = /\.(?:whl|egg|zip|tar|tgz|tar\.gz|tar\.bz2|tbz|tar\.xz|txz|tar\.lz|tlz)$/i;
+const isPackageArchive = (path) => PACKAGE_ARCHIVE.test(path.split("#", 1)[0].split("?", 1)[0].split("::", 1)[0]);
+
+// Package files kept in the repository (an archive, or a folder used as an index), shown by their repository path: no stage of
+// the scan reads binary files, so what they hold is never checked.
+const bundled = (repositoryPath) =>
+  Object.freeze({ expected: false, kind: "bundled", address: repositoryPath === "" ? "." : repositoryPath, text: "a bundled package file the scan cannot read" });
+
+// What a local source in a JavaScript lockfile (`file:x.tgz`, `./x.tgz`, a folder) is, read from the lockfile's folder: an archive
+// inside the repository is bundled, one outside it a path outside the project; a folder or a workspace stays local.
+function localArchiveVerdict(source, folder, local) {
+  const path = source.replace(/^file:/i, "").split("#", 1)[0].split("?", 1)[0].split("::", 1)[0];
+  if (!isPackageArchive(path)) return local;
+  return staysInside(folder, path) ? bundled(pathFrom(folder, path)) : OUTSIDE_PROJECT;
+}
+
 // An entry whose source a reader could not make out, whatever the classifier would say.
 const UNREADABLE_ENTRY = Object.freeze({ classified: UNREADABLE });
 // An entry it cannot even name: reported as a source it could not read, with nothing from it kept, so it is never left out.
@@ -160,6 +199,12 @@ function addressSource(address, direct = false) {
 }
 
 module.exports = {
+  OUTSIDE_PROJECT,
+  pathFrom,
+  staysInside,
+  isPackageArchive,
+  bundled,
+  localArchiveVerdict,
   unquote,
   linesOf,
   leadingSpaces,

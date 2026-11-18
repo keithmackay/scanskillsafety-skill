@@ -4,7 +4,7 @@
 
 const { OBJECT_ID } = require("../util");
 const { classifySource, LOCAL, UNREADABLE } = require("../packageSources");
-const { gitRepositorySource, unnamedEntry, Unreadable, UNREADABLE_ENTRY } = require("./shared");
+const { bundled, gitRepositorySource, isPackageArchive, OUTSIDE_PROJECT, pathFrom, staysInside, unnamedEntry, Unreadable, UNREADABLE_ENTRY } = require("./shared");
 const { tomlStatements } = require("./toml");
 
 // The fields Poetry writes in [package.source].
@@ -13,7 +13,6 @@ const POETRY_SOURCE_FIELDS = new Set(["type", "url", "reference", "resolved_refe
 const UV_SOURCE_KINDS = ["registry", "git", "url", "path", "directory", "editable", "virtual"];
 // The fields uv writes in an `sdist` or a `wheels` item.
 const UV_FILE_FIELDS = new Set(["url", "path", "filename", "hash", "size", "upload-time"]);
-const OUTSIDE_PROJECT = Object.freeze({ expected: false, kind: "url", address: null, text: "a path outside the project" });
 const PROJECT = Object.freeze({ project: true });
 // A Poetry block with no [package.source]: from whatever index the project is set to use.
 const NO_SOURCE = Object.freeze({});
@@ -22,34 +21,19 @@ const NO_SOURCE = Object.freeze({});
 const PATH_STARTS = ["/", "~", "./", "../"];
 const DRIVE = /^[A-Za-z]:(?:[\\/]|$)/;
 
-// The path, inside the repository, of a relative path read from a folder; null when it climbs above the repository root.
-function pathFrom(folder, path) {
-  const segments = [];
-  for (const segment of [...folder.split("/"), ...path.split("/")]) {
-    if (segment === "..") {
-      if (segments.length === 0) return null;
-      segments.pop();
-    } else if (segment !== "." && segment !== "") segments.push(segment);
-  }
-  return segments.join("/");
-}
-
-// A relative path that, read from the lockfile's folder, never climbs above the repository root; an absolute path, a home path, a
-// drive or a scheme leaves it.
-function staysInside(folder, path) {
-  if (path === "" || path.startsWith("/") || path.startsWith("~") || path.includes(":") || path.includes("\\")) return false;
-  return pathFrom(folder, path) !== null;
-}
-
 // Where an address in a Python lockfile points, `folder` being the lockfile's folder in the repository. A `file:` URL is outside
 // the project. A path (absolute, home, a drive, starting `./` or `../`, or, in a field that holds a path, any name with no `:`) is
-// local while it stays inside the repository and outside the project otherwise. Any other address is classified: as a git
+// local while it stays inside the repository and outside the project otherwise; inside it, an archive, or a folder a field names
+// as an index or find-links, holds packages as files and is bundled. Any other address is classified: as a git
 // repository when the field names one, as one archive when it pins one, and by what the field names (`role`, an index or
 // find-links).
 function pythonAddress(address, folder, { pathField = false, git = false, direct = false, role } = {}) {
   if (/^file:/i.test(address)) return OUTSIDE_PROJECT;
   const named = PATH_STARTS.some((start) => address.startsWith(start)) || DRIVE.test(address);
-  if (named || (pathField && !address.includes(":"))) return staysInside(folder, address) ? LOCAL : OUTSIDE_PROJECT;
+  if (named || (pathField && !address.includes(":"))) {
+    if (!staysInside(folder, address)) return OUTSIDE_PROJECT;
+    return role !== undefined || isPackageArchive(address) ? bundled(pathFrom(folder, address)) : LOCAL;
+  }
   return classifySource("PyPI", git ? gitRepositorySource(address, "").source : address, { direct, role });
 }
 
@@ -241,4 +225,4 @@ function readPackageBlocks(text, format, folder) {
 const readPoetryLock = (text, folder = "") => readPackageBlocks(text, POETRY, folder);
 const readUvLock = (text, folder = "") => readPackageBlocks(text, UV, folder);
 
-module.exports = { readPoetryLock, readUvLock, pythonAddress, pathFrom, OUTSIDE_PROJECT };
+module.exports = { readPoetryLock, readUvLock, pythonAddress };
