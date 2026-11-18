@@ -1,0 +1,67 @@
+// ABOUTME: Reads the packages in an npm package-lock.json or npm-shrinkwrap.json, lockfile versions 1 to 3, each with its line
+// ABOUTME: and where it comes from; an alias is read by its real name.
+"use strict";
+
+const { isObject } = require("../util");
+const { found, jsonKeyLines, parseJson, SEMVER, unsupportedVersion } = require("./shared");
+
+// An npm alias (`npm:real-name@1.2.3`) names the package that is really installed.
+function npmAlias(version) {
+  const match = /^npm:(@?[^@]+)@(.+)$/.exec(version);
+  return match ? { name: match[1], version: match[2] } : null;
+}
+
+
+// Where a version 2 or 3 entry comes from: a bundled entry comes inside its parent, so its own source is not read; one with no
+// `resolved` came from whatever registry the install used.
+function npmSource(entry) {
+  if (entry.inBundle === true) return {};
+  return entry.resolved === undefined ? { recordsHost: false } : { source: entry.resolved };
+}
+
+// A version 1 entry: an alias by its real name; a version that is a source is classified from it and not kept, so a credential
+// in it is never shown.
+function npmV1Entry(name, entry) {
+  const named = npmAlias(entry.version) ?? { name, version: entry.version };
+  if (!SEMVER.test(named.version)) return { name: named.name, version: null, source: named.version, direct: true };
+  return { ...named, ...(entry.resolved === undefined ? {} : { source: entry.resolved }) };
+}
+
+function readNpmLock(text) {
+  const json = parseJson(text);
+  const version = json && json.lockfileVersion;
+  const lineOf = jsonKeyLines(text);
+  if (version === 2 || version === 3) {
+    // Keys without node_modules/ are the project's own workspace folders.
+    const entries = Object.entries(isObject(json.packages) ? json.packages : {}).filter(([key, entry]) => key.includes("node_modules/") && !(entry && entry.link));
+    const packages = entries
+      .filter(([, entry]) => entry && typeof entry.version === "string")
+      .map(([key, entry]) => ({
+        name: typeof entry.name === "string" ? entry.name : key.slice(key.lastIndexOf("node_modules/") + "node_modules/".length),
+        version: entry.version,
+        line: lineOf(key),
+        ...npmSource(entry),
+      }));
+    return found(packages, entries.length);
+  }
+  if (version === 1) {
+    const dependenciesOf = (entry) => Object.entries(isObject(entry.dependencies) ? entry.dependencies : {});
+    const out = [];
+    // Depth first in document order, with a stack of the entries still to visit at each level, so nesting cannot run out of stack.
+    const stack = [dependenciesOf(json).reverse()];
+    while (stack.length > 0) {
+      const [name, entry] = stack[stack.length - 1].pop() ?? [];
+      if (name === undefined) {
+        stack.pop();
+        continue;
+      }
+      if (!isObject(entry) || typeof entry.version !== "string") continue;
+      out.push({ ...npmV1Entry(name, entry), line: lineOf(name) });
+      stack.push(dependenciesOf(entry).reverse());
+    }
+    return found(out, dependenciesOf(json).length);
+  }
+  throw unsupportedVersion(version);
+}
+
+module.exports = { readNpmLock };
