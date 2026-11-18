@@ -27,6 +27,7 @@ const SHORTHAND_HOSTS = new Map([
   ["github:", "https://github.com"],
   ["gitlab:", "https://gitlab.com"],
   ["bitbucket:", "https://bitbucket.org"],
+  ["sourcehut:", "https://git.sr.ht"],
 ]);
 const GIST_PREFIX = "gist:";
 // How many path segments each shorthand takes: GitLab allows subgroups; a gist may name its user before its id.
@@ -34,12 +35,18 @@ const SHORTHAND_SEGMENTS = new Map([
   ["github:", { min: 2, max: 2 }],
   ["gitlab:", { min: 2, max: Infinity }],
   ["bitbucket:", { min: 2, max: 2 }],
+  ["sourcehut:", { min: 2, max: 2 }],
   [GIST_PREFIX, { min: 1, max: 2 }],
 ]);
 // Every value starting with one of these is a git source, read or not, so never a version range.
 const GIT_FORMS = ["git+", "git:", "ssh:", ...SHORTHAND_SEGMENTS.keys()];
 // One segment of a shorthand or scp-form name: a single character class, so it cannot backtrack.
 const NAME_SEGMENT = /^[A-Za-z0-9._-]+$/;
+// A sourcehut user, written with a leading `~`.
+const SOURCEHUT_USER = /^~?[A-Za-z0-9._-]+$/;
+// Whether a repository path's segments are names, the first allowed to be a sourcehut user on that host.
+const isRepositoryPath = (segments, sourcehut) =>
+  segments.every((segment, k) => (sourcehut && k === 0 ? SOURCEHUT_USER : NAME_SEGMENT).test(segment));
 const SCP_HOST = /^[A-Za-z0-9.-]+$/;
 const EXEC_TEXT = "a script that produces the package";
 const UNREAD_GIT_TEXT = "a git source it could not read";
@@ -95,7 +102,7 @@ function shorthand(text) {
   if (!prefix) return null;
   const segments = withoutQuery(text.slice(prefix.length)).split("/");
   const { min, max } = SHORTHAND_SEGMENTS.get(prefix);
-  if (segments.length < min || segments.length > max || !segments.every((s) => NAME_SEGMENT.test(s))) return UNREADABLE;
+  if (segments.length < min || segments.length > max || !isRepositoryPath(segments, prefix === "sourcehut:")) return UNREADABLE;
   if (prefix === GIST_PREFIX) return gitResult(text, `https://gist.github.com/${segments[segments.length - 1]}`);
   return gitResult(text, `${SHORTHAND_HOSTS.get(prefix)}/${segments.join("/")}`);
 }
@@ -171,15 +178,27 @@ function patchedResolution(value) {
   return at < 0 ? null : decoded.slice(at + 1);
 }
 
+// An alias npm installs from the registry: what follows the aliased name is a range or a tag, never another protocol or a path.
+function isRegistryAlias(value) {
+  const spec = value.slice("npm:".length);
+  const at = spec.indexOf("@", 1);
+  const range = at < 0 ? "" : spec.slice(at + 1);
+  return !range.includes(":") && !range.includes("/");
+}
+
+// A value that would be a path to npm only because of what it starts with: whitespace, or the `=` of a range.
+const SPACE_OR_EQUALS = /^[\s=]/;
+
 // An archive's file name as npm reads one: a value ending so is a file, whatever else it holds.
 const NPM_FILE_NAME = /[.](?:tgz|tar\.gz|tar)$/i;
 // A file spec as npm reads one before any other form: a dot, `~/`, `/` or a drive letter at the start.
 const NPM_FILE_SPEC = /^(?:[.]|~[/]|[/]|[a-zA-Z]:)/;
 
-// A repository on GitHub, GitLab, Bitbucket or GitHub Gist named by an http(s) URL, as npm's hosted-git-info reads one: GitHub
-// `/<u>/<r>` or `/<u>/<r>/tree/<committish>`, GitLab `/<group>/…/<r>` with no `/-/` part, Bitbucket `/<u>/<r>` unless it is a
-// `/get/` download, a gist `/[<u>/]<id>` unless it is a `/raw/` file (shown as `https://gist.github.com/<id>`, as the `gist:`
-// shorthand is). Shown as the repository, with a commit from the fragment or the tree. null for any other URL, such as an archive.
+// A repository on GitHub, GitLab, Bitbucket, sourcehut or GitHub Gist named by an http(s) URL, as npm's hosted-git-info reads one:
+// GitHub `/<u>/<r>` or `/<u>/<r>/tree/<committish>`, GitLab `/<group>/…/<r>` with no `/-/` part, Bitbucket `/<u>/<r>` unless it
+// is a `/get/` download, sourcehut `/~<u>/<r>` unless it is an `/archive/`, a gist `/[<u>/]<id>` unless it is a `/raw/` file
+// (shown as `https://gist.github.com/<id>`, as the `gist:` shorthand is). Shown as the repository, with a commit from the fragment
+// or the tree. null for any other URL, such as an archive.
 function hostedRepository(text) {
   if (!prefixOf(text, ["https:", "http:"])) return null;
   const url = parseUrl(text);
@@ -196,13 +215,15 @@ function hostedRepository(text) {
     repository = segments;
   } else if (host === "bitbucket.org") {
     if (segments[2] === "get") return null;
+  } else if (host === "git.sr.ht") {
+    if (segments[2] === "archive") return null;
   } else if (host === "gist.github.com") {
     if (segments[2] === "raw" || segments.length > 3) return null;
     const id = segments[1] || segments[0];
     if (!NAME_SEGMENT.test(id)) return null;
     return gitResult(text, `https://gist.github.com/${id}`);
   } else return null;
-  if (repository.length < 2 || !repository.every((segment) => NAME_SEGMENT.test(segment))) return null;
+  if (repository.length < 2 || !isRepositoryPath(repository, host === "git.sr.ht")) return null;
   const address = `${url.protocol}//${url.host}/${repository.join("/")}`;
   const commit = commitFrom(text) ?? (OBJECT_ID.test(committish) ? committish : null);
   return commit ? { expected: false, kind: "git", address, commit } : { expected: false, kind: "git", address };
@@ -216,9 +237,10 @@ function isGithubShorthand(value) {
 
 // A package.json dependency value, in the order the package managers read it. A file spec npm reads first (a dot, `~/`, `/` or a
 // drive letter at the start) is local; an http(s) URL naming a GitHub, GitLab or Bitbucket repository is git; a git or http(s)
-// value it cannot read is reported with a fixed text in place of the address; a value npm reads as a path (a slash in a value that
-// is no git form, or an archive's file name) is local; any other value is a version range or a tag, so the registry: this never
-// answers unreadable.
+// value it cannot read is reported with a fixed text in place of the address; a value npm reads as a path (a slash, or `\`, in a
+// value that is no git form, or an archive's file name) is local, unless it starts with whitespace or `=`, which makes it a source
+// it could not read, as does an alias of anything but a registry range; any other value is a version range or a tag, so the
+// registry: this never answers unreadable.
 function classifyManifestValue(ecosystem, value) {
   let resolution = value;
   for (let depth = 0; resolution.startsWith("patch:"); depth++) {
@@ -227,7 +249,7 @@ function classifyManifestValue(ecosystem, value) {
     if (resolution === null) return UNREAD_SOURCE;
   }
   if (NPM_FILE_SPEC.test(resolution) || isLocal(resolution)) return LOCAL;
-  if (prefixOf(resolution, ["npm:"])) return EXPECTED;
+  if (prefixOf(resolution, ["npm:"])) return isRegistryAlias(resolution) ? EXPECTED : UNREAD_SOURCE;
   if (resolution.startsWith("jsr:")) return { expected: false, kind: "host", address: "https://npm.jsr.io" };
   if (resolution.startsWith("exec:")) return { expected: false, kind: "url", address: null, text: EXEC_TEXT };
   const gitText = isGithubShorthand(resolution) ? `github:${resolution}` : resolution;
@@ -239,7 +261,9 @@ function classifyManifestValue(ecosystem, value) {
   const web = webUrl(ecosystem, resolution, true);
   if (web && !web.unreadable) return web;
   if (web) return { expected: false, kind: prefixOf(resolution, ["https:"]) ? "url" : "http", address: null, text: UNREAD_ADDRESS_TEXT };
-  if (resolution.includes("/") || NPM_FILE_NAME.test(resolution)) return LOCAL;
+  if (resolution.includes("/") || resolution.includes("\\") || NPM_FILE_NAME.test(resolution)) {
+    return SPACE_OR_EQUALS.test(resolution) ? UNREAD_SOURCE : LOCAL;
+  }
   return EXPECTED;
 }
 

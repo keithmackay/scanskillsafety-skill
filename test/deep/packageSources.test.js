@@ -346,3 +346,21 @@ test("package.json: an http(s) URL naming a repository on GitHub, GitLab or Bitb
   ];
   for (const [value, expected] of cases) assert.deepEqual(classifyManifestValue("npm", value), expected, value);
 });
+
+test("package.json: sourcehut shorthand and git.sr.ht URLs are git", () => {
+  assert.deepEqual(classifyManifestValue("npm", "sourcehut:~u/r"), offRegistry("git", "https://git.sr.ht/~u/r"));
+  assert.deepEqual(classifyManifestValue("npm", "https://git.sr.ht/~u/r"), offRegistry("git", "https://git.sr.ht/~u/r"));
+  assert.deepEqual(classifyManifestValue("npm", `https://git.sr.ht/~u/r#${SHA1}`), offRegistry("git", "https://git.sr.ht/~u/r", { commit: SHA1 }));
+  assert.deepEqual(classifyManifestValue("npm", "https://git.sr.ht/~u/r/archive/v1.tar.gz"), offRegistry("url", "https://git.sr.ht/v1.tar.gz"));
+});
+
+test("package.json: a backslash is a path separator to npm, so such a value is a path", () => {
+  for (const value of ["a\\..\\..\\x", "C:\\x", "\\\\host\\share\\x"]) assert.deepEqual(classifyManifestValue("npm", value), LOCAL, value);
+});
+
+test("package.json: a value npm would read as a path only because of a leading space or =, and an alias of anything but a registry range, are sources it could not read", () => {
+  for (const value of [" github:u/r", "=github:u/r", "  ./../../a", "\tgithub:u/r", "npm:y@github:u/r", "npm:y@https://e.example/y.tgz", "npm:x@npm:y@1", "npm:y@file:../z"]) {
+    assert.deepEqual(classifyManifestValue("npm", value), UNREAD_SOURCE, JSON.stringify(value));
+  }
+  for (const value of ["=1.2.3", " ^1", "npm:y@^1", "npm:@s/y@1.x"]) assert.deepEqual(classifyManifestValue("npm", value), EXPECTED, JSON.stringify(value));
+});

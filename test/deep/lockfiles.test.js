@@ -1890,3 +1890,41 @@ test("JavaScript lockfiles: a linked folder outside the repository, an npm link 
   assert.deepEqual(pick(readPackages([{ path: "pnpm-lock.yaml", text: pnpm("'link:../far'") }])), [{ name: "far", line: 12, ...outside }, { name: "gone", line: 21, ...outside }]);
   assert.deepEqual(pick(readPackages([{ path: "pnpm-lock.yaml", text: pnpm("1.0.0") }])), [{ name: "gone", line: 21, ...outside }]);
 });
+
+test("npm and pnpm lockfiles: a workspace folder outside the repository is a path outside the project; a link entry with no path is a source it could not read", () => {
+  const outside = { kind: "url", address: null, text: "a path outside the project" };
+  const pick = (read) => read.sourced.map(({ name, line, kind, address, text }) => ({ name, line, kind, address, text }));
+  const lock = JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" },
+    "packages/in": { name: "in", version: "1.0.0" },
+    "../../ext": { name: "ext", version: "1.0.0" },
+    "node_modules/nopath": { link: true },
+    "node_modules/oddpath": { link: true, resolved: 5 },
+    "node_modules/ok": { version: "1.0.0" },
+  } }, null, 2);
+  assert.deepEqual(pick(readPackages([{ path: "app/package-lock.json", text: lock }])), [
+    { name: "ext", line: 11, ...outside },
+    { name: "nopath", line: 15, kind: "unreadable", address: null, text: undefined },
+    { name: "oddpath", line: 18, kind: "unreadable", address: null, text: undefined },
+  ]);
+  const pnpm = ["lockfileVersion: '9.0'", "", "importers:", "", "  .: {}", "", "  packages/a:", "    dependencies: {}", "", "  ../../far:", "    dependencies: {}", "", "  ../sibling: {}", ""].join("\n");
+  assert.deepEqual(pick(readPackages([{ path: "app/pnpm-lock.yaml", text: pnpm }])), [{ name: null, line: 10, ...outside }]);
+});
+
+test("pnpm-lock.yaml: the importers section is read strictly; an indentation pnpm does not write could not be read, and a dependency written in another shape is a source it could not read", () => {
+  const head = ["lockfileVersion: '9.0'", "", "importers:", "", "  .:", "    dependencies:"];
+  const read = (...rows) => readPackages([{ path: "pnpm-lock.yaml", text: [...head, ...rows, ""].join("\n") }]);
+  for (const odd of [["      a:", "         version: link:../far"], ["     a:", "        version: 1.0.0"], ["      a:", "        version: 1.0.0", "          deeper: x"]]) {
+    assert.deepEqual(read(...odd).couldNotRead, [{ file: "pnpm-lock.yaml", reason: "not laid out as pnpm writes it" }], odd.join("|"));
+  }
+  const bad = (name, line) => ({ ecosystem: "npm", file: "pnpm-lock.yaml", line, name, version: null, kind: "unreadable", address: null });
+  for (const [rows, name, line] of [
+    [["      a:", "        version: {link: ../far}"], "a", 8],
+    [["      a:", "        version: [link:../far]"], "a", 8],
+    [["      a:", "        version: &x link:../far"], "a", 8],
+    [["      a: {specifier: link:../far, version: link:../far}"], "a", 7],
+    [["      a:", "        version: 'link:../far"], "a", 8],
+  ]) {
+    assert.deepEqual(read(...rows).sourced, [bad(name, line)], rows.join("|"));
+  }
+  assert.deepEqual(read("      a:", "        specifier: ^1.0.0", "        version: 1.0.0", "    dependenciesMeta:", "      a:", "        injected: true").sourced, []);
+});

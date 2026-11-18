@@ -218,6 +218,18 @@ const isPackageArchive = (path) => PACKAGE_ARCHIVE.test(path.split("#", 1)[0].sp
 const bundled = (repositoryPath) =>
   Object.freeze({ expected: false, kind: "bundled", address: repositoryPath === "" ? "." : repositoryPath, text: "a bundled package file the scan cannot read" });
 
+// The first character that makes a workspace pattern a glob.
+const GLOB_CHARACTER = /[*?[{]/;
+
+// Whether a workspace folder pattern, read from a file's folder, reaches outside the repository: judged on its literal part before
+// the first glob character (none of it, as in `*`, is the file's own folder). A negated pattern (`!…`) adds no folder.
+function workspaceOutside(folder, pattern) {
+  if (pattern.startsWith("!")) return false;
+  const glob = pattern.search(GLOB_CHARACTER);
+  const literal = glob < 0 ? pattern : pattern.slice(0, glob);
+  return literal !== "" && !staysInside(folder, literal);
+}
+
 // Local protocols followed by a path: `link:` and `portal:` always; `workspace:` when what follows is a folder (`.`, or a path with a
 // `/`) rather than a range or a workspace's name.
 const PATH_PROTOCOLS = ["link:", "portal:", "workspace:"];
@@ -278,6 +290,7 @@ module.exports = {
   isPackageArchive,
   bundled,
   localPathVerdict,
+  workspaceOutside,
   unquote,
   linesOf,
   leadingSpaces,

@@ -13,6 +13,7 @@ const {
   LONE_CR_OR_TAB,
   opensUnclosed,
   OUTSIDE_PROJECT,
+  pathFrom,
   PLAIN_NAME,
   SEMVER,
   startsWithAny,
@@ -187,21 +188,44 @@ function pnpmTopLevelName(line) {
   return field.key;
 }
 
-// A line of the importers section, read only for a dependency's `link:` version: an importer's folder at 2 spaces, a dependency's
-// name at 6 and its `version:` at 8. A linked folder that leaves the repository, read from the importer's folder, is a path outside
-// the project; one inside it, whose files are scanned, gives nothing.
+// The sections of an importer that list its dependencies, each `name:` followed by its `specifier:` and `version:`.
+const IMPORTER_DEPENDENCY_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies"];
+
+// A line of the importers section, read strictly for where an importer's folder and its dependencies' `link:` versions point: an
+// importer's folder at 2 spaces (`key:` or `key: {}`), a section at 4, and in a dependency section a dependency's `name:` at 6 and
+// its fields at 8. Lines under another section are passed over. An odd indentation, a line that is no field where one is read, or a
+// line deeper than a dependency's fields means the file is not one it can read; a dependency written in a flow map, or a version that is not a scalar
+// on its line, is a source it could not read. An importer's folder, or a linked folder read from it, that leaves the repository is
+// a path outside the project; one inside it, whose files are scanned, gives nothing.
 function readImporterLine(importers, indent, text, lineNumber, folder) {
+  if (indent % 2 === 1) throw new Unreadable(PNPM_LAYOUT);
   const field = fieldOf(text);
-  if (field === null) return null;
-  if (indent === 2) importers.importer = unquote(field.key);
-  else if (indent === 6) importers.dependency = unquote(field.key);
-  else if (indent === 8 && field.key === "version" && unquote(field.value).startsWith("link:")) {
-    const path = unquote(field.value).slice("link:".length);
-    const absolute = path.startsWith("/") || path.startsWith("~") || path.includes(":") || path.includes("\\");
-    const inside = !absolute && staysInside(folder, importers.importer === "." ? path : `${importers.importer}/${path}`);
-    if (!inside) return { name: importers.dependency, version: null, line: lineNumber, classified: OUTSIDE_PROJECT };
+  const passedOver = indent > 4 && (importers.section === null || importers.folder === null);
+  if (passedOver) return null;
+  if (field === null) throw new Unreadable(PNPM_LAYOUT);
+  const outside = (name) => ({ name, version: null, line: lineNumber, classified: OUTSIDE_PROJECT });
+  const unreadable = () => ({ name: importers.dependency, version: null, line: lineNumber, ...UNREADABLE_ENTRY });
+  if (indent === 2) {
+    if (field.value !== "" && field.value !== "{}") throw new Unreadable(PNPM_LAYOUT);
+    const importer = unquote(field.key);
+    Object.assign(importers, { folder: staysInside(folder, importer) ? pathFrom(folder, importer) : null, section: null, dependency: null });
+    return importers.folder === null ? outside(null) : null;
   }
-  return null;
+  if (indent === 4) {
+    importers.section = IMPORTER_DEPENDENCY_SECTIONS.includes(field.key) && field.value === "" ? field.key : null;
+    importers.dependency = null;
+    return null;
+  }
+  if (indent === 6) {
+    importers.dependency = unquote(field.key);
+    return field.value === "" ? null : unreadable();
+  }
+  if (indent !== 8 || importers.dependency === null) throw new Unreadable(PNPM_LAYOUT);
+  if (field.key !== "version") return null;
+  if (startsWithAny(field.value, ODD_TOP_VALUE_START) || opensUnclosed(field.value)) return unreadable();
+  const version = unquote(field.value);
+  if (!version.startsWith("link:")) return null;
+  return staysInside(importers.folder, version.slice("link:".length)) ? null : outside(importers.dependency);
 }
 
 // The file is read strictly, line by line, as pnpm writes it: comments and blank lines skipped; top-level names plain; in
@@ -216,7 +240,7 @@ function readPnpmLock(text, folder = "") {
   const out = [];
   let inPackages = false;
   let inImporters = false;
-  const importers = { importer: ".", dependency: null };
+  const importers = { folder, section: null, dependency: null };
   let entries = 0;
   let entry = null;
   const finish = () => {

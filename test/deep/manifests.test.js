@@ -708,3 +708,22 @@ test("pyproject.toml: [[tool.uv.sources.a]] tables read as the list a = [{ … }
   const mixed = readOne("pyproject.toml", '[tool.uv.sources]\na = { git = "https://e.example/a" }\n[[tool.uv.sources.a]]\nurl = "https://e.example/a-1.0.zip"\n');
   assert.deepEqual(mixed.sourced, [unreadable("PyPI", "pyproject.toml")("a", 2)]);
 });
+
+test("package.json: a workspace folder outside the repository is a path outside the project, read up to its first glob character; inside it gives nothing", () => {
+  const file = "app/package.json";
+  const array = lines("{", '  "workspaces": ["packages/*", "../shared/*", "../../outside/*", "!../../ignored", "*"]', "}");
+  assert.deepEqual(readOne(file, array).sourced, [item("npm", file)(null, 2, "url", null, OUTSIDE)]);
+  const object = lines("{", '  "workspaces": {', '    "packages": ["../../far", "libs/**"]', "  }", "}");
+  assert.deepEqual(readOne(file, object).sourced, [item("npm", file)(null, 3, "url", null, OUTSIDE)]);
+  const bad = unreadable("npm", "package.json");
+  assert.deepEqual(readOne("package.json", '{"workspaces": "x"}').sourced, [bad(null, 1)]);
+  assert.deepEqual(readOne("package.json", '{"workspaces": [1]}').sourced, [bad(null, 1)]);
+  assert.deepEqual(readOne("package.json", '{"workspaces": {"packages": "x"}}').sourced, [bad(null, 1)]);
+});
+
+test("pyproject.toml: a [tool.uv.workspace] member outside the repository is a path outside the project; inside it gives nothing", () => {
+  const text = lines("[tool.uv.workspace]", 'members = ["packages/*", "../../outside/*", "../sibling"]', 'exclude = ["../../x"]');
+  assert.deepEqual(readOne("py/pyproject.toml", text).sourced, [item("PyPI", "py/pyproject.toml")(null, 2, "url", null, OUTSIDE)]);
+  assert.deepEqual(readOne("pyproject.toml", '[tool.uv.workspace]\nmembers = "x"\n').sourced, [unreadable("PyPI", "pyproject.toml")(null, 2)]);
+  assert.deepEqual(readOne("pyproject.toml", '[tool.uv.workspace]\nmembers = [1]\n').sourced, [unreadable("PyPI", "pyproject.toml")(null, 2)]);
+});

@@ -3,7 +3,7 @@
 "use strict";
 
 const { isObject } = require("../util");
-const { found, jsonKeyLines, OUTSIDE_PROJECT, parseJson, SEMVER, staysInside, Unreadable, unsupportedVersion } = require("./shared");
+const { found, jsonKeyLines, OUTSIDE_PROJECT, parseJson, SEMVER, staysInside, UNREADABLE_ENTRY, unsupportedVersion } = require("./shared");
 
 // An npm alias (`npm:real-name@1.2.3`) names the package that is really installed.
 function npmAlias(version) {
@@ -35,23 +35,30 @@ function readNpmLock(text, folder = "") {
   const version = json && json.lockfileVersion;
   const lineOf = jsonKeyLines(text);
   if (version === 2 || version === 3) {
-    // Keys without node_modules/ are the project's own workspace folders. A link entry stands for a folder linked in place of a
-    // package: one that leaves the repository is a path outside the project; one inside it, whose files are scanned, gives nothing.
-    const installed = Object.entries(isObject(json.packages) ? json.packages : {}).filter(([key]) => key.includes("node_modules/"));
-    const entries = installed.filter(([, entry]) => !(entry && entry.link));
+    // Keys without node_modules/ are the project's own workspace folders, and a link entry stands for a folder linked in place of a
+    // package: either one that leaves the repository is a path outside the project, and one inside it, whose files are scanned,
+    // gives nothing. A link entry with no path is one it cannot read.
     const out = [];
-    let packages = 0;
-    for (const [key, entry] of installed) {
-      if (entry && entry.link) {
-        if (typeof entry.resolved === "string" && !staysInside(folder, entry.resolved)) {
-          out.push({ name: packageName(key, entry), version: null, line: lineOf(key), classified: OUTSIDE_PROJECT });
+    const installed = [];
+    const packages = [];
+    for (const [key, entry] of Object.entries(isObject(json.packages) ? json.packages : {})) {
+      const named = isObject(entry) && typeof entry.name === "string" ? entry.name : null;
+      if (!key.includes("node_modules/")) {
+        if (key !== "" && !staysInside(folder, key)) out.push({ name: named, version: null, line: lineOf(key), classified: OUTSIDE_PROJECT });
+      } else if (entry && entry.link) {
+        const linked = typeof entry.resolved === "string" ? staysInside(folder, entry.resolved) : null;
+        if (linked === null) out.push({ name: packageName(key, entry), version: null, line: lineOf(key), ...UNREADABLE_ENTRY });
+        else if (!linked) out.push({ name: packageName(key, entry), version: null, line: lineOf(key), classified: OUTSIDE_PROJECT });
+      } else {
+        installed.push(key);
+        if (entry && typeof entry.version === "string") {
+          const pkg = { name: packageName(key, entry), version: entry.version, line: lineOf(key), ...npmSource(entry) };
+          packages.push(pkg);
+          out.push(pkg);
         }
-      } else if (entry && typeof entry.version === "string") {
-        packages++;
-        out.push({ name: packageName(key, entry), version: entry.version, line: lineOf(key), ...npmSource(entry) });
       }
     }
-    if (entries.length > 0 && packages === 0) throw new Unreadable("no packages found in it");
+    found(packages, installed.length);
     return out;
   }
   if (version === 1) {

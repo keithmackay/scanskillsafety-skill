@@ -4,7 +4,18 @@
 
 const { isObject, OBJECT_ID } = require("../util");
 const { classifyManifestValue, LOCAL, UNREADABLE } = require("../packageSources");
-const { jsonMembers, localPathVerdict, normalisePyPI, parseJson, ROOT_OBJECT, SEMVER, unnamedEntry, UNREADABLE_ENTRY } = require("./shared");
+const {
+  jsonMembers,
+  localPathVerdict,
+  normalisePyPI,
+  OUTSIDE_PROJECT,
+  parseJson,
+  ROOT_OBJECT,
+  SEMVER,
+  unnamedEntry,
+  UNREADABLE_ENTRY,
+  workspaceOutside,
+} = require("./shared");
 const { tomlStatements } = require("./toml");
 const { pythonAddress } = require("./python");
 const { addressEntries, specifierEntries, splitName } = require("./requirements");
@@ -26,6 +37,13 @@ function manifestEntries(found, sameName) {
     .filter(({ entry, checked }) => checked && isRegistry(entry) && !elsewhere.has(sameName(entry.name)))
     .map(({ entry }) => ({ name: entry.name, version: entry.version ?? null, line: null }));
   return [...reported, ...names];
+}
+
+// The entries of a list of workspace folder patterns read from a file's folder, all at `line`: one for each pattern that leaves the
+// repository, a path outside the project; a list that is not an array of strings is one it cannot read.
+function workspaceEntries(patterns, line, folder) {
+  if (!Array.isArray(patterns) || patterns.some((pattern) => typeof pattern !== "string")) return [unnamedEntry(line)];
+  return patterns.filter((pattern) => workspaceOutside(folder, pattern)).map(() => ({ name: null, version: null, line, classified: OUTSIDE_PROJECT }));
 }
 
 // package.json
@@ -179,6 +197,14 @@ function readPackageJson(text, folder = "") {
     }
   }
   const found = [];
+  if (Object.hasOwn(json, "workspaces")) {
+    const member = members(ROOT_OBJECT, "workspaces");
+    const { workspaces } = json;
+    const listed = isObject(workspaces) && Object.hasOwn(workspaces, "packages");
+    const patterns = listed ? workspaces.packages : workspaces;
+    const line = (listed ? members(member?.object, "packages") : member)?.line ?? null;
+    for (const entry of workspaceEntries(patterns, line, folder)) found.push({ entry, checked: false });
+  }
   for (const { name, value, member, nests } of sections) {
     const checked = CHECKED_SECTIONS.has(name);
     if (!isObject(value)) {
@@ -428,12 +454,15 @@ const OTHER_REQUIREMENT_TABLES = [
   { prefix: ["tool", "pdm", "dev-dependencies"], form: EDITABLE },
 ];
 const UV_SOURCES = ["tool", "uv", "sources"];
+const UV_WORKSPACE_MEMBERS = ["tool", "uv", "workspace", "members"];
 const POETRY_TABLES = [["tool", "poetry", "dependencies"], ["tool", "poetry", "dev-dependencies"]];
 const POETRY_GROUPS = ["tool", "poetry", "group"];
 
 // Where a value sits among the sections that can name a source: a list of requirements, a uv or Poetry dependency (its name and
 // the field, if any, the value is), something in such a section in a shape it cannot read (`bad`), or nothing that names one.
 function placeOf(path) {
+  const members = after(path, UV_WORKSPACE_MEMBERS);
+  if (members !== null) return members.length === 0 ? { workspace: true } : { bad: true };
   const project = after(path, PROJECT_DEPENDENCIES);
   if (project !== null) return project.length === 0 ? { list: true, checked: true } : { bad: true };
   for (const prefix of OTHER_REQUIREMENT_LISTS) {
@@ -515,6 +544,15 @@ function dependencyEntries(dependency, folder, indexes) {
   });
 }
 
+// `[tool.uv.workspace] members`: an array of folder patterns, each at its own line; any other value is one it cannot read.
+function workspaceMemberEntries(value, folder) {
+  if (value.kind !== "array") return [unnamedEntry(value.line)];
+  return value.items.flatMap((item) => {
+    const pattern = stringOf(item);
+    return pattern === null ? [unnamedEntry(item.line)] : workspaceEntries([pattern], item.line, folder);
+  });
+}
+
 // pyproject.toml's dependencies in every section that can name a source: PEP 508 strings in [project] dependencies,
 // [project.optional-dependencies], [dependency-groups], [build-system] requires, uv's dev, override, constraint and build
 // dependencies and PDM's dev-dependencies; [tool.uv.sources]; Poetry's dependency tables. Pixi and Hatch environments are not read. Each value is placed by
@@ -530,6 +568,7 @@ function readPyproject(text, folder = "") {
     const place = placeOf(path);
     if (place === null) continue;
     if (place.bad) units.push({ bad: value.line });
+    else if (place.workspace) units.push({ workspace: value });
     else if (place.list) units.push({ list: value, checked: place.checked === true, form: place.form });
     else if (!(place.tool === "poetry" && place.name === "python")) {
       let dependency = dependencies.get(place.id);
@@ -544,6 +583,7 @@ function readPyproject(text, folder = "") {
   }
   const found = units.flatMap((unit) => {
     if (unit.bad !== undefined) return [{ entry: unnamedEntry(unit.bad), checked: false }];
+    if (unit.workspace) return workspaceMemberEntries(unit.workspace, folder).map((entry) => ({ entry, checked: false }));
     if (unit.list) return requirementListEntries(unit.list, folder, unit.form).map((entry) => ({ entry, checked: unit.checked }));
     return dependencyEntries(unit.dependency, folder, indexes);
   });
