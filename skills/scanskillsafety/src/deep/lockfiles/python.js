@@ -508,19 +508,29 @@ function requirementsLineEntries(text, line, folder) {
 }
 
 // text: a requirements file; folder: its folder in the repository, which a relative path in it is read from. Pinned requirements,
-// sources (version control, URLs, paths outside the project), index options and the -r and -c files it names, line by line. A file whose only requirements are
-// unpinned has no pinned versions in it.
-function readRequirements(text, folder = "") {
-  const out = [];
+// sources (version control, URLs, paths outside the project), index options and the -r and -c files it names, line by line, and
+// how many of its requirements are unpinned.
+function requirementsFile(text, folder) {
+  const entries = [];
   let unpinned = 0;
   for (const logical of logicalLines(text)) {
     const content = logical.text === null ? null : withoutComment(logical.text).trim();
     if (content === "") continue;
-    const entries = content === null ? [unreadableRequirement(null, logical.line)] : requirementsLineEntries(content, logical.line, folder);
-    if (entries === null) unpinned++;
-    else out.push(...entries);
+    const lineEntries = content === null ? [unreadableRequirement(null, logical.line)] : requirementsLineEntries(content, logical.line, folder);
+    if (lineEntries === null) unpinned++;
+    else entries.push(...lineEntries);
   }
-  return found(out, unpinned, "no pinned versions in it");
+  return { entries, unpinned };
 }
 
-module.exports = { readPoetryLock, readUvLock, readRequirements };
+// A requirements file read in its own right: one whose only requirements are unpinned has no pinned versions in it.
+function readRequirements(text, folder = "") {
+  const { entries, unpinned } = requirementsFile(text, folder);
+  return found(entries, unpinned, "no pinned versions in it");
+}
+
+// A file a requirements file names with -r or -c: read whatever it holds, so one with only unpinned requirements (a constraints
+// file of ranges) gives nothing to check rather than a file it could not read.
+const readNamedRequirements = (text, folder = "") => requirementsFile(text, folder).entries;
+
+module.exports = { readPoetryLock, readUvLock, readRequirements, readNamedRequirements };

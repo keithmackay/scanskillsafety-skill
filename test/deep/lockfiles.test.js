@@ -1680,3 +1680,16 @@ test("requirements*.txt: a -r or -c file inside the repository that the scan did
     sourced: [unreadableLine(2), unreadableLine(3)],
   });
 });
+
+test("requirements*.txt: a -r or -c file with only unpinned requirements was read, so it is not listed as holding no pinned versions; a file read in its own right still is", () => {
+  const read = readPackages([
+    { path: "requirements.txt", text: "-c constraints.txt\nidna==3.10\n" },
+    { path: "constraints.txt", text: "Django>=4.2\n" },
+    { path: "requirements-ranges.txt", text: "Django>=4.2\n" },
+  ]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [pypi("idna", "3.10", "requirements.txt", 2)],
+    couldNotRead: [{ file: "requirements-ranges.txt", reason: "no pinned versions in it" }],
+  });
+});

@@ -8,7 +8,7 @@ const { isPep440, SEMVER, Unreadable, UNREADABLE_ENTRY } = require("./shared");
 const { readNpmLock } = require("./npm");
 const { readYarnLock } = require("./yarn");
 const { readPnpmLock } = require("./pnpm");
-const { readPoetryLock, readRequirements, readUvLock } = require("./python");
+const { readNamedRequirements, readPoetryLock, readRequirements, readUvLock } = require("./python");
 const { packageJsonNames, pyprojectNames } = require("./manifests");
 
 const normalisePyPI = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
@@ -22,6 +22,7 @@ const LOCKFILES = new Map([
   ["uv.lock", { ecosystem: "PyPI", read: readUvLock }],
 ]);
 const REQUIREMENTS = { ecosystem: "PyPI", read: readRequirements };
+const NAMED_REQUIREMENTS = { ecosystem: "PyPI", read: readNamedRequirements };
 const NOT_CHECKED = new Set(["Cargo.lock", "go.sum", "Gemfile.lock"]);
 
 const lockfileKind = (p) => LOCKFILES.get(baseName(p)) ?? (/^requirements.*\.txt$/.test(baseName(p)) ? REQUIREMENTS : null);
@@ -162,7 +163,7 @@ function readPackages(files, leftOut = []) {
     locked.add(kind.ecosystem);
     readLockfile(f, kind);
   }
-  for (let i = 0; i < toFollow.length; i++) readLockfile(toFollow[i], REQUIREMENTS);
+  for (let i = 0; i < toFollow.length; i++) readLockfile(toFollow[i], NAMED_REQUIREMENTS);
   const ownLeftOut = leftOut.filter((l) => !isVendored(l.path));
   result.notChecked.push(...ownLeftOut.filter((l) => NOT_CHECKED.has(baseName(l.path))).map((l) => l.path));
   for (const f of ownLeftOut.filter((l) => lockfileKind(l.path))) {
