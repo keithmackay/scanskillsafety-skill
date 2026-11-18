@@ -34,10 +34,14 @@ const MANIFESTS = new Map([
   ["pyproject.toml", { ecosystem: "PyPI", names: pyprojectNames }],
 ]);
 
-// What a reader makes of a file, or why it could not; input nested past what the reader can follow is said to be so.
-function readSafely(read, text) {
+// The folder a file is in, relative to the repository root ("" at the root).
+const folderOf = (filePath) => filePath.slice(0, Math.max(0, filePath.lastIndexOf("/")));
+
+// What a reader makes of a file, given its text and its folder, or why it could not; input nested past what the reader can follow
+// is said to be so.
+function readSafely(read, file) {
   try {
-    return { entries: read(text) };
+    return { entries: read(file.text, folderOf(file.path)) };
   } catch (err) {
     if (err instanceof Unreadable) return { reason: err.message };
     if (err instanceof RangeError) return { reason: "too deeply nested" };
@@ -117,7 +121,7 @@ function readPackages(files, leftOut = []) {
     const kind = lockfileKind(f.path);
     if (!kind) continue;
     locked.add(kind.ecosystem);
-    const read = readSafely(kind.read, f.text);
+    const read = readSafely(kind.read, f);
     if (read.reason) {
       result.couldNotRead.push({ file: f.path, reason: read.reason });
       continue;
@@ -136,7 +140,7 @@ function readPackages(files, leftOut = []) {
   for (const f of ownFiles) {
     const manifest = MANIFESTS.get(baseName(f.path));
     if (!manifest || locked.has(manifest.ecosystem)) continue;
-    const read = readSafely(manifest.names, f.text);
+    const read = readSafely(manifest.names, f);
     if (read.reason) {
       result.couldNotRead.push({ file: f.path, reason: read.reason });
       continue;

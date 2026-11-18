@@ -2,6 +2,7 @@
 // ABOUTME: from, read strictly as Poetry and uv write their TOML, and the pinned versions in a requirements file.
 "use strict";
 
+const { OBJECT_ID } = require("../util");
 const { classifySource, LOCAL, UNREADABLE } = require("../packageSources");
 const { found, gitRepositorySource, linesOf, unnamedEntry, Unreadable, UNREADABLE_ENTRY } = require("./shared");
 const { tomlStatements } = require("./toml");
@@ -17,12 +18,16 @@ const PROJECT = Object.freeze({ project: true });
 // A Poetry block with no [package.source]: from whatever index the project is set to use.
 const NO_SOURCE = Object.freeze({});
 
-// A relative path that never leaves the lockfile's folder, `..` segments included; an absolute path, a home path, a drive or a
-// scheme leaves it.
-function staysInside(path) {
+// The starts of an address that make it a path rather than a URL: absolute, home, or relative to the lockfile's folder.
+const PATH_STARTS = ["/", "~", "./", "../"];
+const DRIVE = /^[A-Za-z]:(?:[\\/]|$)/;
+
+// A relative path that, read from the lockfile's folder, never climbs above the repository root; an absolute path, a home path, a
+// drive or a scheme leaves it.
+function staysInside(folder, path) {
   if (path === "" || path.startsWith("/") || path.startsWith("~") || path.includes(":") || path.includes("\\")) return false;
   let depth = 0;
-  for (const segment of path.split("/")) {
+  for (const segment of [...folder.split("/"), ...path.split("/")]) {
     if (segment === "..") depth--;
     else if (segment !== "." && segment !== "") depth++;
     if (depth < 0) return false;
@@ -30,26 +35,34 @@ function staysInside(path) {
   return true;
 }
 
+// Where an address in a Python lockfile points, `folder` being the lockfile's folder in the repository. A `file:` URL is outside
+// the project. A path (absolute, home, a drive, starting `./` or `../`, or, in a field that holds a path, any name with no `:`) is
+// local while it stays inside the repository and outside the project otherwise. Any other address is classified: as a git
+// repository when the field names one, as one archive when it pins one.
+function pythonAddress(address, folder, { pathField = false, git = false, direct = false } = {}) {
+  if (/^file:/i.test(address)) return OUTSIDE_PROJECT;
+  const named = PATH_STARTS.some((start) => address.startsWith(start)) || DRIVE.test(address);
+  if (!address.includes("://") && (named || (pathField && !address.includes(":")))) {
+    return staysInside(folder, address) ? LOCAL : OUTSIDE_PROJECT;
+  }
+  return classifySource("PyPI", git ? gitRepositorySource(address, "").source : address, { direct });
+}
+
 // Where a Poetry package comes from, by its [package.source] `type`: an index (`legacy`), a git repository at
-// `resolved_reference`, one archive (`url`), or a file or folder, local when it stays inside the project. Any other type, or no
-// `url`, is one it cannot read.
-function poetryOrigin(block) {
+// `resolved_reference`, one archive (`url`), or a file or folder. Any other type, or no `url`, is one it cannot read.
+function poetryOrigin(block, folder) {
   if (block.source === null) return NO_SOURCE;
   const type = block.source.get("type");
   const url = block.source.get("url");
   if (url === undefined) return UNREADABLE_ENTRY;
-  if (type === "legacy") return { source: url };
-  if (type === "url") return { source: url, direct: true };
-  if (type === "git") return gitRepositorySource(url, block.source.get("resolved_reference") ?? "");
-  if (type === "file" || type === "directory") return { classified: staysInside(url) ? LOCAL : OUTSIDE_PROJECT };
-  return UNREADABLE_ENTRY;
+  if (type === "legacy") return { classified: pythonAddress(url, folder) };
+  if (type === "url") return { classified: pythonAddress(url, folder, { direct: true }) };
+  if (type === "file" || type === "directory") return { classified: pythonAddress(url, folder, { pathField: true }) };
+  if (type !== "git") return UNREADABLE_ENTRY;
+  const verdict = pythonAddress(url, folder, { git: true });
+  const commit = block.source.get("resolved_reference") ?? "";
+  return { classified: verdict.kind === "git" && OBJECT_ID.test(commit) ? { ...verdict, commit } : verdict };
 }
-
-// A path uv records: local while it stays inside the project, otherwise a path outside it.
-const uvPathVerdict = (path) => (staysInside(path) ? LOCAL : OUTSIDE_PROJECT);
-// An address uv records: a `file:` URL is always absolute, so a path outside the project; any other is classified.
-const uvAddressVerdict = (address, direct = false) =>
-  address.slice(0, 5).toLowerCase() === "file:" ? OUTSIDE_PROJECT : classifySource("PyPI", address, { direct });
 
 // The fields of an inline table written as uv writes one, by name; null when it is not one or a name is given twice.
 function uvTable(value) {
@@ -62,10 +75,9 @@ function uvTable(value) {
   return fields;
 }
 
-// A uv `source`: exactly one kind, a string: an index (a folder when it has no `:`), a git repository with its commit after `#`,
-// one archive, a file or folder, or the project itself (`editable`, `virtual`). A folder or file is local only while it stays
-// inside the project.
-function uvSourceVerdict(value) {
+// A uv `source`: exactly one kind, a string: an index (a folder when it is a path), a git repository with its commit after `#`, one
+// archive, a file or folder, or the project itself (`editable` or `virtual` inside the repository).
+function uvSourceVerdict(value, folder) {
   const fields = uvTable(value);
   const kinds = fields ? UV_SOURCE_KINDS.filter((kind) => fields.has(kind)) : [];
   if (kinds.length !== 1) return UNREADABLE;
@@ -73,15 +85,14 @@ function uvSourceVerdict(value) {
   const extra = kind === "url" && fields.has("subdirectory") ? 1 : 0;
   const address = fields.get(kind);
   if (fields.size !== 1 + extra || address.kind !== "string") return UNREADABLE;
-  if (kind === "editable" || kind === "virtual") return PROJECT;
-  if (kind === "path" || kind === "directory") return uvPathVerdict(address.text);
-  if (kind === "registry") return address.text.includes(":") ? uvAddressVerdict(address.text) : uvPathVerdict(address.text);
-  if (kind === "git") return classifySource("PyPI", gitRepositorySource(address.text, "").source);
-  return uvAddressVerdict(address.text, true);
+  if (kind === "git") return pythonAddress(address.text, folder, { git: true });
+  if (kind === "url") return pythonAddress(address.text, folder, { direct: true });
+  const verdict = pythonAddress(address.text, folder, { pathField: true });
+  return (kind === "editable" || kind === "virtual") && verdict === LOCAL ? PROJECT : verdict;
 }
 
 // A uv `sdist` or `wheels` item: the address of its `url` or its `path`, null when it names neither.
-function uvFileVerdict(value) {
+function uvFileVerdict(value, folder) {
   const fields = uvTable(value);
   if (!fields || [...fields.keys()].some((name) => !UV_FILE_FIELDS.has(name)) || (fields.has("url") && fields.has("path"))) {
     return UNREADABLE;
@@ -89,20 +100,21 @@ function uvFileVerdict(value) {
   const address = fields.get("url") ?? fields.get("path");
   if (address === undefined) return null;
   if (address.kind !== "string") return UNREADABLE;
-  return fields.has("url") ? uvAddressVerdict(address.text) : uvPathVerdict(address.text);
+  return pythonAddress(address.text, folder, { pathField: fields.has("path") });
 }
 
 // Where a uv package comes from: the first address that is neither the registry nor a path inside the project among its source,
 // its sdist and its wheels, else what its source is. A package with no source, or a project with files, is one it cannot read.
-function uvOrigin(block) {
+function uvOrigin(block, folder) {
   const source = block.fields.get("source");
   if (source === undefined) return UNREADABLE_ENTRY;
-  const verdicts = [uvSourceVerdict(source.value)];
+  const verdicts = [uvSourceVerdict(source.value, folder)];
   const sdist = block.fields.get("sdist");
-  if (sdist !== undefined) verdicts.push(uvFileVerdict(sdist.value));
+  if (sdist !== undefined) verdicts.push(uvFileVerdict(sdist.value, folder));
   const wheels = block.fields.get("wheels");
   if (wheels !== undefined) {
-    if (wheels.value.kind === "array" && wheels.value.exact) verdicts.push(...wheels.value.items.map(uvFileVerdict));
+    const laidOut = wheels.value.kind === "array" && wheels.value.exact;
+    if (laidOut) verdicts.push(...wheels.value.items.map((item) => uvFileVerdict(item, folder)));
     else verdicts.push(UNREADABLE);
   }
   const named = verdicts.filter((verdict) => verdict !== null);
@@ -138,10 +150,10 @@ function fieldText(block, name) {
 // What a finished block stands for: the project itself (skipped, `{ project: true }`), or an entry. A block in a shape the tool
 // does not write, or with neither a version nor a source of its own, is one it cannot read; one with no name it can read is one
 // it cannot name.
-function blockEntry(block, format) {
+function blockEntry(block, format, folder) {
   const name = fieldText(block, "name");
   const version = fieldText(block, "version");
-  const origin = format.origin(block);
+  const origin = format.origin(block, folder);
   const odd = format.foreignFields.some((field) => block.fields.has(field));
   const unversioned = version === undefined && origin === NO_SOURCE;
   const unreadable = block.unreadable || odd || name === null || version === null || unversioned;
@@ -168,14 +180,14 @@ function readSourceField(block, { key, exact, value }) {
 // with no block before it, among other tables, means the file is not one it can read. In a block, every field of its own table
 // and of Poetry's [package.source] must be written as the tool writes it, or the block is one it cannot read; a sub-table it does
 // not know is one too.
-function readPackageBlocks(text, format) {
+function readPackageBlocks(text, format, folder) {
   const layout = `not laid out as ${format.tool} writes it`;
   const out = [];
   let block = null;
   let table = "root";
   const finish = () => {
     if (!block) return;
-    const entry = blockEntry(block, format);
+    const entry = blockEntry(block, format, folder);
     block = null;
     if (entry !== PROJECT) out.push(entry);
   };
@@ -207,8 +219,9 @@ function readPackageBlocks(text, format) {
   return out;
 }
 
-const readPoetryLock = (text) => readPackageBlocks(text, POETRY);
-const readUvLock = (text) => readPackageBlocks(text, UV);
+// text: the lockfile; folder: its folder in the repository, which a relative path in it is read from.
+const readPoetryLock = (text, folder = "") => readPackageBlocks(text, POETRY, folder);
+const readUvLock = (text, folder = "") => readPackageBlocks(text, UV, folder);
 
 const PINNED_REQUIREMENT = /^([A-Za-z0-9._-]+)(\[[^\]]*\])?==([^\s;#]+)/;
 

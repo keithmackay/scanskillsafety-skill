@@ -1369,3 +1369,64 @@ test("uv.lock: a package is judged by its first address that is not the registry
   const mirror = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "https://mirror.example.com/simple" }', 'sdist = { path = "dist/a-1.0.0.tar.gz" }') }]);
   assert.deepEqual(mirror.sourced, [pypiSourced("a", "1.0.0", "uv.lock", 5, "host", "https://mirror.example.com")]);
 });
+
+const OUTSIDE = { kind: "url", address: null, text: "a path outside the project" };
+const poetryBlock = (type, url) => ["[[package]]", 'name = "a"', 'version = "1.0.0"', "", "[package.source]", `type = "${type}"`, `url = "${url}"`, ""].join("\n");
+// What a lockfile at `file` makes of package `a`: the kind and address it is reported with, "local" when dropped as local, or
+// "registry" when sent to OSV.
+function verdictFor(file, text) {
+  const read = readPackages([{ path: file, text }]);
+  if (read.packages.length === 1) return "registry";
+  if (read.sourced.length === 0) return read.couldNotRead.length === 0 ? "local" : read.couldNotRead;
+  const { kind, address, text: shown } = read.sourced[0];
+  return shown === undefined ? { kind, address } : { kind, address, text: shown };
+}
+
+test("Python lockfiles: every address that is a file: URL, an absolute path, a drive or a path climbing out of the repository is a path outside the project, whatever field holds it", () => {
+  const cases = [
+    ["uv.lock", uvLock('source = { git = "file:///srv/repo#abc" }')],
+    ["uv.lock", uvLock('source = { git = "../repo" }')],
+    ["uv.lock", uvLock('source = { git = "/srv/repo" }')],
+    ["uv.lock", uvLock('source = { url = "../a-1.0.0.tar.gz" }')],
+    ["uv.lock", uvLock('source = { url = "/srv/a-1.0.0.tar.gz" }')],
+    ["uv.lock", uvLock('source = { registry = "C:/wheels" }')],
+    ["uv.lock", uvLock('source = { registry = "file:///srv/wheels" }')],
+    ["uv.lock", uvLock('source = { editable = "../x" }')],
+    ["uv.lock", uvLock('source = { virtual = "/x" }')],
+    ["uv.lock", uvLock('source = { path = "~/a.whl" }')],
+    ["poetry.lock", poetryBlock("git", "/srv/repo")],
+    ["poetry.lock", poetryBlock("git", "../repo")],
+    ["poetry.lock", poetryBlock("git", "file:///srv/repo")],
+    ["poetry.lock", poetryBlock("url", "/srv/a-1.0.0.tar.gz")],
+    ["poetry.lock", poetryBlock("url", "../a-1.0.0.tar.gz")],
+    ["poetry.lock", poetryBlock("url", "file:///srv/a-1.0.0.tar.gz")],
+    ["poetry.lock", poetryBlock("legacy", "/srv/simple")],
+    ["poetry.lock", poetryBlock("legacy", "../simple")],
+    ["poetry.lock", poetryBlock("legacy", "file:///srv/simple")],
+    ["poetry.lock", poetryBlock("file", "C:/a-1.0.0.tar.gz")],
+  ];
+  for (const [file, text] of cases) assert.deepEqual(verdictFor(file, text), OUTSIDE, text);
+});
+
+test("Python lockfiles: a path is measured from the repository root, so one into a sibling folder is inside and one above the root is outside", () => {
+  const inside = [
+    ["api/uv.lock", uvLock('source = { directory = "../pipeline" }')],
+    ["api/uv.lock", uvLock('source = { git = "../vendor/repo" }')],
+    ["api/uv.lock", uvLock('source = { url = "./dist/a-1.0.0.tar.gz" }')],
+    ["api/uv.lock", uvLock('source = { registry = "../wheels" }')],
+    ["api/uv.lock", uvLock('source = { path = "../dist/a-1.0.0.tar.gz" }', 'sdist = { path = "../dist/a-1.0.0.tar.gz" }')],
+    ["a/b/poetry.lock", poetryBlock("directory", "../../x")],
+    ["a/poetry.lock", poetryBlock("git", "../vendor/repo")],
+  ];
+  for (const [file, text] of inside) assert.deepEqual(verdictFor(file, text), "local", `${file} ${text}`);
+  const outside = [
+    ["uv.lock", uvLock('source = { directory = "../pipeline" }')],
+    ["api/uv.lock", uvLock('source = { directory = "../../pipeline" }')],
+    ["api/uv.lock", uvLock('source = { registry = "https://pypi.org/simple" }', 'sdist = { path = "../../a-1.0.0.tar.gz" }')],
+    ["api/uv.lock", uvLock('source = { registry = "https://pypi.org/simple" }', "wheels = [", '    { path = "../../a-1.0.0-py3-none-any.whl" },', "]")],
+    ["a/poetry.lock", poetryBlock("directory", "../../x")],
+  ];
+  for (const [file, text] of outside) assert.deepEqual(verdictFor(file, text), OUTSIDE, `${file} ${text}`);
+  const project = uvLock('source = { editable = "../packages/t" }');
+  assert.deepEqual(readPackages([{ path: "api/uv.lock", text: project }]), EMPTY);
+});
