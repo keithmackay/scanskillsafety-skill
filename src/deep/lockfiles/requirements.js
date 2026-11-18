@@ -183,7 +183,7 @@ function eggName(address) {
 }
 
 const WHEEL = /\.whl$/i;
-const SDIST = /\.(?:tar\.gz|zip)$/i;
+const SDIST = /\.(?:zip|tar(?:\.(?:gz|bz2|xz|lz|lzma))?)$/i;
 
 // The name and version an archive's file name gives: a wheel's are its first two `-` parts (of at least five), a source archive's
 // the text either side of its last `-`. null when the file is neither or the name is not one.
@@ -207,7 +207,7 @@ const withoutExtras = (path) => (path.endsWith("]") && path.includes("[") ? path
 
 // One address a requirement installs from: a version control address, a URL (one archive), or a path. A path inside the project
 // gives nothing. An archive on the official registry with no name given is the package its file name names, checked by that
-// name and the version, when it is one.
+// name and the version, when it is one; a file there whose name names no package is one it cannot read.
 function addressEntries(address, name, line, folder) {
   if (address === "" || /\s/.test(address)) return [unreadableRequirement(name, line)];
   const verdict =
@@ -220,7 +220,7 @@ function addressEntries(address, name, line, folder) {
   if (verdict.kind === "local") return [];
   if (verdict.expected && named === null) {
     const archive = archiveNameAndVersion(address);
-    return archive ? [{ ...archive, line, classified: verdict }] : [];
+    return archive ? [{ ...archive, line, classified: verdict }] : [unreadableLine(line)];
   }
   return [{ name: named, version: null, line, classified: verdict }];
 }

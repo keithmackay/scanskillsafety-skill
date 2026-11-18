@@ -24,7 +24,8 @@ const DRIVE = /^[A-Za-z]:(?:[\\/]|$)/;
 // Where an address in a Python lockfile points, `folder` being the lockfile's folder in the repository. A `file:` URL is outside
 // the project. A path (absolute, home, a drive, starting `./` or `../`, or, in a field that holds a path, any name with no `:`) is
 // local while it stays inside the repository and outside the project otherwise; inside it, an archive, or a folder a field names
-// as an index or find-links, holds packages as files and is bundled. Any other address is classified: as a git
+// as an index or find-links, holds packages as files and is bundled. The archive is judged on the path as pip normalises it, so a
+// trailing slash or `.` segment still names it. Any other address is classified: as a git
 // repository when the field names one, as one archive when it pins one, and by what the field names (`role`, an index or
 // find-links).
 function pythonAddress(address, folder, { pathField = false, git = false, direct = false, role } = {}) {
@@ -32,7 +33,8 @@ function pythonAddress(address, folder, { pathField = false, git = false, direct
   const named = PATH_STARTS.some((start) => address.startsWith(start)) || DRIVE.test(address);
   if (named || (pathField && !address.includes(":"))) {
     if (!staysInside(folder, address)) return OUTSIDE_PROJECT;
-    return role !== undefined || isPackageArchive(address) ? bundled(pathFrom(folder, address)) : LOCAL;
+    const repositoryPath = pathFrom(folder, address);
+    return role !== undefined || isPackageArchive(repositoryPath) ? bundled(repositoryPath) : LOCAL;
   }
   return classifySource("PyPI", git ? gitRepositorySource(address, "").source : address, { direct, role });
 }

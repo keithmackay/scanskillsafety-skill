@@ -4,13 +4,14 @@
 
 const { OBJECT_ID } = require("./util");
 
-// The only registries a package is expected to come from. Mirrors are not: nothing vouches for the bytes a mirror serves.
-const OFFICIAL_HOSTS = { npm: ["registry.npmjs.org", "registry.yarnpkg.com"], PyPI: ["pypi.org", "files.pythonhosted.org"] };
 // PyPI's index is pypi.org at /simple; its package files are on files.pythonhosted.org. Anything else on pypi.org (a project page
-// renders its README) is not official.
+// renders its README) is not official. The index is matched on the text as written, since pip sends a path as written and the URL
+// parser here would resolve `%2e` dot segments into /simple.
 const PYPI_INDEX_HOST = "pypi.org";
-const PYPI_INDEX_PATHS = ["/simple", "/simple/"];
+const PYPI_INDEX = /^https:\/\/pypi\.org(?::443)?\/simple\/?(?:[?#]|$)/i;
 const PYPI_FILE_HOST = "files.pythonhosted.org";
+// The only registries a package is expected to come from. Mirrors are not: nothing vouches for the bytes a mirror serves.
+const OFFICIAL_HOSTS = { npm: ["registry.npmjs.org", "registry.yarnpkg.com"], PyPI: [PYPI_INDEX_HOST, PYPI_FILE_HOST] };
 
 // npm reads `file:` and `npm:` in any case; the other protocols (`link:`, `workspace:`, `portal:`, `catalog:`, `jsr:`, `exec:`,
 // `patch:`) are matched as written.
@@ -104,25 +105,25 @@ function gitUrl(text) {
   return (prefixOf(text, SSH_SCHEMES) && authority >= 0 && scpForm(text.slice(authority + 3))) || UNREADABLE;
 }
 
-// An http(s) address: the official registry, a mirror (host), plain http, or one archive on another host (url).
 // Whether an https address on the default port is official for what the field holding it names (`role`): npm serves its index
 // and its files from its hosts at any path. For PyPI an index field is official only at pypi.org's /simple, any other field only
 // on the file host, and a find-links page never, since pip takes every link it finds on one.
-function isOfficial(ecosystem, url, role) {
+function isOfficial(ecosystem, text, url, role) {
   if (url.port !== "") return false;
   if (ecosystem !== "PyPI") return (OFFICIAL_HOSTS[ecosystem] ?? []).includes(url.hostname);
   if (role === "find-links") return false;
-  if (role === "index") return url.hostname === PYPI_INDEX_HOST && PYPI_INDEX_PATHS.includes(url.pathname);
+  if (role === "index") return PYPI_INDEX.test(text);
   return url.hostname === PYPI_FILE_HOST;
 }
 
+// An http(s) address: the official registry, a mirror (host), plain http, or one archive on another host (url).
 function webUrl(ecosystem, text, direct, role) {
   if (!prefixOf(text, ["https:", "http:"])) return null;
   const url = parseUrl(text);
   if (!url || !url.host) return UNREADABLE;
   const origin = `${url.protocol}//${url.host}`;
   if (url.protocol === "http:") return { expected: false, kind: "http", address: origin };
-  if (isOfficial(ecosystem, url, role)) return EXPECTED;
+  if (isOfficial(ecosystem, text, url, role)) return EXPECTED;
   if (!direct) return { expected: false, kind: "host", address: origin };
   return { expected: false, kind: "url", address: `${origin}/${url.pathname.slice(url.pathname.lastIndexOf("/") + 1)}` };
 }

@@ -1578,7 +1578,8 @@ test("requirements*.txt: shapes pip accepts that hold no source, or a pin, read 
     ["https://files.pythonhosted.org/packages/ab/cd/requests-2.32.3-py3-none-any.whl", [pypi("requests", "2.32.3", "requirements.txt", 1)], []],
     ["https://files.pythonhosted.org/packages/ab/cd/charset_normalizer-3.3.2.tar.gz#sha256=abc", [pypi("charset-normalizer", "3.3.2", "requirements.txt", 1)], []],
     ["https://files.pythonhosted.org/packages/ab/cd/pkg-notaversion.zip", [pypi("pkg", null, "requirements.txt", 1)], []],
-    ["https://files.pythonhosted.org/packages/ab/cd/README.txt", [], []],
+    ["https://files.pythonhosted.org/packages/ab/cd/pkg-1.0.tar.bz2", [pypi("pkg", "1.0", "requirements.txt", 1)], []],
+    ["https://files.pythonhosted.org/packages/ab/cd/pkg-1.0.tar.lzma", [pypi("pkg", "1.0", "requirements.txt", 1)], []],
     ["git+https://github.com/u/r@feature/x#egg=r", [], [pypiSourced("r", null, "requirements.txt", 1, "git", "https://github.com/u/r")]],
     ["svn+https://svn.example.com/repo/trunk#egg=s", [], [pypiSourced("s", null, "requirements.txt", 1, "git", "svn+https://svn.example.com/repo/trunk")]],
     ["--trusted-host host.example:8080", [], [requirementsLine(1, "http", "http://host.example:8080")]],
@@ -1656,6 +1657,7 @@ test("requirements*.txt: a line that could name a source and is not one it can r
     "pkg @",
     "pkg @ https://evil.example/SECRET/x.whl extra",
     "@ https://evil.example/SECRET/x.whl",
+    "https://files.pythonhosted.org/packages/ab/cd/README.txt",
   ];
   for (const text of lines) {
     const read = readPackages([{ path: "requirements.txt", text: `${text}\nidna==3.10\n` }]);
@@ -1820,4 +1822,19 @@ test("bundled archives: a Python package from an archive, or a folder used as an
     line(9, "wheels"),
   ]);
   assert.deepEqual(requirements.packages.map((p) => p.name), ["idna"]);
+});
+
+test("bundled archives: a Python archive path is judged after pip's normalising, so a trailing slash or dot segment still names the archive; .tar.lzma is an archive", () => {
+  const requirements = readPackages([{ path: "requirements.txt", text: [
+    "./evil-1.0-py3-none-any.whl/", "-e evil-1.0-py3-none-any.whl/.", "x-1.0.tar.lzma", "./libs/a.whl.d/", "idna==3.10",
+  ].join("\n") }]);
+  assert.deepEqual(requirements.sourced, [
+    bundledItem("PyPI", null, null, "requirements.txt", 1, "evil-1.0-py3-none-any.whl"),
+    bundledItem("PyPI", null, null, "requirements.txt", 2, "evil-1.0-py3-none-any.whl"),
+    bundledItem("PyPI", null, null, "requirements.txt", 3, "x-1.0.tar.lzma"),
+  ]);
+  const uv = readPackages([{ path: "uv.lock", text: uvLock('source = { path = "dist/a-1.0.0-py3-none-any.whl/" }') }]);
+  assert.deepEqual(uv.sourced, [bundledItem("PyPI", "a", "1.0.0", "uv.lock", 5, "dist/a-1.0.0-py3-none-any.whl")]);
+  const npmFolder = JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" }, "node_modules/b": { version: "1.0.0", resolved: "file:vendor/b.tgz/" } } });
+  assert.deepEqual(readPackages([{ path: "package-lock.json", text: npmFolder }]).sourced, []);
 });
