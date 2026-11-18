@@ -42,9 +42,7 @@ function staysInside(folder, path) {
 function pythonAddress(address, folder, { pathField = false, git = false, direct = false } = {}) {
   if (/^file:/i.test(address)) return OUTSIDE_PROJECT;
   const named = PATH_STARTS.some((start) => address.startsWith(start)) || DRIVE.test(address);
-  if (!address.includes("://") && (named || (pathField && !address.includes(":")))) {
-    return staysInside(folder, address) ? LOCAL : OUTSIDE_PROJECT;
-  }
+  if (named || (pathField && !address.includes(":"))) return staysInside(folder, address) ? LOCAL : OUTSIDE_PROJECT;
   return classifySource("PyPI", git ? gitRepositorySource(address, "").source : address, { direct });
 }
 

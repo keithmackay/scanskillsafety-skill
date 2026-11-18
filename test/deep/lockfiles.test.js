@@ -1404,6 +1404,18 @@ test("Python lockfiles: every address that is a file: URL, an absolute path, a d
     ["poetry.lock", poetryBlock("legacy", "../simple")],
     ["poetry.lock", poetryBlock("legacy", "file:///srv/simple")],
     ["poetry.lock", poetryBlock("file", "C:/a-1.0.0.tar.gz")],
+    ...["../evil://x", "/srv/evil://x", "~/x://y", "./../x://y"].flatMap((address) => [
+      ["uv.lock", uvLock(`source = { path = "${address}" }`)],
+      ["uv.lock", uvLock(`source = { editable = "${address}" }`)],
+      ["uv.lock", uvLock(`source = { url = "${address}" }`)],
+      ["uv.lock", uvLock(`source = { git = "${address}" }`)],
+      ["uv.lock", uvLock(`source = { registry = "${address}" }`)],
+      ["uv.lock", uvLock('source = { registry = "https://pypi.org/simple" }', `sdist = { url = "${address}" }`)],
+      ["uv.lock", uvLock('source = { registry = "https://pypi.org/simple" }', "wheels = [", `    { url = "${address}" },`, "]")],
+      ["poetry.lock", poetryBlock("legacy", address)],
+      ["poetry.lock", poetryBlock("git", address)],
+      ["poetry.lock", poetryBlock("directory", address)],
+    ]),
   ];
   for (const [file, text] of cases) assert.deepEqual(verdictFor(file, text), OUTSIDE, text);
 });
