@@ -8,7 +8,12 @@ const { OBJECT_ID } = require("./util");
 // renders its README) is not official. The index is matched on the text as written, since pip sends a path as written and the URL
 // parser here would resolve `%2e` dot segments into /simple.
 const PYPI_INDEX_HOST = "pypi.org";
-const PYPI_INDEX = /^https:\/\/pypi\.org(?::443)?\/simple\/?(?:[?#]|$)/i;
+// pypi.org's index as pip sends it: the scheme and host in any case, the path exactly `/simple` or `/simple/`.
+const PYPI_INDEX = /^https:\/\/pypi\.org(?::443)?\/simple\/?(?:[?#]|$)/;
+const withLowerCaseAuthority = (text) => {
+  const pathStart = text.indexOf("/", text.indexOf("://") + 3);
+  return pathStart < 0 ? text.toLowerCase() : text.slice(0, pathStart).toLowerCase() + text.slice(pathStart);
+};
 const PYPI_FILE_HOST = "files.pythonhosted.org";
 // The only registries a package is expected to come from. Mirrors are not: nothing vouches for the bytes a mirror serves.
 const OFFICIAL_HOSTS = { npm: ["registry.npmjs.org", "registry.yarnpkg.com"], PyPI: [PYPI_INDEX_HOST, PYPI_FILE_HOST] };
@@ -112,7 +117,7 @@ function isOfficial(ecosystem, text, url, role) {
   if (url.port !== "") return false;
   if (ecosystem !== "PyPI") return (OFFICIAL_HOSTS[ecosystem] ?? []).includes(url.hostname);
   if (role === "find-links") return false;
-  if (role === "index") return PYPI_INDEX.test(text);
+  if (role === "index") return PYPI_INDEX.test(withLowerCaseAuthority(text));
   return url.hostname === PYPI_FILE_HOST;
 }
 

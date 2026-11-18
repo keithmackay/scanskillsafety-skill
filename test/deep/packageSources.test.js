@@ -51,13 +51,13 @@ test("pypi.org is official only as the index at /simple: another path, a package
   assert.deepEqual(classifySource("npm", "https://registry.npmjs.org/", { role: "index" }), EXPECTED);
 });
 
-test("pypi.org's index is read from the text as pip sends it: dot segments written as %2e, user info or a path past /simple are not the index", () => {
+test("pypi.org's index is read from the text as pip sends it: dot segments written as %2e, user info, a path past /simple or another case of /simple are not the index", () => {
   const pypi = offRegistry("host", "https://pypi.org");
   for (const text of ["https://pypi.org/project/evil/%2e%2e/%2e%2e/simple/", "https://pypi.org/simple/%2e", "https://pypi.org/simple/%2E%2E/project/evil/",
-    "https://user@pypi.org/simple", "https://pypi.org/./simple/", "https://pypi.org/simplex"]) {
+    "https://user@pypi.org/simple", "https://pypi.org/./simple/", "https://pypi.org/simplex", "https://pypi.org/SIMPLE", "https://pypi.org/Simple/"]) {
     assert.deepEqual(classifySource("PyPI", text, { role: "index" }), pypi, text);
   }
-  for (const text of ["https://pypi.org/simple", "https://pypi.org:443/simple/", "https://pypi.org/simple?x=1", "https://pypi.org/simple/#top"]) {
+  for (const text of ["https://pypi.org/simple", "https://pypi.org:443/simple/", "https://pypi.org/simple?x=1", "https://pypi.org/simple/#top", "HTTPS://PyPI.org/simple/"]) {
     assert.deepEqual(classifySource("PyPI", text, { role: "index" }), EXPECTED, text);
   }
 });
