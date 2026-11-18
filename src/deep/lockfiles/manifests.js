@@ -4,7 +4,7 @@
 
 const { isObject, OBJECT_ID } = require("../util");
 const { classifyManifestValue, LOCAL, UNREADABLE } = require("../packageSources");
-const { jsonMembers, localArchiveVerdict, normalisePyPI, parseJson, ROOT_OBJECT, unnamedEntry, UNREADABLE_ENTRY } = require("./shared");
+const { jsonMembers, localPathVerdict, normalisePyPI, parseJson, ROOT_OBJECT, unnamedEntry, UNREADABLE_ENTRY } = require("./shared");
 const { tomlStatements } = require("./toml");
 const { pythonAddress } = require("./python");
 const { addressEntries, specifierEntries, splitName } = require("./requirements");
@@ -45,6 +45,15 @@ function overrideTarget(key) {
   return at < 0 ? tail : tail.slice(0, at);
 }
 
+// The package an npm alias (`npm:<name>@<range>`, `npm:<name>`, in any case) installs; null for any other value.
+function aliasTarget(value) {
+  if (value.slice(0, 4).toLowerCase() !== "npm:") return null;
+  const spec = value.slice(4);
+  const at = spec.indexOf("@", 1);
+  const name = at < 0 ? spec : spec.slice(0, at);
+  return name === "" ? null : name;
+}
+
 // The values of one section, each with its name and the line of its value: walked iteratively, depth first in parse order, through
 // nested override objects (`.` naming the package of the object it is in). A value that is neither a string nor, where overrides
 // nest, an object is one it cannot read (`value: null`). A line is given only when the text at it is the value parsed.
@@ -67,11 +76,11 @@ function sectionValues(section, members, object, nests) {
   return values;
 }
 
-// A package.json value: a local one naming an archive is read from the manifest's folder (bundled inside the repository, a path
-// outside the project otherwise); a local folder stays local.
+// A package.json value: a local path is read from the manifest's folder (a path outside the project when it leaves the repository;
+// inside it, an archive is bundled and a folder stays local).
 function packageJsonVerdict(value, folder) {
   const verdict = classifyManifestValue("npm", value);
-  return verdict.kind === "local" ? localArchiveVerdict(value, folder, verdict) : verdict;
+  return verdict.kind === "local" ? localPathVerdict(value, folder, verdict) : verdict;
 }
 
 // package.json's dependencies in every section that can name a source, and the overrides in `pnpm.overrides`. A section that is
@@ -100,7 +109,7 @@ function readPackageJson(text, folder = "") {
       if (dependency.value === null) found.push({ entry: unreadableNamed(packageName, dependency.line), checked });
       else {
         const verdict = packageJsonVerdict(dependency.value, folder);
-        const entry = { name: packageName, version: null, line: dependency.line };
+        const entry = { name: (checked && aliasTarget(dependency.value)) || packageName, version: null, line: dependency.line };
         found.push({ entry: verdict.expected ? entry : { ...entry, classified: verdict }, checked });
       }
     }
@@ -278,6 +287,13 @@ function namedIndexes(values, prefix) {
 const PROJECT_DEPENDENCIES = ["project", "dependencies"];
 const OPTIONAL_DEPENDENCIES = ["project", "optional-dependencies"];
 const DEPENDENCY_GROUPS = ["dependency-groups"];
+// Lists of PEP 508 strings that are build or development inputs: read for sources, their names never sent to OSV.
+const OTHER_REQUIREMENT_LISTS = [
+  ["build-system", "requires"],
+  ["tool", "uv", "dev-dependencies"],
+  ["tool", "uv", "override-dependencies"],
+  ["tool", "uv", "constraint-dependencies"],
+];
 const UV_SOURCES = ["tool", "uv", "sources"];
 const POETRY_TABLES = [["tool", "poetry", "dependencies"], ["tool", "poetry", "dev-dependencies"]];
 const POETRY_GROUPS = ["tool", "poetry", "group"];
@@ -287,6 +303,10 @@ const POETRY_GROUPS = ["tool", "poetry", "group"];
 function placeOf(path) {
   const project = after(path, PROJECT_DEPENDENCIES);
   if (project !== null) return project.length === 0 ? { list: true, checked: true } : { bad: true };
+  for (const prefix of OTHER_REQUIREMENT_LISTS) {
+    const other = after(path, prefix);
+    if (other !== null) return other.length === 0 ? { list: true } : { bad: true };
+  }
   const optional = after(path, OPTIONAL_DEPENDENCIES);
   if (optional !== null) return optional.length === 1 && typeof optional[0] === "string" ? { list: true } : { bad: true };
   const groups = after(path, DEPENDENCY_GROUPS);
@@ -335,7 +355,8 @@ function dependencyEntries(dependency, folder, indexes) {
 }
 
 // pyproject.toml's dependencies in every section that can name a source: PEP 508 strings in [project] dependencies,
-// [project.optional-dependencies] and [dependency-groups]; [tool.uv.sources]; Poetry's dependency tables. Each value is placed by
+// [project.optional-dependencies], [dependency-groups], [build-system] requires and uv's dev, override and constraint dependencies;
+// [tool.uv.sources]; Poetry's dependency tables. Each value is placed by
 // its whole key path, so dotted keys, inline tables and table headers read alike, and any value in those sections in a shape it does
 // not know is one it cannot read. The names of [project] dependencies and [tool.poetry.dependencies] are sent to OSV.
 function readPyproject(text, folder = "") {

@@ -218,12 +218,17 @@ const isPackageArchive = (path) => PACKAGE_ARCHIVE.test(path.split("#", 1)[0].sp
 const bundled = (repositoryPath) =>
   Object.freeze({ expected: false, kind: "bundled", address: repositoryPath === "" ? "." : repositoryPath, text: "a bundled package file the scan cannot read" });
 
-// What a local source in a JavaScript lockfile (`file:x.tgz`, `./x.tgz`, a folder) is, read from the lockfile's folder: an archive
-// inside the repository is bundled, one outside it a path outside the project; a folder or a workspace stays local.
-function localArchiveVerdict(source, folder, local) {
+// Local sources that name a workspace, a link or a catalog entry rather than a path to read.
+const NOT_A_PATH = ["workspace:", "link:", "portal:", "catalog:"];
+
+// What a local source in a JavaScript lockfile or package.json (`file:x.tgz`, `./x.tgz`, `file:../dir`) is, read from its file's
+// folder: a path that leaves the repository is a path outside the project; inside it, an archive is bundled and a folder stays
+// local. A workspace, link or catalog source stays local.
+function localPathVerdict(source, folder, local) {
+  if (NOT_A_PATH.some((prefix) => source.startsWith(prefix))) return local;
   const path = source.replace(/^file:/i, "").split("#", 1)[0].split("?", 1)[0].split("::", 1)[0];
-  if (!isPackageArchive(path)) return local;
-  return staysInside(folder, path) ? bundled(pathFrom(folder, path)) : OUTSIDE_PROJECT;
+  if (!staysInside(folder, path)) return OUTSIDE_PROJECT;
+  return isPackageArchive(path) ? bundled(pathFrom(folder, path)) : local;
 }
 
 // An entry whose source a reader could not make out, whatever the classifier would say.
@@ -267,7 +272,7 @@ module.exports = {
   staysInside,
   isPackageArchive,
   bundled,
-  localArchiveVerdict,
+  localPathVerdict,
   unquote,
   linesOf,
   leadingSpaces,

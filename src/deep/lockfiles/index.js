@@ -4,7 +4,7 @@
 
 const { baseName, isVendored } = require("../util");
 const { classifySource } = require("../packageSources");
-const { isPep440, localArchiveVerdict, normalisePyPI, SEMVER, Unreadable, UNREADABLE_ENTRY } = require("./shared");
+const { isPep440, localPathVerdict, normalisePyPI, SEMVER, Unreadable, UNREADABLE_ENTRY } = require("./shared");
 const { readNpmLock } = require("./npm");
 const { readYarnLock } = require("./yarn");
 const { readPnpmLock } = require("./pnpm");
@@ -55,13 +55,13 @@ function readSafely(read, file) {
 const UNREADABLE_SOURCE_REASON = "a package source it could not read";
 
 // What a reader's entry is: the reader's own verdict when it decided, the classifier's on its source, or the registry when it
-// names no source. A commit the reader found wins over one in the text, and only a git source keeps one. A local source naming an
-// archive is read from the lockfile's folder.
+// names no source. A commit the reader found wins over one in the text, and only a git source keeps one. A local path is read from
+// the lockfile's folder.
 function verdictOf(ecosystem, entry, folder) {
   if (entry.classified) return entry.classified;
   if (entry.source === undefined) return { expected: true };
   const verdict = classifySource(ecosystem, entry.source, { direct: entry.direct === true });
-  if (verdict.kind === "local") return localArchiveVerdict(entry.source, folder, verdict);
+  if (verdict.kind === "local") return localPathVerdict(entry.source, folder, verdict);
   return verdict.kind === "git" && entry.commit ? { ...verdict, commit: entry.commit } : verdict;
 }
 
@@ -136,19 +136,24 @@ function readPackages(files, leftOut = []) {
   };
   const ownFiles = files.filter((f) => !isVendored(f.path));
   const byPath = new Map(files.map((f) => [f.path, f]));
+  // Ecosystems with a lockfile proper, whose manifests are not read; and those with a requirements file, whose manifests are read
+  // only for where they fetch from, since the requirements file's pins are what is checked.
   const locked = new Set();
+  const pinned = new Set();
+  const lockedBy = (path) => (lockfileKind(path) === REQUIREMENTS ? pinned : locked);
   // Requirements files read in their own right, and those named by -r or -c still to read; each is read once.
   const visited = new Set(ownFiles.filter((f) => lockfileKind(f.path) === REQUIREMENTS).map((f) => f.path));
   const toFollow = [];
-  // Reads a lockfile, a requirements file or a manifest; false when the file could not be read at all.
-  const readEntries = (f, kind) => {
+  // Reads a lockfile, a requirements file or a manifest, its registry packages sent to OSV unless `sourcesOnly`; false when the file
+  // could not be read at all.
+  const readEntries = (f, kind, sourcesOnly = false) => {
     const read = readSafely(kind.read, f);
     if (read.reason) {
       result.couldNotRead.push({ file: f.path, reason: read.reason });
       return false;
     }
     const { registry, sourced, requires, unreadable } = classifyEntries(kind.ecosystem, f.path, read.entries);
-    for (const entry of registry) add(kind.ecosystem, f.path, entry);
+    if (!sourcesOnly) for (const entry of registry) add(kind.ecosystem, f.path, entry);
     for (const item of sourced) result.sourced.push(item);
     // A named file the scan did not read (missing, or left out) may hold anything, and one another reader handles (a lockfile or a
     // manifest) is not a requirements file, so either is a source it could not read and is not followed.
@@ -168,19 +173,21 @@ function readPackages(files, leftOut = []) {
     if (NOT_CHECKED.has(baseName(f.path))) result.notChecked.push(f.path);
     const kind = lockfileKind(f.path);
     if (!kind) continue;
-    locked.add(kind.ecosystem);
+    lockedBy(f.path).add(kind.ecosystem);
     readEntries(f, kind);
   }
   for (let i = 0; i < toFollow.length; i++) readEntries(toFollow[i], NAMED_REQUIREMENTS);
   const ownLeftOut = leftOut.filter((l) => !isVendored(l.path));
   result.notChecked.push(...ownLeftOut.filter((l) => NOT_CHECKED.has(baseName(l.path))).map((l) => l.path));
   for (const f of ownLeftOut.filter((l) => lockfileKind(l.path))) {
-    locked.add(lockfileKind(f.path).ecosystem);
+    lockedBy(f.path).add(lockfileKind(f.path).ecosystem);
     result.couldNotRead.push({ file: f.path, reason: `${f.reason}, not checked` });
   }
   for (const f of ownFiles) {
     const manifest = MANIFESTS.get(baseName(f.path));
-    if (manifest && !locked.has(manifest.ecosystem) && readEntries(f, manifest)) result.namesOnly.push(f.path);
+    if (!manifest || locked.has(manifest.ecosystem)) continue;
+    const sourcesOnly = pinned.has(manifest.ecosystem);
+    if (readEntries(f, manifest, sourcesOnly) && !sourcesOnly) result.namesOnly.push(f.path);
   }
   return result;
 }

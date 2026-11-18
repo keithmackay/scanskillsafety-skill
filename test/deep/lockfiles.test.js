@@ -368,9 +368,9 @@ test("package-lock.json version 1: a file: version is local; a tarball URL as th
       tiny: { version: "https://files.example.com/a/tiny-1.0.0.tgz" },
     },
   }, null, 2);
-  assert.deepEqual(readPackages([{ path: "package-lock.json", text }]), {
+  assert.deepEqual(readPackages([{ path: "app/package-lock.json", text }]), {
     ...EMPTY,
-    sourced: [sourced("tiny", null, "package-lock.json", 7, "url", "https://files.example.com/tiny-1.0.0.tgz")],
+    sourced: [sourced("tiny", null, "app/package-lock.json", 7, "url", "https://files.example.com/tiny-1.0.0.tgz")],
   });
 });
 
@@ -1837,4 +1837,25 @@ test("bundled archives: a Python archive path is judged after pip's normalising,
   assert.deepEqual(uv.sourced, [bundledItem("PyPI", "a", "1.0.0", "uv.lock", 5, "dist/a-1.0.0-py3-none-any.whl")]);
   const npmFolder = JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" }, "node_modules/b": { version: "1.0.0", resolved: "file:vendor/b.tgz/" } } });
   assert.deepEqual(readPackages([{ path: "package-lock.json", text: npmFolder }]).sourced, []);
+});
+
+test("JavaScript lockfiles: a file: folder outside the repository is a path outside the project; one inside stays local; a pnpm directory with no path is a source it could not read", () => {
+  const outside = { kind: "url", address: null, text: "a path outside the project" };
+  const pick = (read) => read.sourced.map(({ name, kind, address, text }) => ({ name, kind, address, text }));
+  const lock = JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" },
+    "node_modules/in": { version: "1.0.0", resolved: "file:../lib/in" },
+    "node_modules/far": { version: "1.0.0", resolved: "file:../../far" },
+    "node_modules/abs": { version: "1.0.0", resolved: "file:///opt/abs" },
+  } }, null, 2);
+  assert.deepEqual(pick(readPackages([{ path: "app/package-lock.json", text: lock }])), [{ name: "far", ...outside }, { name: "abs", ...outside }]);
+  const berry = '__metadata:\n  version: 8\n\n"x@file:../x::locator=t%40workspace%3A.":\n  version: 1.0.0\n  resolution: "x@file:../x::locator=t%40workspace%3A."\n';
+  assert.deepEqual(pick(readPackages([{ path: "yarn.lock", text: berry }])), [{ name: "x", ...outside }]);
+  const pnpm = ["lockfileVersion: '9.0'", "", "packages:", "",
+    "  a@file:packages/a:", "    resolution: {directory: packages/a, type: directory}", "",
+    "  b@file:../b:", "    resolution: {directory: ../b, type: directory}", "",
+    "  c@file:c:", "    resolution: {type: directory}", ""].join("\n");
+  assert.deepEqual(pick(readPackages([{ path: "pnpm-lock.yaml", text: pnpm }])), [
+    { name: "b", ...outside },
+    { name: "c", kind: "unreadable", address: null, text: undefined },
+  ]);
 });

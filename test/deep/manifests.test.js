@@ -60,7 +60,7 @@ test("package.json: each kind of dependency value, with the line of its value; t
   const read = readOne(file, text);
   assert.deepEqual(read, {
     ...EMPTY,
-    packages: [named("npm", file)("range"), named("npm", file)("alias")],
+    packages: [named("npm", file)("range"), named("npm", file)("real")],
     namesOnly: [file],
     sourced: [
       sourced("gitdep", 6, "git", "https://github.com/u/r.git", { commit: SHA1 }),
@@ -426,12 +426,25 @@ test("pyproject.toml: TOML it cannot read at all could not be read, and gives no
   }
 });
 
-test("pyproject.toml: with a Python lockfile, pyproject.toml is not read for sources", () => {
-  const read = readPackages([
-    { path: "pyproject.toml", text: '[tool.uv.sources]\nx = { git = "https://e.example/x" }\n' },
-    { path: "requirements.txt", text: "idna==3.10\n" },
-  ]);
-  assert.deepEqual(read.sourced, []);
+test("pyproject.toml: with a uv.lock or poetry.lock, pyproject.toml is not read for sources", () => {
+  for (const [lockfile, text] of [["uv.lock", 'version = 1\n\n[[package]]\nname = "t"\nversion = "0.1.0"\nsource = { editable = "." }\n'], ["poetry.lock", "package = []\n"]]) {
+    const read = readPackages([{ path: "pyproject.toml", text: '[tool.uv.sources]\nx = { git = "https://e.example/x" }\n' }, { path: lockfile, text }]);
+    assert.deepEqual(read.sourced, [], lockfile);
+    assert.deepEqual(read.namesOnly, [], lockfile);
+  }
+});
+
+test("pyproject.toml: with only a requirements file, pyproject.toml is read for sources, but its names are not sent to OSV", () => {
+  const pyproject = '[project]\ndependencies = ["anyio>=4", "x"]\n[tool.uv.sources]\nx = { git = "https://e.example/x" }\n';
+  for (const leftOut of [[], [{ path: "requirements-big.txt", reason: "larger than 5 MB" }]]) {
+    const read = readPackages([{ path: "pyproject.toml", text: pyproject }, { path: "requirements.txt", text: "idna==3.10\n" }], leftOut);
+    assert.deepEqual(read.packages, [{ ecosystem: "PyPI", name: "idna", version: "3.10", file: "requirements.txt", line: 1 }]);
+    assert.deepEqual(read.namesOnly, []);
+    assert.deepEqual(read.sourced, [item("PyPI", "pyproject.toml")("x", 4, "git", "https://e.example/x")]);
+  }
+  const leftOutOnly = readPackages([{ path: "pyproject.toml", text: pyproject }], [{ path: "requirements.txt", reason: "larger than 5 MB" }]);
+  assert.deepEqual(leftOutOnly.packages, []);
+  assert.deepEqual(leftOutOnly.sourced, [item("PyPI", "pyproject.toml")("x", 4, "git", "https://e.example/x")]);
 });
 
 test("pyproject.toml: Windows line endings give the same lines", () => {
@@ -464,4 +477,58 @@ test("pyproject.toml: the same name in two Poetry groups, or in dependencies and
     sourced("y", 6, "git", "https://e.example/c"),
     sourced("y", 8, "git", "https://e.example/d"),
   ]);
+});
+
+test("package.json: a file: folder or path outside the repository is a path outside the project; one inside stays local", () => {
+  const file = "app/package.json";
+  const text = lines(
+    "{",
+    '  "dependencies": {',
+    '    "inside": "file:../lib",',
+    '    "here": "./libs/here",',
+    '    "far": "file:../../lib",',
+    '    "abs": "/opt/lib",',
+    '    "home": "~/lib",',
+    '    "url": "file:///opt/lib",',
+    '    "ws": "workspace:../../x",',
+    '    "linked": "link:../../x"',
+    "  }",
+    "}",
+  );
+  const sourced = item("npm", file);
+  assert.deepEqual(readOne(file, text).sourced, [
+    sourced("far", 5, "url", null, OUTSIDE),
+    sourced("abs", 6, "url", null, OUTSIDE),
+    sourced("home", 7, "url", null, OUTSIDE),
+    sourced("url", 8, "url", null, OUTSIDE),
+  ]);
+});
+
+test("pyproject.toml: [build-system] requires and [tool.uv]'s dev, override and constraint dependencies are read for sources; their names are not sent to OSV", () => {
+  const text = lines(
+    "[build-system]",
+    'requires = ["setuptools>=68", "builder @ https://e.example/builder-1.0.tar.gz"]',
+    "[tool.uv]",
+    'dev-dependencies = ["pytest", "devgit @ git+https://e.example/devgit"]',
+    'override-dependencies = ["over @ https://e.example/over-1.0.zip", "numpy<2"]',
+    'constraint-dependencies = ["con @ git+https://e.example/con", 5]',
+  );
+  const sourced = item("PyPI", "pyproject.toml");
+  assert.deepEqual(readOne("pyproject.toml", text), {
+    ...EMPTY,
+    namesOnly: ["pyproject.toml"],
+    couldNotRead: [{ file: "pyproject.toml", ...UNREADABLE_SOURCE }],
+    sourced: [
+      sourced("builder", 2, "url", "https://e.example/builder-1.0.tar.gz"),
+      sourced("devgit", 4, "git", "https://e.example/devgit"),
+      sourced("over", 5, "url", "https://e.example/over-1.0.zip"),
+      sourced("con", 6, "git", "https://e.example/con"),
+      unreadable("PyPI", "pyproject.toml")(null, 6),
+    ],
+  });
+});
+
+test("package.json: an npm alias sends the package it names to OSV, in any case, scoped or with no version", () => {
+  const text = JSON.stringify({ dependencies: { x: "npm:real@^1", y: "NPM:@s/scoped@~2", z: "npm:bare" } });
+  assert.deepEqual(readOne("package.json", text).packages, ["real", "@s/scoped", "bare"].map(named("npm", "package.json")));
 });

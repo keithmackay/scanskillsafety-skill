@@ -2,7 +2,6 @@
 // ABOUTME: from; the file is read strictly, line by line, as pnpm writes it.
 "use strict";
 
-const { LOCAL } = require("../packageSources");
 const {
   addressSource,
   fieldOf,
@@ -88,14 +87,15 @@ function pnpmKeySource(depPath, keyVersion) {
 }
 
 // Where a pnpm entry comes from (keyVersion is undefined for an address key), the first that applies:
-// - a `directory` resolution is local; a `git` one is its repository; one of any other type is one it cannot read;
+// - a `directory` resolution is its path, read as `file:`; a `git` one is its repository; one of any other type, or a directory
+//   with no path, is one it cannot read;
 // - the key, when it names a source;
 // - the resolution's tarball;
 // - an address key, read as https;
 // - with only an integrity, no host.
 function pnpmSource(depPath, keyVersion, resolution) {
   const type = resolution.get("type");
-  if (type === "directory") return { classified: LOCAL };
+  if (type === "directory") return resolution.has("directory") ? { source: `file:${resolution.get("directory")}` } : UNREADABLE_ENTRY;
   if (type === "git") return gitRepositorySource(resolution.get("repo") ?? "", resolution.get("commit") ?? "");
   if (type !== undefined) return UNREADABLE_ENTRY;
   const fromKey = pnpmKeySource(depPath, keyVersion);
