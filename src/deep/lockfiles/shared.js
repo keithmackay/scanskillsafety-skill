@@ -1,5 +1,5 @@
 // ABOUTME: Helpers the lockfile and manifest readers share: line and YAML-field reading, the Unreadable error, JSON key lines,
-// ABOUTME: the semver test, unreadable and unnamed entries, and GitHub and codeload addresses.
+// ABOUTME: the semver and PEP 440 tests, unreadable and unnamed entries, and git, GitHub and codeload addresses.
 "use strict";
 
 const { OBJECT_ID } = require("../util");
@@ -105,6 +105,25 @@ function jsonKeyLines(text) {
 // A version as npm writes one for a package it installed by version. Any other npm version text is never kept or sent to OSV:
 // in a version 1 `version` (a git URL, a tarball URL, `file:`) it is the package's source; anywhere else it is no version at all.
 const SEMVER = /^\d+\.\d+\.\d+([-+][0-9A-Za-z.+-]+)?$/;
+// A version as PEP 440 defines one, in any spelling Python's packaging accepts: `[v][N!]N(.N)*`, then optional pre-release,
+// post-release and development parts, then an optional `+local` part. It is checked in pieces, the release by one character
+// class and the parts after it by a pattern whose optional groups do not repeat, so no input makes either backtrack far.
+const PEP440_RELEASE = /^v?(?:\d+!)?\d[\d.]*/i;
+const PEP440_SUFFIXES = /^(?:[-_.]?(?:alpha|a|beta|b|preview|pre|c|rc)[-_.]?\d*)?(?:-\d+|[-_.]?(?:post|rev|r)[-_.]?\d*)?(?:[-_.]?dev[-_.]?\d*)?$/i;
+const PEP440_LOCAL = /^[a-z0-9][a-z0-9._-]*$/i;
+const DOUBLED_OR_TRAILING_SEPARATOR = /[._-]{2}|[._-]$/;
+
+function isPep440(version) {
+  const plus = version.indexOf("+");
+  const local = plus < 0 ? null : version.slice(plus + 1);
+  if (local !== null && (!PEP440_LOCAL.test(local) || DOUBLED_OR_TRAILING_SEPARATOR.test(local))) return false;
+  const publicPart = plus < 0 ? version : version.slice(0, plus);
+  const match = PEP440_RELEASE.exec(publicPart);
+  if (!match) return false;
+  const release = match[0].endsWith(".") ? match[0].slice(0, -1) : match[0];
+  return !release.includes("..") && PEP440_SUFFIXES.test(publicPart.slice(release.length));
+}
+
 // An entry whose source a reader could not make out, whatever the classifier would say.
 const UNREADABLE_ENTRY = Object.freeze({ classified: UNREADABLE });
 // An entry it cannot even name: reported as a source it could not read, with nothing from it kept, so it is never left out.
@@ -125,6 +144,13 @@ function codeloadSource(resolved) {
   const segments = resolved.slice(CODELOAD.length).split("/", 5);
   if (segments.length !== 4 || segments[2] !== "tar.gz") return null;
   return githubCommit(segments[0], segments[1], segments[3]);
+}
+
+// A git repository a lockfile records with its commit: an http(s) address is marked as git, and the commit is kept only when it is
+// a commit id.
+function gitRepositorySource(repo, commit) {
+  const source = repo.startsWith("https:") || repo.startsWith("http:") ? `git+${repo}` : repo;
+  return OBJECT_ID.test(commit) ? { source, commit } : { source };
 }
 
 // An address a lockfile records: a codeload tarball is the GitHub repository it came from; any other is left to the classifier.
@@ -148,8 +174,10 @@ module.exports = {
   parseJson,
   jsonKeyLines,
   SEMVER,
+  isPep440,
   UNREADABLE_ENTRY,
   unnamedEntry,
   githubCommit,
+  gitRepositorySource,
   addressSource,
 };

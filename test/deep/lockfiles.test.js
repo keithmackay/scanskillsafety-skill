@@ -1070,3 +1070,247 @@ test("yarn.lock, Berry: a workspace resolution is skipped only when it names a r
     assert.ok(!JSON.stringify(read).includes("evil"), odd);
   }
 });
+
+const pypiSourced = (name, version, file, line, kind, address, extra = {}) => ({ ecosystem: "PyPI", file, line, name, version, kind, address, ...extra });
+const POETRY_LAYOUT = "not laid out as Poetry writes it";
+const UV_LAYOUT = "not laid out as uv writes it";
+
+test("poetry.lock sources: a block runs through its sub-tables to [package.source]; a mirror index and git are reported, a folder inside the project is local, one outside it is not", () => {
+  const file = "poetry.lock";
+  assert.deepEqual(one(file, "poetry.sources.lock"), {
+    ...EMPTY,
+    packages: [pypi("certifi", "2024.8.30", file, 4)],
+    sourced: [
+      pypiSourced("requests", "2.32.3", file, 15, "host", "https://mirror.example.com"),
+      pypiSourced("left-pad", "1.3.0", file, 39, "git", "https://github.com/someone/left-pad.git", { commit: SHA1 }),
+      pypiSourced("outside", "0.2.0", file, 67, "url", null, { text: "a path outside the project" }),
+    ],
+  });
+});
+
+test("uv.lock sources: git with its commit and a direct URL are reported; a mirror named by source, sdist and wheels is one package; a path and the project are not", () => {
+  const file = "uv.lock";
+  assert.deepEqual(one(file, "uv.sources.lock"), {
+    ...EMPTY,
+    packages: [pypi("anyio", "4.6.2.post1", file, 6)],
+    sourced: [
+      pypiSourced("idna", "3.10", file, 18, "host", "https://mirror.example.com"),
+      pypiSourced("left-pad", "1.3.0", file, 28, "git", "https://github.com/someone/left-pad", { commit: SHA1 }),
+      pypiSourced("sniffio", "1.3.1", file, 39, "url", "https://files.example.com/sniffio-1.3.1.tar.gz"),
+    ],
+  });
+});
+
+test("the Poetry and uv source fixtures read the same with Windows line endings", () => {
+  for (const [file, name] of [["poetry.lock", "poetry.sources.lock"], ["uv.lock", "uv.sources.lock"]]) {
+    assert.deepEqual(readPackages([{ path: file, text: fixture(name).replace(/\n/g, "\r\n") }]), one(file, name), name);
+  }
+});
+
+const uvLock = (...lines) => ['version = 1', 'requires-python = ">=3.10"', "", "[[package]]", 'name = "a"', 'version = "1.0.0"', ...lines, ""].join("\n");
+const poetryLock = (...lines) => ["[[package]]", 'name = "a"', 'version = "1.0.0"', 'description = ""', "files = []", ...lines, "", "[metadata]", 'lock-version = "2.0"', ""].join("\n");
+const uvBlock = (name, source) => uvLock(`source = ${source}`).replace('name = "a"', `name = "${name}"`);
+
+test("uv.lock: the first address that is not the registry among source, sdist and wheels decides; a wheel file name is no address", () => {
+  const read = readPackages([{
+    path: "uv.lock",
+    text: uvLock(
+      'source = { registry = "https://pypi.org/simple" }',
+      'sdist = { url = "https://files.pythonhosted.org/packages/a-1.0.0.tar.gz", hash = "sha256:x", size = 1 }',
+      "wheels = [",
+      '    { url = "https://files.pythonhosted.org/packages/a-1.0.0-py3-none-any.whl", hash = "sha256:x", size = 1 },',
+      '    { url = "https://mirror.example.com/a-1.0.0-cp312-win_amd64.whl", hash = "sha256:x", size = 1 },',
+      '    { filename = "a-1.0.0-cp311-win_amd64.whl", hash = "sha256:x", size = 1 },',
+      "]",
+    ),
+  }]);
+  assert.deepEqual(read, { ...EMPTY, sourced: [pypiSourced("a", "1.0.0", "uv.lock", 5, "host", "https://mirror.example.com")] });
+  const oneLine = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "https://pypi.org/simple" }', 'wheels = [{ url = "https://mirror.example.com/a.whl" }]') }]);
+  assert.deepEqual(oneLine.sourced, [pypiSourced("a", "1.0.0", "uv.lock", 5, "host", "https://mirror.example.com")]);
+});
+
+test("uv.lock: a registry that is a folder is local; one that is neither a folder nor an address it can read is a source it could not read", () => {
+  assert.deepEqual(readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "../wheels" }') }]), EMPTY);
+  const read = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "weird:SECRET" }') }]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "uv.lock", reason: UNREADABLE_SOURCE }],
+    sourced: [pypiSourced("a", "1.0.0", "uv.lock", 5, "unreadable", null)],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("uv.lock: a package with no source is a source it could not read; an editable or virtual source with anything else beside it is not the project", () => {
+  const shapes = [uvLock(), uvLock('source = { editable = ".", url = "https://evil.example/a.tgz" }')];
+  for (const text of shapes) {
+    const read = readPackages([{ path: "uv.lock", text }]);
+    assert.deepEqual(read.sourced, [pypiSourced("a", "1.0.0", "uv.lock", 5, "unreadable", null)], text);
+    assert.ok(!JSON.stringify(read).includes("evil"), text);
+  }
+});
+
+test("poetry.lock: url, file and git sources; a commit that is not a commit id is not kept; an absolute path is outside the project", () => {
+  const block = (name, ...source) => ["[[package]]", `name = "${name}"`, 'version = "1.0.0"', "", "[package.source]", ...source, ""].join("\n");
+  const text = [
+    block("a", 'type = "url"', 'url = "https://files.example.com/x/a-1.0.0.tar.gz"'),
+    block("b", 'type = "git"', 'url = "git@github.com:u/b.git"', 'reference = "main"', 'resolved_reference = "main"'),
+    block("c", 'type = "file"', 'url = "dist/c-1.0.0.tar.gz"'),
+    block("d", 'type = "file"', 'url = "/home/someone/d-1.0.0.tar.gz"'),
+    block("e", 'type = "legacy"', 'url = "https://pypi.org/simple"', 'reference = "pypi-explicit"'),
+    block("f", 'type = "directory"', 'url = "a/../../f"'),
+  ].join("\n");
+  assert.deepEqual(readPackages([{ path: "poetry.lock", text }]), {
+    ...EMPTY,
+    packages: [pypi("e", "1.0.0", "poetry.lock", 36)],
+    sourced: [
+      pypiSourced("a", "1.0.0", "poetry.lock", 2, "url", "https://files.example.com/a-1.0.0.tar.gz"),
+      pypiSourced("b", "1.0.0", "poetry.lock", 10, "git", "git@github.com:u/b.git"),
+      pypiSourced("d", "1.0.0", "poetry.lock", 28, "url", null, { text: "a path outside the project" }),
+      pypiSourced("f", "1.0.0", "poetry.lock", 45, "url", null, { text: "a path outside the project" }),
+    ],
+  });
+});
+
+test("Python lockfiles: a version that is PEP 440 is kept; any other is never kept, and with no source of its own the entry is unreadable", () => {
+  const versions = ["4.6.2.post1", "2024.8.30", "1!2.0", "1.0+local", "1.0rc1", "1.0.dev0", "1.0.0-beta.1", "v1.0", "1.0-1", "1.0+ubuntu-1.2"];
+  const uv = versions.map((v, i) => uvLock('source = { registry = "https://pypi.org/simple" }').replace('version = "1.0.0"', `version = "${v}"`).replace('name = "a"', `name = "p${i}"`).split("\n").slice(3).join("\n")).join("\n");
+  assert.deepEqual(readPackages([{ path: "uv.lock", text: `version = 1\n\n${uv}` }]).packages.map((p) => p.version), versions);
+  const odd = ["https://SECRET@evil.example/x.tgz", "1.0.*", "1..0", "1.0.", "latest", "1.0\u001b[31m"];
+  for (const version of odd) {
+    const poetry = `[[package]]\nname = "a"\nversion = "${version}"\n`;
+    const read = readPackages([{ path: "poetry.lock", text: poetry }]);
+    assert.deepEqual(read, {
+      ...EMPTY,
+      couldNotRead: [{ file: "poetry.lock", reason: UNREADABLE_SOURCE }],
+      sourced: [pypiSourced("a", null, "poetry.lock", 2, "unreadable", null)],
+    }, version);
+    const uvRead = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "https://pypi.org/simple" }').replace('version = "1.0.0"', `version = "${version}"`) }]);
+    assert.deepEqual(uvRead, { ...EMPTY, packages: [pypi("a", null, "uv.lock", 5)] }, version);
+    assert.ok(!JSON.stringify(read).includes("SECRET") && !JSON.stringify(uvRead).includes("SECRET"), version);
+  }
+  const requirements = readPackages([{ path: "requirements.txt", text: "x==1.0\u001b[31m\nidna==3.10\n" }]);
+  assert.deepEqual(requirements, {
+    ...EMPTY,
+    packages: [pypi("idna", "3.10", "requirements.txt", 2)],
+    couldNotRead: [{ file: "requirements.txt", reason: UNREADABLE_SOURCE }],
+    sourced: [pypiSourced("x", null, "requirements.txt", 1, "unreadable", null)],
+  });
+});
+
+test("a long run of digits as a Python version is checked quickly", () => {
+  const read = quickly(() => readPackages([{ path: "requirements.txt", text: `x==${"1".repeat(4000000)}x\n` }]));
+  assert.equal(read.sourced.length, 1);
+});
+
+test("Python lockfiles: a block whose name cannot be found is a source it could not read with no name, never left out", () => {
+  const uv = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "https://evil.example/SECRET" }').replace('name = "a"', '"name" = "a"') }]);
+  const poetry = readPackages([{ path: "poetry.lock", text: '[[package]]\nversion = "1.0.0"\n\n[package.source]\ntype = "legacy"\nurl = "https://evil.example/SECRET"\n' }]);
+  for (const [file, read] of [["uv.lock", uv], ["poetry.lock", poetry]]) {
+    assert.deepEqual(read, {
+      ...EMPTY,
+      couldNotRead: [{ file, reason: UNREADABLE_SOURCE }],
+      sourced: [pypiSourced(null, null, file, file === "uv.lock" ? 4 : 1, "unreadable", null)],
+    }, file);
+    assert.ok(!JSON.stringify(read).includes("SECRET"), file);
+  }
+});
+
+test("Python lockfiles: a block with no version and a source that is not the registry is reported with no version", () => {
+  const read = readPackages([{ path: "poetry.lock", text: '[[package]]\nname = "a"\n\n[package.source]\ntype = "git"\nurl = "https://github.com/u/a.git"\n' }]);
+  assert.deepEqual(read, { ...EMPTY, sourced: [pypiSourced("a", null, "poetry.lock", 2, "git", "https://github.com/u/a.git")] });
+});
+
+test("Python lockfiles: what Poetry and uv write outside a source reads as they write it (escapes, quoted keys, inline tables, nested arrays)", () => {
+  const poetry = [
+    "[[package]]", 'name = "a"', 'version = "1.0.0"', 'description = "A \\"quoted\\" word # not a comment"', "",
+    "[package.dependencies]", 'colorama = {version = "*", markers = "platform_system == \\"Windows\\""}', '"zope.interface" = ">=5"', "",
+    "[package.extras]", 'socks = ["PySocks (>=1.5.6,!=1.5.7)"]', "",
+    "[metadata]", 'lock-version = "2.0"', "", "[metadata.files]", '"zope.interface" = [', '    {file = "z.whl", hash = "sha256:x"},', "]", "",
+  ].join("\n");
+  assert.deepEqual(readPackages([{ path: "poetry.lock", text: poetry }]), { ...EMPTY, packages: [pypi("a", "1.0.0", "poetry.lock", 2)] });
+  const uv = [
+    "version = 1", 'requires-python = ">=3.10"', "resolution-markers = [", '    "sys_platform == \'win32\'",', "]",
+    "conflicts = [[", '    { package = "t", extra = "a" },', '    { package = "t", extra = "b" },', "]]", "",
+    "[[package]]", 'name = "a"', 'version = "1.0.0"', 'source = { registry = "https://pypi.org/simple" }', "",
+    "[package.metadata]", "requires-dist = [", '["nested"],', "]", "", "[package.metadata.requires-dev]", 'dev = [{ name = "b" }]', "",
+    "[manifest]", 'members = ["t"]', "",
+  ].join("\n");
+  assert.deepEqual(readPackages([{ path: "uv.lock", text: uv }]), { ...EMPTY, packages: [pypi("a", "1.0.0", "uv.lock", 12)] });
+});
+
+test("Python lockfiles: TOML that Poetry or uv would not write where a source can be named is a file or a source it could not read, never the registry", () => {
+  const EVIL_INDEX = "https://evil.example/simple";
+  const uvSource = (text) => uvLock(text);
+  const shapes = [
+    ["uv.lock", "a [package.source] table", uvLock("", "[package.source]", `registry = "${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["uv.lock", "a dotted source key", uvSource(`source.registry = "${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["uv.lock", "a dotted sdist key", uvLock('source = { registry = "https://pypi.org/simple" }', 'sdist.url = "https://evil.example/a.tar.gz"'), UNREADABLE_SOURCE],
+    ["uv.lock", "a quoted source key", uvSource(`"source" = { registry = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "a literal source key", uvSource(`'source' = { registry = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "a quoted key inside the source", uvSource(`source = { "registry" = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "a dotted key inside the source", uvSource(`source = { registry.x = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "an escape in the address", uvSource('source = { registry = "https:\\u002f\\u002fevil.example/simple" }'), UNREADABLE_SOURCE],
+    ["uv.lock", "a literal string address", uvSource(`source = { registry = '${EVIL_INDEX}' }`), UNREADABLE_SOURCE],
+    ["uv.lock", "a multi-line basic string", uvSource(`source = { registry = """${EVIL_INDEX}""" }`), UV_LAYOUT],
+    ["uv.lock", "a multi-line literal string", uvSource(`source = { registry = '''${EVIL_INDEX}''' }`), UV_LAYOUT],
+    ["uv.lock", "no spaces around =", uvSource(`source={ registry = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "two spaces before =", uvSource(`source  = { registry = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "an inline table without inner spaces", uvSource(`source = {registry = "${EVIL_INDEX}"}`), UNREADABLE_SOURCE],
+    ["uv.lock", "a comment after the source", uvSource(`source = { registry = "${EVIL_INDEX}" } # mirror`), UNREADABLE_SOURCE],
+    ["uv.lock", "a source given twice", uvLock('source = { registry = "https://pypi.org/simple" }', `source = { registry = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "a key given twice in the source", uvSource(`source = { registry = "https://pypi.org/simple", registry = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "two kinds of source", uvSource('source = { registry = "https://pypi.org/simple", url = "https://evil.example/a.tgz" }'), UNREADABLE_SOURCE],
+    ["uv.lock", "a key it does not know in sdist", uvLock('source = { registry = "https://pypi.org/simple" }', 'sdist = { mirror = "https://evil.example/a.tar.gz" }'), UNREADABLE_SOURCE],
+    ["uv.lock", "a comment inside wheels", uvLock('source = { registry = "https://pypi.org/simple" }', "wheels = [", "    # mirror", '    { url = "https://evil.example/a.whl" },', "]"), UNREADABLE_SOURCE],
+    ["uv.lock", "a wheel without its trailing comma", uvLock('source = { registry = "https://pypi.org/simple" }', "wheels = [", '    { url = "https://evil.example/a.whl" }', "]"), UNREADABLE_SOURCE],
+    ["uv.lock", "a [[package.wheels]] table", uvLock('source = { registry = "https://pypi.org/simple" }', "", "[[package.wheels]]", 'url = "https://evil.example/a.whl"'), UNREADABLE_SOURCE],
+    ["uv.lock", "a [package.sdist] table", uvLock('source = { registry = "https://pypi.org/simple" }', "", "[package.sdist]", 'url = "https://evil.example/a.tar.gz"'), UNREADABLE_SOURCE],
+    ["uv.lock", "an indented header", uvLock('source = { registry = "https://pypi.org/simple" }', "", "  [package.source]", `  registry = "${EVIL_INDEX}"`), UV_LAYOUT],
+    ["uv.lock", "an indented key", uvLock('source = { registry = "https://pypi.org/simple" }', `  sdist = { url = "https://evil.example/a.tar.gz" }`), UV_LAYOUT],
+    ["uv.lock", "a header with spaces", uvLock('source = { registry = "https://pypi.org/simple" }', "", "[ package.source ]", `registry = "${EVIL_INDEX}"`), UV_LAYOUT],
+    ["uv.lock", "a header with a quoted key", uvLock('source = { registry = "https://pypi.org/simple" }', "", '[package."source"]', `registry = "${EVIL_INDEX}"`), UV_LAYOUT],
+    ["uv.lock", "a package table after another table", uvLock('source = { registry = "https://pypi.org/simple" }', "", "[manifest]", "", "[package.metadata]", `x = "${EVIL_INDEX}"`), UV_LAYOUT],
+    ["uv.lock", "a lone CR", uvLock(`version2 = 1\rsource = { registry = "${EVIL_INDEX}" }`), UV_LAYOUT],
+    ["uv.lock", "a tab before =", uvSource(`source\t= { registry = "${EVIL_INDEX}" }`), UV_LAYOUT],
+    ["uv.lock", "an inline table over two lines", uvSource(`source = { registry =\n"${EVIL_INDEX}" }`), UV_LAYOUT],
+    ["uv.lock", "packages as a top-level array", `version = 1\npackage = [{ name = "a", version = "1.0.0", source = { registry = "${EVIL_INDEX}" } }]\n`, UV_LAYOUT],
+    ["uv.lock", "a quoted top-level key", `version = 1\n"package" = [{ name = "a", version = "1.0.0", source = { registry = "${EVIL_INDEX}" } }]\n`, UV_LAYOUT],
+    ["poetry.lock", "an inline source", poetryLock(`source = {type = "legacy", url = "${EVIL_INDEX}"}`), UNREADABLE_SOURCE],
+    ["poetry.lock", "dotted source keys", poetryLock('source.type = "legacy"', `source.url = "${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["poetry.lock", "a quoted key in the source", poetryLock("", "[package.source]", 'type = "legacy"', `"url" = "${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["poetry.lock", "a literal string url", poetryLock("", "[package.source]", 'type = "legacy"', `url = '${EVIL_INDEX}'`), UNREADABLE_SOURCE],
+    ["poetry.lock", "an escape in the url", poetryLock("", "[package.source]", 'type = "legacy"', 'url = "https://evil\\u002eexample/simple"'), UNREADABLE_SOURCE],
+    ["poetry.lock", "a multi-line url", poetryLock("", "[package.source]", 'type = "legacy"', `url = """${EVIL_INDEX}"""`), POETRY_LAYOUT],
+    ["poetry.lock", "no spaces around =", poetryLock("", "[package.source]", 'type = "legacy"', `url="${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["poetry.lock", "a comment after the url", poetryLock("", "[package.source]", 'type = "legacy"', `url = "${EVIL_INDEX}" # mirror`), UNREADABLE_SOURCE],
+    ["poetry.lock", "a url given twice", poetryLock("", "[package.source]", 'type = "legacy"', `url = "${EVIL_INDEX}"`, 'url = "https://pypi.org/simple"'), UNREADABLE_SOURCE],
+    ["poetry.lock", "a key it does not know", poetryLock("", "[package.source]", 'type = "legacy"', 'url = "https://pypi.org/simple"', `index = "${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["poetry.lock", "a type it does not know", poetryLock("", "[package.source]", 'type = "hg"', `url = "${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["poetry.lock", "no url", poetryLock("", "[package.source]", 'type = "legacy"'), UNREADABLE_SOURCE],
+    ["poetry.lock", "a source table given twice", poetryLock("", "[package.source]", 'type = "legacy"', `url = "${EVIL_INDEX}"`, "", "[package.source]", 'type = "legacy"', 'url = "https://pypi.org/simple"'), UNREADABLE_SOURCE],
+    ["poetry.lock", "a table inside the source", poetryLock("", "[package.source]", 'type = "legacy"', 'url = "https://pypi.org/simple"', "", "[package.source.extra]", `url = "${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["poetry.lock", "an sdist in a Poetry block", poetryLock('sdist = {url = "https://evil.example/a.tar.gz"}'), UNREADABLE_SOURCE],
+    ["poetry.lock", "a source table after another table", `${poetryLock()}\n[package.source]\ntype = "legacy"\nurl = "${EVIL_INDEX}"\n`, POETRY_LAYOUT],
+    ["poetry.lock", "a header with spaces around a dot", poetryLock("", "[package . source]", 'type = "legacy"', `url = "${EVIL_INDEX}"`), POETRY_LAYOUT],
+  ];
+  for (const [file, shape, text, reason] of shapes) {
+    const read = readPackages([{ path: file, text }]);
+    assert.deepEqual(read.couldNotRead, [{ file, reason }], shape);
+    assert.ok(!read.packages.some((p) => p.name === "a"), shape);
+    if (reason === UNREADABLE_SOURCE) assert.deepEqual(read.sourced.map((s) => s.kind), ["unreadable"], shape);
+    assert.ok(!JSON.stringify(read).includes("evil"), shape);
+  }
+});
+
+test("Python lockfiles: keys in another order read the same, since TOML gives order no meaning", () => {
+  const text = ['version = 1', "", "[[package]]", `source = { registry = "https://mirror.example.com/simple" }`, 'version = "1.0.0"', 'name = "a"', ""].join("\n");
+  assert.deepEqual(readPackages([{ path: "uv.lock", text }]).sourced, [pypiSourced("a", "1.0.0", "uv.lock", 6, "host", "https://mirror.example.com")]);
+});
+
+test("Python lockfiles built to make the reader backtrack or rescan are read quickly", () => {
+  const long = uvLock(`source = { registry = "https://pypi.org/simple" }`, `sdist = { url = "https://files.pythonhosted.org/${"a".repeat(4000000)}.tar.gz" }`);
+  assert.deepEqual(quickly(() => readPackages([{ path: "uv.lock", text: long }])).packages, [pypi("a", "1.0.0", "uv.lock", 5)]);
+  quickly(() => readPackages([{ path: "uv.lock", text: `version = 1\nx = ${"[".repeat(200000)}\n` }]));
+  quickly(() => readPackages([{ path: "poetry.lock", text: `[[package]]\nname = "${"\\\"".repeat(1000000)}"\n` }]));
+  quickly(() => readPackages([{ path: "poetry.lock", text: "[[package]]\n".repeat(200000) }]));
+});

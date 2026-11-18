@@ -2,13 +2,13 @@
 // ABOUTME: from; the file is read strictly, line by line, as pnpm writes it.
 "use strict";
 
-const { OBJECT_ID } = require("../util");
 const { LOCAL } = require("../packageSources");
 const {
   addressSource,
   fieldOf,
   found,
   githubCommit,
+  gitRepositorySource,
   leadingSpaces,
   linesOf,
   LONE_CR_OR_TAB,
@@ -87,14 +87,6 @@ function pnpmKeySource(depPath, keyVersion) {
   return SEMVER.test(keyVersion) ? null : addressSource(keyVersion, true);
 }
 
-// A git resolution: the repository, an http(s) one marked as git, at the commit, which is kept only when it is a commit id.
-function pnpmGitSource(resolution) {
-  const repo = resolution.get("repo") ?? "";
-  const commit = resolution.get("commit") ?? "";
-  const source = repo.startsWith("https:") || repo.startsWith("http:") ? `git+${repo}` : repo;
-  return OBJECT_ID.test(commit) ? { source, commit } : { source };
-}
-
 // Where a pnpm entry comes from (keyVersion is undefined for an address key), the first that applies:
 // - a `directory` resolution is local; a `git` one is its repository; one of any other type is one it cannot read;
 // - the key, when it names a source;
@@ -104,7 +96,7 @@ function pnpmGitSource(resolution) {
 function pnpmSource(depPath, keyVersion, resolution) {
   const type = resolution.get("type");
   if (type === "directory") return { classified: LOCAL };
-  if (type === "git") return pnpmGitSource(resolution);
+  if (type === "git") return gitRepositorySource(resolution.get("repo") ?? "", resolution.get("commit") ?? "");
   if (type !== undefined) return UNREADABLE_ENTRY;
   const fromKey = pnpmKeySource(depPath, keyVersion);
   if (fromKey) return fromKey;

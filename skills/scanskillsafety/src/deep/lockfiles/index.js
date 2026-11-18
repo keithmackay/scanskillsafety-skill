@@ -4,11 +4,11 @@
 
 const { baseName, isVendored } = require("../util");
 const { classifySource } = require("../packageSources");
-const { SEMVER, Unreadable, UNREADABLE_ENTRY } = require("./shared");
+const { isPep440, SEMVER, Unreadable, UNREADABLE_ENTRY } = require("./shared");
 const { readNpmLock } = require("./npm");
 const { readYarnLock } = require("./yarn");
 const { readPnpmLock } = require("./pnpm");
-const { readPackageBlocks, readRequirements } = require("./python");
+const { readPoetryLock, readRequirements, readUvLock } = require("./python");
 const { packageJsonNames, pyprojectNames } = require("./manifests");
 
 const normalisePyPI = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
@@ -18,8 +18,8 @@ const LOCKFILES = new Map([
   ["npm-shrinkwrap.json", { ecosystem: "npm", read: readNpmLock }],
   ["yarn.lock", { ecosystem: "npm", read: readYarnLock }],
   ["pnpm-lock.yaml", { ecosystem: "npm", read: readPnpmLock }],
-  ["poetry.lock", { ecosystem: "PyPI", read: readPackageBlocks }],
-  ["uv.lock", { ecosystem: "PyPI", read: readPackageBlocks }],
+  ["poetry.lock", { ecosystem: "PyPI", read: readPoetryLock }],
+  ["uv.lock", { ecosystem: "PyPI", read: readUvLock }],
 ]);
 const REQUIREMENTS = { ecosystem: "PyPI", read: readRequirements };
 const NOT_CHECKED = new Set(["Cargo.lock", "go.sum", "Gemfile.lock"]);
@@ -56,15 +56,18 @@ function verdictOf(ecosystem, entry) {
   return verdict.kind === "git" && entry.commit ? { ...verdict, commit: entry.commit } : verdict;
 }
 
-// An npm entry whose version is not semver: the text is never kept or sent to OSV, and an entry with no source of its own is one
-// it could not read.
+// What a version is in each ecosystem: semver for npm, PEP 440 for PyPI.
+const IS_VERSION = { npm: (version) => SEMVER.test(version), PyPI: isPep440 };
+
+// An entry whose version is not one in its ecosystem: the text is never kept or sent to OSV, and an entry with no source of its
+// own is one it could not read.
 function withCheckedVersion(ecosystem, entry) {
-  if (ecosystem !== "npm" || entry.version === null || SEMVER.test(entry.version)) return entry;
+  if (entry.version === null || IS_VERSION[ecosystem](entry.version)) return entry;
   const ownSource = entry.source !== undefined || entry.classified !== undefined;
   return { ...entry, version: null, ...(ownSource ? {} : UNREADABLE_ENTRY) };
 }
 
-const packageName = (ecosystem, name) => (ecosystem === "PyPI" ? normalisePyPI(name) : name);
+const packageName = (ecosystem, name) => (ecosystem === "PyPI" && name !== null ? normalisePyPI(name) : name);
 
 // A package from a source other than the official registry, as read from one file; an unreadable source has no address.
 function sourcedPackage(ecosystem, file, entry, verdict) {
