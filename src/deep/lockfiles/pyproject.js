@@ -1,5 +1,5 @@
 // ABOUTME: Reads a pyproject.toml: with no uv or Poetry lockfile, the names sent to OSV and every dependency, source and workspace
-// ABOUTME: member from outside the registry or the repository; always, its uv, Poetry and PDM index settings; fails closed.
+// ABOUTME: member from outside the registry or the repository; always, its uv, Poetry, PDM and Rye index settings; fails closed.
 "use strict";
 
 const { OBJECT_ID } = require("../util");
@@ -28,6 +28,25 @@ const isTrue = (value) => value.kind === "scalar" && value.text === "true";
 const MAX_PATH = 10;
 const cappedPath = (path, more) => path.concat(more.slice(0, MAX_PATH + 1)).slice(0, MAX_PATH + 1);
 
+// The path of a table header (at most MAX_PATH parts and one more), each array of tables in it followed by the number of its
+// element: a new one for an `[[…]]` header's own array, the last one for an array it names on the way, as TOML reads
+// `[index.cache-control]` after `[[index]]` as a table of that index. `elements` holds each array's last element by its path.
+function headerPath(statement, elements) {
+  const parts = statement.header.slice(0, MAX_PATH + 1);
+  const own = statement.array && statement.header.length === parts.length;
+  const path = [];
+  parts.forEach((part, k) => {
+    path.push(part);
+    const id = JSON.stringify(path);
+    if (own && k === parts.length - 1) {
+      const element = (elements.get(id) ?? -1) + 1;
+      elements.set(id, element);
+      path.push(element);
+    } else if (elements.has(id)) path.push(elements.get(id));
+  });
+  return cappedPath([], path);
+}
+
 // Every value of a TOML file with its key path (at most MAX_PATH parts and one more): the table it is in, its own dotted key and,
 // for an inline table, each of its entries in turn; an array of tables adds the number of its element to the path, so it never
 // reads as a name.
@@ -37,13 +56,7 @@ function tomlValues(text) {
   const elements = new Map();
   for (const statement of tomlStatements(text, TOML_LAYOUT, { anyLayout: true })) {
     if (statement.header) {
-      table = cappedPath([], statement.header);
-      if (statement.array) {
-        const id = JSON.stringify(table);
-        const element = elements.get(id) ?? 0;
-        elements.set(id, element + 1);
-        table = cappedPath(table, [element]);
-      }
+      table = headerPath(statement, elements);
       continue;
     }
     const stack = [{ path: cappedPath(table, statement.path), value: statement.value }];
@@ -323,13 +336,34 @@ const roleByField = (field, kinds, absent) => (fields) => {
 const UV_INDEX_ROLE = roleByField("format", new Map([["simple", "index"], ["flat", "find-links"]]), "index");
 const PDM_SOURCE_ROLE = roleByField("type", new Map([["index", "index"], ["find_links", "find-links"]]), "index");
 
-// uv's settings and indexes at `prefix`: the top of uv.toml, or [tool.uv] in pyproject.toml.
+const RYE_SOURCE_ROLE = roleByField("type", new Map([["index", "index"], ["find-links", "find-links"]]), "index");
+
+// uv's settings and indexes at `prefix` (the top of uv.toml, or [tool.uv] in pyproject.toml), and its settings for `uv pip` below
+// it in [pip].
 const uvConfigEntries = (values, prefix, folder) => [
   ...uvSettingEntries(values, prefix, folder),
+  ...uvSettingEntries(values, [...prefix, "pip"], folder),
   ...sourceTableEntries(values, [...prefix, "index"], folder, { roleOf: UV_INDEX_ROLE }),
 ];
 
-// pyproject.toml's settings that name where packages come from: uv's, Poetry's sources (one named PyPI needs no url) and PDM's.
+// pdm.toml's indexes: [pypi] url, PyPI's replacement, and [pypi.<name>] url, each an index. A url in any other place under
+// [pypi], or not a string, is one it cannot read.
+function pdmTomlEntries(values, folder) {
+  const out = [];
+  for (const { path, value } of values) {
+    if (path[0] !== "pypi") continue;
+    const rest = path.slice(1);
+    const atUrl = (rest.length === 1 && rest[0] === "url") || (rest.length === 2 && typeof rest[0] === "string" && rest[1] === "url");
+    const address = atUrl ? stringOf(value) : null;
+    const misplaced = rest.length === 0 || typeof rest[0] !== "string" || rest.slice(0, 2).includes("url");
+    if (atUrl && address !== null) out.push(...configAddressEntries(address, value.line, folder, "index"));
+    else if (atUrl || misplaced) out.push(configEntry(value.line, UNREADABLE));
+  }
+  return out;
+}
+
+// pyproject.toml's settings that name where packages come from: uv's, Poetry's sources (one named PyPI needs no url), PDM's and
+// Rye's.
 const pyprojectConfigEntries = (values, folder) => [
   ...uvConfigEntries(values, ["tool", "uv"], folder),
   ...sourceTableEntries(values, ["tool", "poetry", "source"], folder, {
@@ -337,6 +371,7 @@ const pyprojectConfigEntries = (values, folder) => [
     urlOptional: (fields) => fields.has("name") && stringOf(fields.get("name"))?.toLowerCase() === "pypi",
   }),
   ...sourceTableEntries(values, ["tool", "pdm", "source"], folder, { roleOf: PDM_SOURCE_ROLE }),
+  ...sourceTableEntries(values, ["tool", "rye", "sources"], folder, { roleOf: RYE_SOURCE_ROLE }),
 ];
 
 const PROJECT_DEPENDENCIES = ["project", "dependencies"];
@@ -508,4 +543,4 @@ function readPyproject(text, folder = "") {
 // pyproject.toml read only for its settings that name where packages come from, for a target with a uv or Poetry lockfile.
 const readPyprojectConfig = (text, folder = "") => pyprojectConfigEntries(tomlValues(withoutBom(text)), folder);
 
-module.exports = { readPyproject, readPyprojectConfig, tomlValues, uvConfigEntries };
+module.exports = { readPyproject, readPyprojectConfig, tomlValues, uvConfigEntries, pdmTomlEntries };

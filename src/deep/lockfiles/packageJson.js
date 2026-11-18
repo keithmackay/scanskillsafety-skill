@@ -194,4 +194,4 @@ function readPackageJson(text, folder = "") {
   return manifestEntries(found, (name) => name);
 }
 
-module.exports = { readPackageJson };
+module.exports = { readPackageJson, overrideTarget, packageJsonVerdict };

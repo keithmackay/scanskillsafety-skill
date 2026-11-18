@@ -250,8 +250,9 @@ function localPathVerdict(source, folder, local) {
   return isPackageArchive(path) ? bundled(pathFrom(folder, path)) : local;
 }
 
-// A config setting that names where packages come from, as a reader read it: `registry` when it names the registry for installs
-// (with its `scope` when it names one scope's), so a lockfile that records no host is known to be covered by it.
+// A config setting that names where packages come from, as a reader read it: `covers` lists the scopes whose registry for installs
+// it names (null for the unscoped registry), so a lockfile that records no host is known to be covered by it; `scope` is the one
+// scope a scoped setting names, shown with it.
 const configEntry = (line, classified, extra = {}) => ({ line, from: "config", classified, ...extra });
 
 // An entry whose source a reader could not make out, whatever the classifier would say.

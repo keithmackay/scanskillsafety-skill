@@ -12,7 +12,7 @@ const { readPoetryLock, readUvLock } = require("./python");
 const { readNamedRequirements, readRequirements } = require("./requirements");
 const { readPackageJson } = require("./packageJson");
 const { readPyproject, readPyprojectConfig } = require("./pyproject");
-const { readNpmrc, readPnpmWorkspace, readUvToml, readYarnrc, readYarnrcYml } = require("./installConfig");
+const { readNpmrc, readPdmToml, readPnpmWorkspace, readPnpmWorkspaceSettings, readUvToml, readYarnrc, readYarnrcYml } = require("./installConfig");
 
 const LOCKFILES = new Map([
   ["package-lock.json", { ecosystem: "npm", read: readNpmLock }],
@@ -38,25 +38,28 @@ const MANIFESTS = new Map([
 ]);
 
 // Config files that name where installs in their folder fetch from. pnpm-workspace.yaml's folders are read only where no pnpm
-// lockfile sits beside it, since the lockfile's importers already name them.
+// lockfile sits beside it, since the lockfile's importers already name them; its other settings always.
 const CONFIGS = new Map([
   [".npmrc", { ecosystem: "npm", read: readNpmrc }],
   [".yarnrc", { ecosystem: "npm", read: readYarnrc }],
   [".yarnrc.yml", { ecosystem: "npm", read: readYarnrcYml }],
   ["uv.toml", { ecosystem: "PyPI", read: readUvToml }],
+  ["pdm.toml", { ecosystem: "PyPI", read: readPdmToml }],
 ]);
 const PNPM_WORKSPACE = "pnpm-workspace.yaml";
 const PNPM_WORKSPACE_KIND = { ecosystem: "npm", read: readPnpmWorkspace };
+const PNPM_WORKSPACE_SETTINGS_KIND = { ecosystem: "npm", read: readPnpmWorkspaceSettings };
 // Files whose leaving out of the file list is reported, besides lockfiles.
 const REPORTED_WHEN_LEFT_OUT = new Set([...MANIFESTS.keys(), ...CONFIGS.keys(), PNPM_WORKSPACE]);
 
-// The config a lockfile that records no host takes its registry from: npm and pnpm read .npmrc, Yarn Berry .yarnrc.yml (Yarn 1
-// records every host).
+// The configs a lockfile that records no host takes its registry from (Yarn 1 records every host): npm reads only the .npmrc of
+// its project, the nearest folder above the lockfile with a package.json (else the root); pnpm reads .npmrc and
+// pnpm-workspace.yaml, and Yarn Berry .yarnrc.yml, in any folder above.
 const COVERING_CONFIG = new Map([
-  ["package-lock.json", ".npmrc"],
-  ["npm-shrinkwrap.json", ".npmrc"],
-  ["pnpm-lock.yaml", ".npmrc"],
-  ["yarn.lock", ".yarnrc.yml"],
+  ["package-lock.json", { configs: [".npmrc"], projectOnly: true }],
+  ["npm-shrinkwrap.json", { configs: [".npmrc"], projectOnly: true }],
+  ["pnpm-lock.yaml", { configs: [".npmrc", PNPM_WORKSPACE], projectOnly: false }],
+  ["yarn.lock", { configs: [".yarnrc.yml"], projectOnly: false }],
 ]);
 
 // A file read by a reader other than the requirements reader: a lockfile or a manifest.
@@ -141,7 +144,7 @@ function classifyEntries(ecosystem, file, entries) {
       continue;
     }
     if (readEntry.from) {
-      if (readEntry.registry) covers.push(readEntry.scope ?? null);
+      if (readEntry.covers) covers.push(...readEntry.covers);
       if (!readEntry.classified.expected) sourced.push(sourcedLine(ecosystem, file, readEntry));
       unreadable ||= readEntry.classified.unreadable === true;
       continue;
@@ -165,13 +168,23 @@ const scopeOf = (name) => (name.startsWith("@") && name.includes("/") ? name.sli
 // Whether a file in `configFolder` applies to a file in `folder`: it is in that folder or one above it.
 const appliesTo = (configFolder, folder) => configFolder === "" || folder === configFolder || folder.startsWith(`${configFolder}/`);
 
-// The lockfiles that record no host for some packages, none of which a config in their folder or above names a registry for: a
-// config covers a package when it names the unscoped registry or that package's scope's.
-function notRecordedNotes(unrecordedFiles, settings) {
+// The project folder npm runs in for a folder: the nearest one at or above it holding a package.json, else the root.
+function projectFolder(folder, projects) {
+  for (let at = folder; at !== ""; at = folderOf(at)) if (projects.has(at)) return at;
+  return "";
+}
+
+// The lockfiles that record no host for some packages, none of which a config that applies to them names a registry for: a
+// config covers a package when it names the unscoped registry or that package's scope's. `projects` are the folders holding a
+// package.json.
+function notRecordedNotes(unrecordedFiles, settings, projects) {
   const notes = [];
   for (const { file, ecosystem, names } of unrecordedFiles) {
-    const config = COVERING_CONFIG.get(baseName(file));
-    const applying = settings.filter((s) => baseName(s.file) === config && appliesTo(folderOf(s.file), folderOf(file)));
+    const { configs, projectOnly } = COVERING_CONFIG.get(baseName(file));
+    const folder = folderOf(file);
+    const project = projectOnly ? projectFolder(folder, projects) : null;
+    const applies = (configFile) => (projectOnly ? folderOf(configFile) === project : appliesTo(folderOf(configFile), folder));
+    const applying = settings.filter((s) => configs.includes(baseName(s.file)) && applies(s.file));
     const scopes = new Set(applying.flatMap((s) => s.covers));
     if (!names.every((name) => scopes.has(null) || scopes.has(scopeOf(name)))) notes.push({ file, ecosystem });
   }
@@ -239,7 +252,7 @@ function readPackages(files, leftOut = []) {
     if (NOT_CHECKED.has(baseName(f.path))) result.notChecked.push(f.path);
     const config = CONFIGS.get(baseName(f.path));
     if (config) readEntries(f, config);
-    if (baseName(f.path) === PNPM_WORKSPACE && !pnpmLocked.has(folderOf(f.path))) readEntries(f, PNPM_WORKSPACE_KIND);
+    if (baseName(f.path) === PNPM_WORKSPACE) readEntries(f, pnpmLocked.has(folderOf(f.path)) ? PNPM_WORKSPACE_SETTINGS_KIND : PNPM_WORKSPACE_KIND);
     const kind = lockfileKind(f.path);
     if (!kind) continue;
     lockedBy(f.path).add(kind.ecosystem);
@@ -262,7 +275,8 @@ function readPackages(files, leftOut = []) {
     const sourcesOnly = pinned.has(manifest.ecosystem);
     if (readEntries(f, manifest, { sourcesOnly }) && !sourcesOnly) result.namesOnly.push(f.path);
   }
-  result.notRecorded.push(...notRecordedNotes(unrecordedFiles, settings));
+  const projects = new Set([...ownFiles, ...ownLeftOut].filter((f) => baseName(f.path) === "package.json").map((f) => folderOf(f.path)));
+  result.notRecorded.push(...notRecordedNotes(unrecordedFiles, settings, projects));
   return result;
 }
 

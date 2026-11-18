@@ -425,7 +425,6 @@ test("pnpm-workspace.yaml: packages in a shape it does not model is one it canno
     ["packages:\n  - a: b", 2],
     ["packages: ../b", 1],
     ["packages:\n  - |\n    ../b", 2],
-    ["packages:\n\t- ../b", 2],
   ];
   for (const [text, line] of cases) {
     const result = read([["pnpm-workspace.yaml", text]]);
@@ -571,4 +570,217 @@ test("keys named like built-in object properties are plain names", () => {
   assert.deepEqual(read([[".npmrc", npmrc]]).sourced, [npmConfig(".npmrc")(3, "host", "https://s.example", { scope: "@s" })]);
   const yml = "__proto__:\n  npmRegistryServer: https://x.example\nnpmScopes:\n  __proto__:\n    npmRegistryServer: https://p.example\n";
   assert.deepEqual(read([[".yarnrc.yml", yml]]).sourced, [npmConfig(".yarnrc.yml")(5, "host", "https://p.example", { scope: "@__proto__" })]);
+});
+
+// Review fixes
+
+const OUTSIDE = { text: "a path outside the project" };
+const BUNDLED = { text: "a bundled package file the scan cannot read" };
+const pkg = (file) => (name, line, kind, address, extra = {}) => ({ ecosystem: "npm", file, line, name, version: null, kind, address, ...extra });
+
+test("auth settings are known by the setting after the last colon, so a scope named like one is still read", () => {
+  const npmrc = lines(
+    "@x_auth:registry=https://evil.example/",
+    "@y_password:registry=https://evil2.example/",
+    "//npm.example.com/:_authToken=SECRET",
+    "//npm.example.com/:_auth=SECRET",
+    "//npm.example.com/:_password=SECRET",
+    "//npm.example.com/:username=SECRET",
+    "//npm.example.com/:email=SECRET",
+    "//npm.example.com/:certfile=SECRET",
+    "//npm.example.com/:keyfile=SECRET",
+    "_auth=SECRET",
+    "_authToken=SECRET",
+    "username=SECRET",
+  );
+  const result = read([[".npmrc", npmrc]]);
+  assert.deepEqual(result.sourced, [
+    npmConfig(".npmrc")(1, "host", "https://evil.example", { scope: "@x_auth" }),
+    npmConfig(".npmrc")(2, "host", "https://evil2.example", { scope: "@y_password" }),
+  ]);
+  hidden(result, "SECRET");
+  const yarnrc = '"@x_auth:registry" "https://evil.example/"\n"//npm.example.com/:_authToken" "SECRET"\n';
+  const yarn = read([[".yarnrc", yarnrc]]);
+  assert.deepEqual(yarn.sourced, [npmConfig(".yarnrc")(1, "host", "https://evil.example", { scope: "@x_auth" })]);
+  hidden(yarn, "SECRET");
+  assertUnreadableAt("npm", ".npmrc", "//npm.example.com/:registry=https://x.example/", 1);
+});
+
+const WORKSPACE_REGISTRIES = lines(
+  "packages:",
+  '  - "apps/*"',
+  "registry: https://pnpm.example.com/",
+  "registries:",
+  "  https://artifactory.example.com/artifactory/api/npm/npm-virtual/:",
+  "    serverType: artifactory",
+  "    scopes: ['@acme', \"@acme-internal\"]",
+  "    prefix: work",
+  "  https://scoped.example.com/:",
+  "    scopes:",
+  '      - "@other"',
+  "    networkConcurrency: 4",
+  "    supportsTimeField: true",
+  "  '@legacy': https://legacy.example.com/",
+  "  https://registry.npmjs.org/:",
+  "    scopes: ['@']",
+  "    ecosystem: npm",
+  "namedRegistries:",
+  "  corp: https://named.example.com/",
+);
+
+test("pnpm-workspace.yaml: registry, registries (keyed by URL, or the older scope map) and namedRegistries, with or without a lockfile", () => {
+  const at = npmConfig("pnpm-workspace.yaml");
+  const expected = [
+    at(3, "host", "https://pnpm.example.com"),
+    at(5, "host", "https://artifactory.example.com"),
+    at(9, "host", "https://scoped.example.com"),
+    at(14, "host", "https://legacy.example.com", { scope: "@legacy" }),
+    at(19, "host", "https://named.example.com"),
+  ];
+  assert.deepEqual(read([["pnpm-workspace.yaml", WORKSPACE_REGISTRIES]]), { ...EMPTY, sourced: expected });
+  const lock = "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n";
+  assert.deepEqual(read([["pnpm-workspace.yaml", WORKSPACE_REGISTRIES], ["pnpm-lock.yaml", lock]]).sourced, expected);
+});
+
+test("pnpm-workspace.yaml: a registry setting in a shape it does not model is one it cannot read", () => {
+  const cases = [
+    ["registry: ${PNPM_REGISTRY}", 1],
+    ["registry: *r", 1],
+    ["registries: {a: b}", 1],
+    ["registries:\n  https://x.example/:\n    token: abc", 3],
+    ["registries:\n  https://x.example/:\n    scopes: [{a: b}]", 3],
+    ["registries:\n  https://x.example/:\n    scopes: [acme]", 3],
+    ["registries:\n  https://x.example/:\n    scopes: ['@a'] # c", 3],
+    ["registries:\n  https://x.example/:\n    ecosystem: cargo", 3],
+    ["registries:\n  notaurl:\n    scopes: ['@a']", 2],
+    ["registries:\n  '@legacy':\n    scopes: ['@a']", 2],
+    ["namedRegistries:\n  corp: *x", 2],
+    ["namedRegistries: {corp: https://x.example}", 1],
+    ["packages:\n\t- ../b", 2],
+  ];
+  for (const [text, line] of cases) assertUnreadableAt("npm", "pnpm-workspace.yaml", text, line);
+});
+
+test("pnpm-workspace.yaml: catalogs and overrides from outside the registry are reported, named by the package", () => {
+  const text = lines(
+    "catalog:",
+    "  react: ^18.2.0",
+    "  left-pad: github:u/left-pad",
+    '  "@s/x": npm:@s/real@^1',
+    "catalogs:",
+    "  legacy:",
+    "    tiny: https://files.example.com/tiny-1.0.0.tgz",
+    "    local: link:../outside",
+    "overrides:",
+    '  "foo>bar": git+https://github.com/u/bar.git',
+    '  baz: "-"',
+    "  qux: ./vendor/qux-1.0.0.tgz",
+  );
+  const at = pkg("pnpm-workspace.yaml");
+  const expected = [
+    at("left-pad", 3, "git", "https://github.com/u/left-pad"),
+    at("tiny", 7, "url", "https://files.example.com/tiny-1.0.0.tgz"),
+    at("local", 8, "url", null, OUTSIDE),
+    at("bar", 10, "git", "https://github.com/u/bar.git"),
+    at("qux", 12, "bundled", "vendor/qux-1.0.0.tgz", BUNDLED),
+  ];
+  assert.deepEqual(read([["pnpm-workspace.yaml", text]]), { ...EMPTY, sourced: expected });
+  const lock = "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n";
+  assert.deepEqual(read([["pnpm-workspace.yaml", text], ["pnpm-lock.yaml", lock]]).sourced, expected);
+  const unread = (line) => pkg("pnpm-workspace.yaml")(null, line, "unreadable", null);
+  for (const [bad, line] of [["catalog:\n  x: *a", 2], ["catalogs:\n  legacy: {x: y}", 2], ["overrides: {a: b}", 1], ["catalog:\n  x: >=1.0.0", 2]]) {
+    const result = read([["pnpm-workspace.yaml", bad]]);
+    assert.deepEqual(result.sourced, [unread(line)], bad);
+    assert.deepEqual(result.couldNotRead, [{ file: "pnpm-workspace.yaml", reason: UNREADABLE_SOURCE }], bad);
+  }
+});
+
+test("registry not recorded: pnpm-workspace.yaml's registry, or a registries entry routing the default scope, covers a pnpm lockfile", () => {
+  const lock = (file) => [file, PNPM];
+  assert.deepEqual(read([lock("pnpm-lock.yaml"), ["pnpm-workspace.yaml", "registry: https://m.example/\n"]]).notRecorded, []);
+  const routed = "registries:\n  https://m.example/:\n    scopes: ['@']\n";
+  assert.deepEqual(read([lock("pnpm-lock.yaml"), ["pnpm-workspace.yaml", routed]]).notRecorded, []);
+  const scoped = "registries:\n  https://m.example/:\n    scopes: ['@acme']\n";
+  assert.deepEqual(read([lock("pnpm-lock.yaml"), ["pnpm-workspace.yaml", scoped]]).notRecorded, [NOTE("pnpm-lock.yaml")]);
+  const named = "namedRegistries:\n  corp: https://m.example/\n";
+  assert.deepEqual(read([lock("pnpm-lock.yaml"), ["pnpm-workspace.yaml", named]]).notRecorded, [NOTE("pnpm-lock.yaml")]);
+  assert.deepEqual(read([lock("pnpm-lock.yaml"), ["pnpm-workspace.yaml", "registry: ${R}\n"]]).notRecorded, []);
+});
+
+test("uv's [pip] settings in uv.toml and [tool.uv.pip] in pyproject.toml are read", () => {
+  const uv = '[pip]\nindex-url = "https://pip.example.com/simple"\nextra-index-url = ["https://e.example.com/simple"]\nfind-links = ["./w"]\n';
+  const at = pypiConfig("uv.toml");
+  assert.deepEqual(read([["uv.toml", uv]]).sourced, [
+    at(2, "host", "https://pip.example.com"),
+    at(3, "host", "https://e.example.com"),
+    at(4, "bundled", "w", BUNDLED),
+  ]);
+  const pyproject = '[tool.uv.pip]\nindex-url = "https://pip.example.com/simple"\n';
+  assert.deepEqual(read([["pyproject.toml", pyproject]]).sourced, [pypiConfig("pyproject.toml")(2, "host", "https://pip.example.com")]);
+  assertUnreadableAt("PyPI", "uv.toml", "[pip]\nindex-url = 1", 2);
+});
+
+test("pdm.toml's [pypi] and [pypi.<name>] urls, and pyproject.toml's [[tool.rye.sources]], are read as indexes", () => {
+  const pdm = lines(
+    "[pypi]",
+    'url = "https://pdm.example.com/simple"',
+    "verify_ssl = true",
+    "",
+    "[pypi.extra]",
+    'url = "https://extra.example.com/simple"',
+    'username = "SECRET"',
+    'password = "SECRET"',
+  );
+  const result = read([["pdm.toml", pdm]]);
+  assert.deepEqual(result.sourced, [pypiConfig("pdm.toml")(2, "host", "https://pdm.example.com"), pypiConfig("pdm.toml")(6, "host", "https://extra.example.com")]);
+  hidden(result, "SECRET");
+  assert.deepEqual(read([["pdm.toml", '[pypi]\nurl = "https://pypi.org/simple"\n']]), EMPTY);
+  for (const [text, line] of [["[pypi]\nurl = 1", 2], ['pypi.url.x = "https://x.example"', 1], ['[[pypi]]\nurl = "https://x.example"', 2], ['pypi = "https://x.example"', 1]]) {
+    assertUnreadableAt("PyPI", "pdm.toml", text, line);
+  }
+  const rye = lines(
+    "[[tool.rye.sources]]",
+    'name = "corp"',
+    'url = "https://rye.example.com/simple"',
+    "[[tool.rye.sources]]",
+    'name = "links"',
+    'url = "https://links.example.com/"',
+    'type = "find-links"',
+  );
+  assert.deepEqual(read([["pyproject.toml", rye]]).sourced, [
+    pypiConfig("pyproject.toml")(3, "host", "https://rye.example.com"),
+    pypiConfig("pyproject.toml")(6, "host", "https://links.example.com"),
+  ]);
+  assertUnreadableAt("PyPI", "pyproject.toml", '[[tool.rye.sources]]\nname = "x"', 2);
+  assertUnreadableAt("PyPI", "pyproject.toml", '[[tool.rye.sources]]\nurl = "https://x.example"\ntype = "other"', 2);
+});
+
+test("uv: an [index.cache-control] table after [[index]] belongs to that index", () => {
+  const uv = '[[index]]\nname = "x"\nurl = "https://i.example.com/simple"\n[index.cache-control]\napi = "max-age=600"\n';
+  assert.deepEqual(read([["uv.toml", uv]]), { ...EMPTY, sourced: [pypiConfig("uv.toml")(3, "host", "https://i.example.com")] });
+  const pyproject = '[[tool.uv.index]]\nname = "x"\nurl = "https://i.example.com/simple"\n[tool.uv.index.cache-control]\napi = "max-age=600"\n';
+  assert.deepEqual(read([["pyproject.toml", pyproject]]).sourced, [pypiConfig("pyproject.toml")(3, "host", "https://i.example.com")]);
+  assertUnreadableAt("PyPI", "uv.toml", '[index.cache-control]\napi = "max-age=600"', 2);
+});
+
+test("registry not recorded: npm takes the .npmrc of the nearest folder with a package.json, else the root; pnpm and Berry any folder above", () => {
+  const mirror = "registry=https://m.example/\n";
+  const pj = '{ "name": "t" }';
+  assert.deepEqual(read([["package.json", pj], ["app/package.json", pj], ["app/package-lock.json", NO_RESOLVED], [".npmrc", mirror]]).notRecorded, [NOTE("app/package-lock.json")]);
+  assert.deepEqual(read([["app/package.json", pj], ["app/package-lock.json", NO_RESOLVED], ["app/.npmrc", mirror]]).notRecorded, []);
+  assert.deepEqual(read([["package.json", pj], ["app/sub/package-lock.json", NO_RESOLVED], [".npmrc", mirror]]).notRecorded, []);
+  assert.deepEqual(read([["app/package.json", pj], ["app/sub/package-lock.json", NO_RESOLVED], ["app/sub/.npmrc", mirror]]).notRecorded, [NOTE("app/sub/package-lock.json")]);
+  assert.deepEqual(read([["app/package.json", pj], ["app/pnpm-lock.yaml", PNPM], [".npmrc", mirror]]).notRecorded, []);
+});
+
+test("registry not recorded: any registry line it cannot read covers the lockfile, whatever made it unreadable", () => {
+  for (const npmrc of ["[section]\nregistry=https://m.example/", "REGISTRY=https://m.example/", "${KEY}=https://m.example/", "@s:registry=${X}", "myco:registry=https://m.example/"]) {
+    const result = read([["package-lock.json", NO_RESOLVED], [".npmrc", npmrc]]);
+    assert.deepEqual(result.notRecorded, [], npmrc);
+    assert.equal(result.sourced.length, 1, npmrc);
+  }
+  assert.deepEqual(read([["package-lock.json", NO_RESOLVED], [".npmrc", "replace-registry-host=https://x/\n"]]).notRecorded, [NOTE("package-lock.json")]);
+  for (const yml of ["npmRegistryServer: *a", "npmScopes:\n  s:\n    npmRegistryServer: |\n      x", '"npmRegistry\\u0053erver": https://m.example']) {
+    assert.deepEqual(read([["yarn.lock", BERRY], [".yarnrc.yml", yml]]).notRecorded, [], yml);
+  }
 });

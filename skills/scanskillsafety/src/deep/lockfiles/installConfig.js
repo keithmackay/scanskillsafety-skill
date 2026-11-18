@@ -1,10 +1,11 @@
-// ABOUTME: Reads the config files that name where installs in a folder fetch packages from (.npmrc, .yarnrc, .yarnrc.yml, uv.toml)
-// ABOUTME: and pnpm-workspace.yaml's folders; auth lines are never read, and a setting in a form it does not model is unreadable.
+// ABOUTME: Reads the config files that name where installs in a folder fetch packages from (.npmrc, .yarnrc, .yarnrc.yml,
+// ABOUTME: pnpm-workspace.yaml, uv.toml, pdm.toml); auth lines are never read, and a setting in a form it does not model is unreadable.
 "use strict";
 
 const { classifySource, EXPECTED, UNREADABLE } = require("../packageSources");
 const { configEntry, fieldOf, leadingSpaces, linesOf, startsWithAny, unnamedEntry, workspaceEntries } = require("./shared");
-const { tomlValues, uvConfigEntries } = require("./pyproject");
+const { pdmTomlEntries, tomlValues, uvConfigEntries } = require("./pyproject");
+const { overrideTarget, packageJsonVerdict } = require("./packageJson");
 
 const withoutBom = (text) => (text.startsWith("\uFEFF") ? text.slice(1) : text);
 
@@ -18,16 +19,30 @@ function registryVerdict(address) {
 // A scoped registry key's scope (`@myco:registry` → `@myco`).
 const scopeOfKey = (key) => key.slice(0, key.indexOf(":"));
 
+// A line it cannot read where a registry may be named: it covers every package of a lockfile that records no host, since it is
+// reported itself.
+const coveringUnreadable = (line) => configEntry(line, UNREADABLE, { covers: [null] });
+const unreadableConfig = (line) => configEntry(line, UNREADABLE);
+
+// A setting naming the registry for installs, or for one scope's packages when `scope` is given.
+function registryEntry(line, verdict, scope = null) {
+  if (verdict.unreadable) return coveringUnreadable(line);
+  return configEntry(line, verdict, scope === null ? { covers: [null] } : { covers: [scope], scope });
+}
+
 // .npmrc and .yarnrc
 
 // Lines as npm's ini reader and Yarn's rc reader split them: a carriage return alone ends a line too.
 const rcLines = (text) => withoutBom(text).split(/\r\n|\n|\r/);
 
-// An auth setting (`//host/:_authToken=…`, `_auth=…`, `_password=…`): recognised by its key and never read further, so its value
-// reaches nothing.
-function isAuthLine(trimmed, key) {
-  const lower = key.toLowerCase();
-  return trimmed.startsWith("//") || trimmed.startsWith('"//') || lower.includes("_auth") || lower.includes("_password");
+// The settings that hold credentials, alone or after a registry (`//host/:_authToken`).
+const AUTH_SETTINGS = new Set(["_auth", "_authtoken", "_password", "username", "email", "certfile", "keyfile"]);
+
+// An auth setting (`//host/:_authToken=…`, `_auth=…`, `_password=…`), known by the setting after the key's last colon, so a scope
+// named like one (`@x_auth:registry`) is still read: never read further, so its value reaches nothing.
+function isAuthLine(key) {
+  const name = key.trim().replace(/"/g, "").replace(/\[\]$/, "");
+  return AUTH_SETTINGS.has(name.slice(name.lastIndexOf(":") + 1).toLowerCase());
 }
 
 // A key as npm or Yarn might come to read it, for telling whether it is a registry setting: up to an ini comment, without quotes,
@@ -71,13 +86,17 @@ function replacedHostVerdict(value) {
 // omit-lockfile-registry-resolved: true is reported, since it hides the registry from package-lock.json.
 const omitResolvedVerdict = (value) => (value === "true" ? OMITS_RESOLVED : value === "false" ? EXPECTED : UNREADABLE);
 
-// What one .npmrc registry setting gives, by its key as written and its value (null when not in a form modelled).
-function npmSettingEntry(key, value, line) {
-  if (key === "registry") return configEntry(line, registryVerdict(value), { registry: true });
-  if (SCOPED_REGISTRY.test(key)) return configEntry(line, registryVerdict(value), { registry: true, scope: scopeOfKey(key) });
-  if (key === "replace-registry-host") return configEntry(line, replacedHostVerdict(value));
-  if (key === "omit-lockfile-registry-resolved") return configEntry(line, omitResolvedVerdict(value));
-  return configEntry(line, UNREADABLE);
+// The settings read that name no registry for installs.
+const OTHER_NPM_SETTINGS = ["replace-registry-host", "omit-lockfile-registry-resolved"];
+
+// What one .npmrc registry setting gives, by its key as written, whether it sits in a section, and its value (null when not in a
+// form modelled). Any other spelling, or a key in a section, is one it cannot read.
+function npmSettingEntry(key, inSection, value, line) {
+  if (!inSection && key === "registry") return registryEntry(line, registryVerdict(value));
+  if (!inSection && SCOPED_REGISTRY.test(key)) return registryEntry(line, registryVerdict(value), scopeOfKey(key));
+  if (!inSection && key === "replace-registry-host") return configEntry(line, replacedHostVerdict(value));
+  if (!inSection && key === "omit-lockfile-registry-resolved") return configEntry(line, omitResolvedVerdict(value));
+  return OTHER_NPM_SETTINGS.includes(looseKey(key)) ? unreadableConfig(line) : coveringUnreadable(line);
 }
 
 // .npmrc, read as npm's ini reader reads it: `key=value` lines, `;` and `#` comment lines, `[section]` headers. Only the registry
@@ -90,14 +109,14 @@ function readNpmrc(text) {
     const trimmed = raw.trim();
     const eq = raw.indexOf("=");
     const rawKey = eq < 0 ? raw : raw.slice(0, eq);
-    if (trimmed === "" || trimmed.startsWith(";") || trimmed.startsWith("#") || isAuthLine(trimmed, rawKey)) return;
+    if (trimmed === "" || trimmed.startsWith(";") || trimmed.startsWith("#") || isAuthLine(rawKey)) return;
     if (/^\[[^\]]*\]\s*$/.test(raw)) {
       inSection = true;
       return;
     }
     if (!mayNameSetting(looseKey(rawKey), NPM_SETTINGS)) return;
     const value = eq < 0 || inSection ? null : iniValue(raw.slice(eq + 1));
-    out.push(npmSettingEntry(inSection ? null : rawKey.trim(), value, i + 1));
+    out.push(npmSettingEntry(rawKey.trim(), inSection, value, i + 1));
   });
   return out;
 }
@@ -118,11 +137,10 @@ function yarnrcKey(line) {
 // What one .yarnrc registry line gives; any other form is one it cannot read.
 function yarnrcEntry(text, line) {
   const match = YARNRC_REGISTRY.exec(text);
-  if (match === null) return configEntry(line, UNREADABLE);
+  if (match === null) return coveringUnreadable(line);
   const key = match[1].replace(/"/g, "");
   const address = match[2].includes("${") ? null : match[2];
-  const scope = key === "registry" ? {} : { scope: scopeOfKey(key) };
-  return configEntry(line, registryVerdict(address), { registry: true, ...scope });
+  return registryEntry(line, registryVerdict(address), key === "registry" ? null : scopeOfKey(key));
 }
 
 // .yarnrc (Yarn 1), read line by line: only the registry and a scope's registry, each `key "address"` on its own line; another
@@ -134,10 +152,10 @@ function readYarnrc(text) {
   rcLines(text).forEach((raw, i) => {
     const line = i + 1;
     const trimmed = raw.trim();
-    if (trimmed === "" || trimmed.startsWith("#") || isAuthLine(trimmed, yarnrcKey(trimmed))) return;
+    if (trimmed === "" || trimmed.startsWith("#") || isAuthLine(yarnrcKey(trimmed))) return;
     if (/^\s/.test(raw)) {
       if (root !== null && !root.unreadable) {
-        out.push(configEntry(line, UNREADABLE));
+        out.push(coveringUnreadable(line));
         root.unreadable = true;
       }
       return;
@@ -265,7 +283,7 @@ function npmScopesEntries(root) {
     const scopeName = `@${scope.key.replace(/^@/, "")}`;
     return scalarFields(scope)
       .filter(({ field }) => field.key === "npmRegistryServer")
-      .map(({ field, text }) => configEntry(field.line, registryVerdict(text), { registry: true, scope: scopeName }));
+      .map(({ field, text }) => registryEntry(field.line, registryVerdict(text), scopeName));
   });
 }
 
@@ -273,8 +291,8 @@ function npmScopesEntries(root) {
 function npmRegistriesEntries(root) {
   return collectionChildren(root, "key").map((registry) => {
     scalarFields(registry);
-    const address = registry.key.startsWith("//") ? `https:${registry.key}` : registry.key;
-    return configEntry(registry.line, registryVerdict(address));
+    const verdict = registryVerdict(registry.key.startsWith("//") ? `https:${registry.key}` : registry.key);
+    return verdict.unreadable ? coveringUnreadable(registry.line) : configEntry(registry.line, verdict);
   });
 }
 
@@ -289,33 +307,118 @@ function unsafeHttpEntries(root) {
   });
 }
 
+// A root key's reader (`(root, folder) → entries`, throwing Unmodelled) and what a problem in it gives (`unreadable(line)`): by
+// default a line that covers a lockfile recording no host, as one naming a registry would.
+const section = (read, unreadable = coveringUnreadable) => ({ read, unreadable });
+
+// A root key holding one registry address, for installs.
+const registryScalarEntries = (root) => [registryEntry(root.line, registryVerdict(scalarText(root)))];
+
 const YARNRC_YML_SECTIONS = new Map([
-  ["npmRegistryServer", (root) => [configEntry(root.line, registryVerdict(scalarText(root)), { registry: true })]],
-  ["npmScopes", npmScopesEntries],
-  ["npmRegistries", npmRegistriesEntries],
-  ["unsafeHttpWhitelist", unsafeHttpEntries],
+  ["npmRegistryServer", section(registryScalarEntries)],
+  ["npmScopes", section(npmScopesEntries)],
+  ["npmRegistries", section(npmRegistriesEntries)],
+  ["unsafeHttpWhitelist", section(unsafeHttpEntries, unreadableConfig)],
 ]);
 
 // pnpm-workspace.yaml's packages: each folder pattern that leaves the repository.
 const pnpmPackagesEntries = (root, folder) =>
   collectionChildren(root, "item").flatMap((item) => workspaceEntries([scalarText(item)], item.line, folder));
 
-// A YAML file read for the root keys in `sections`, each read strictly by its handler (`(root, folder) → entries`, throwing
-// Unmodelled); other root keys are passed over with the lines below them. A root line it cannot read as a plain key, a line with
-// a tab or a lone carriage return, a directive, or a second document is one it does not model; lines that follow a root line it
-// cannot read, up to the next root key, add nothing more. A problem in a section gives one entry it cannot read
-// (`unreadable(line)`) in place of that section's entries from that point.
-function readYamlConfig(text, folder, sections, unreadable) {
+// A package a catalog or override names, by a value read as package.json's are: reported when it is not from the registry.
+function namedValueEntries(name, field, folder) {
+  const verdict = packageJsonVerdict(scalarText(field), folder);
+  return verdict.expected ? [] : [{ name, version: null, line: field.line, classified: verdict }];
+}
+
+// pnpm-workspace.yaml's catalog: each package's version or source.
+const catalogEntries = (root, folder) => collectionChildren(root, "key").flatMap((field) => namedValueEntries(field.key, field, folder));
+// pnpm-workspace.yaml's catalogs: catalogs by name, each read as the catalog is.
+const catalogsEntries = (root, folder) => collectionChildren(root, "key").flatMap((catalog) => catalogEntries(catalog, folder));
+// pnpm-workspace.yaml's overrides: each named by the package it replaces.
+const overridesEntries = (root, folder) =>
+  collectionChildren(root, "key").flatMap((field) => namedValueEntries(overrideTarget(field.key), field, folder));
+
+// A scope as pnpm names one in `scopes`; a bare `@` is the unscoped default registry.
+const PNPM_SCOPE = /^@(?:[A-Za-z0-9._~-]+)?$/;
+const coveredScope = (scope) => (scope === "@" ? null : scope);
+
+// A one-line flow sequence of scalars (`['@a', "@b"]`), their texts; null for any other form, a nested collection or a comment
+// after it among them.
+function flowScalars(value) {
+  if (!value.startsWith("[") || !value.endsWith("]")) return null;
+  const inner = value.slice(1, -1).trim();
+  if (inner === "") return [];
+  if (/[[\]{}]/.test(inner)) return null;
+  const items = inner.split(",").map((part) => yamlValue(part.trim()));
+  return items.every((item) => item !== null && item.text !== undefined) ? items.map((item) => item.text) : null;
+}
+
+// A registries entry's scopes, as a flow sequence on its line or a block sequence below it, each a scope.
+function scopeList(field) {
+  const flow = field.value.startsWith("[") ? flowScalars(field.value) : undefined;
+  if (flow === null || (flow !== undefined && field.children.length > 0)) throw new Unmodelled(field.line);
+  const scopes = flow ?? collectionChildren(field, "item").map(scalarText);
+  if (!scopes.every((scope) => PNPM_SCOPE.test(scope))) throw new Unmodelled(field.line);
+  return scopes;
+}
+
+// The fields of a registries entry keyed by its URL; any other is one it does not model.
+const PNPM_REGISTRY_FIELDS = new Set(["serverType", "scopes", "prefix", "networkConcurrency", "supportsTimeField", "ecosystem"]);
+
+// One pnpm-workspace.yaml registries entry: keyed by its URL, covering the scopes routed to it (none when it only answers a
+// prefix) and serving npm; or, in the older shape, a scope (`@` or `default` being the default registry) and its URL.
+function pnpmRegistryEntry(registry) {
+  const { key } = registry;
+  if (key === "default" || key.startsWith("@")) {
+    if (key !== "default" && !PNPM_SCOPE.test(key)) throw new Unmodelled(registry.line);
+    return registryEntry(registry.line, registryVerdict(scalarText(registry)), key === "default" ? null : coveredScope(key));
+  }
+  if (!/^https?:\/\//i.test(key)) throw new Unmodelled(registry.line);
+  const covers = [];
+  for (const field of collectionChildren(registry, "key")) {
+    if (!PNPM_REGISTRY_FIELDS.has(field.key)) throw new Unmodelled(field.line);
+    if (field.key === "scopes") covers.push(...scopeList(field).map(coveredScope));
+    else if (scalarText(field) !== "npm" && field.key === "ecosystem") throw new Unmodelled(field.line);
+  }
+  const verdict = registryVerdict(key);
+  return verdict.unreadable ? coveringUnreadable(registry.line) : configEntry(registry.line, verdict, { covers });
+}
+
+// pnpm-workspace.yaml's namedRegistries: registries a dependency addresses by a prefix, which route no package of their own.
+const namedRegistriesEntries = (root) =>
+  scalarFields(root).map(({ field, text }) => {
+    const verdict = registryVerdict(text);
+    return verdict.unreadable ? coveringUnreadable(field.line) : configEntry(field.line, verdict);
+  });
+
+const PNPM_SETTINGS_SECTIONS = new Map([
+  ["registry", section(registryScalarEntries)],
+  ["registries", section((root) => collectionChildren(root, "key").map(pnpmRegistryEntry))],
+  ["namedRegistries", section(namedRegistriesEntries)],
+  ["catalog", section(catalogEntries, unnamedEntry)],
+  ["catalogs", section(catalogsEntries, unnamedEntry)],
+  ["overrides", section(overridesEntries, unnamedEntry)],
+]);
+const PNPM_WORKSPACE_SECTIONS = new Map([...PNPM_SETTINGS_SECTIONS, ["packages", section(pnpmPackagesEntries, unnamedEntry)]]);
+
+// A YAML file read for the root keys in `sections`, each read strictly by its section's reader; other root keys are passed over
+// with the lines below them. A root line it cannot read as a plain key, a line with a tab or a lone carriage return, a directive,
+// or a second document is one it does not model, and may hide a registry; lines that follow a root line it cannot read, up to the
+// next root key, add nothing more. A problem in a section gives one entry it cannot read, its section's, in place of that
+// section's entries from that point.
+function readYamlConfig(text, folder, sections) {
+  const unreadable = coveringUnreadable;
   const out = [];
   let block = null;
   let content = false;
   const finish = () => {
     if (block && block.handler) {
       try {
-        out.push(...block.handler(yamlTree(block.root, block.lines), folder));
+        out.push(...block.handler.read(yamlTree(block.root, block.lines), folder));
       } catch (err) {
         if (!(err instanceof Unmodelled)) throw err;
-        out.push(unreadable(err.line));
+        out.push(block.handler.unreadable(err.line));
       }
     }
     block = null;
@@ -358,15 +461,18 @@ function readYamlConfig(text, folder, sections, unreadable) {
   return out;
 }
 
-const unreadableConfig = (line) => configEntry(line, UNREADABLE);
-
 // .yarnrc.yml (Yarn 2 and later): npmRegistryServer, npmScopes, npmRegistries and unsafeHttpWhitelist.
-const readYarnrcYml = (text, folder = "") => readYamlConfig(text, folder, YARNRC_YML_SECTIONS, unreadableConfig);
+const readYarnrcYml = (text, folder = "") => readYamlConfig(text, folder, YARNRC_YML_SECTIONS);
 
-// pnpm-workspace.yaml: the workspace's folders, for a workspace with no pnpm lockfile beside it.
-const readPnpmWorkspace = (text, folder = "") => readYamlConfig(text, folder, new Map([["packages", pnpmPackagesEntries]]), unnamedEntry);
+// pnpm-workspace.yaml: its registry settings, catalogs and overrides, and the workspace's folders.
+const readPnpmWorkspace = (text, folder = "") => readYamlConfig(text, folder, PNPM_WORKSPACE_SECTIONS);
+// pnpm-workspace.yaml beside a pnpm lockfile, whose importers already name the workspace's folders.
+const readPnpmWorkspaceSettings = (text, folder = "") => readYamlConfig(text, folder, PNPM_SETTINGS_SECTIONS);
 
-// uv.toml: uv's index settings at its top level.
+// uv.toml: uv's index settings at its top level and in [pip].
 const readUvToml = (text, folder = "") => uvConfigEntries(tomlValues(withoutBom(text)), [], folder);
 
-module.exports = { readNpmrc, readYarnrc, readYarnrcYml, readUvToml, readPnpmWorkspace };
+// pdm.toml: PDM's index settings.
+const readPdmToml = (text, folder = "") => pdmTomlEntries(tomlValues(withoutBom(text)), folder);
+
+module.exports = { readNpmrc, readYarnrc, readYarnrcYml, readUvToml, readPdmToml, readPnpmWorkspace, readPnpmWorkspaceSettings };
