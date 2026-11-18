@@ -269,70 +269,111 @@ function berryScalar(value) {
   return value !== "" && !startsWithAny(value, BERRY_VALUE_ODD_START);
 }
 
+// The fields a Berry entry's version and source are read from; a line deeper than either is one YAML would join to it.
+const BERRY_SCALAR_FIELDS = ["version", "resolution"];
+
 // A line of a Berry entry, read only as Berry writes one; any other shape makes the entry's source one it cannot read. Its fields
-// are at 2 spaces, each a plain name with no escape, tag, anchor or alias in the line, and not left open at the end of it;
-// `version` and `resolution` hold a scalar, and `resolution` is given once. Deeper lines under a field are passed over, since
-// Yarn takes the source only from `resolution`; a deeper line before any field, or a line at 1 space, is not.
+// are at 2 spaces, each a plain name written right against its colon, with no escape, tag, anchor or alias in the line, and not
+// left open at the end of it. `version` and `resolution` are each given once, hold a scalar, and are read from that one field;
+// a resolution of `workspace:` marks the project's own workspace. Deeper lines under any other field are passed over, since Yarn
+// takes the source only from `resolution`; a deeper line before any field or under `version` or `resolution`, or a line at 1
+// space, is not.
 function readBerryLine(entry, line) {
   if (line.trim() === "") return;
   const indent = leadingSpaces(line);
-  if (indent > 2 && entry.hasField) return;
-  const field = indent === 2 ? fieldOf(line.slice(2)) : null;
+  if (indent > 2) {
+    if (entry.field === null || BERRY_SCALAR_FIELDS.includes(entry.field)) entry.unreadable = true;
+    return;
+  }
   const text = line.slice(indent);
-  const odd = text.includes("\\") || (field && startsWithAny(field.value, YAML_NODE_PROPERTY));
-  if (!field || odd || !PLAIN_NAME.test(field.key)) {
+  const field = indent === 2 ? fieldOf(text) : null;
+  const shaped = field && PLAIN_NAME.test(field.key) && text.startsWith(`${field.key}:`);
+  if (!shaped || text.includes("\\") || startsWithAny(field.value, YAML_NODE_PROPERTY)) {
     entry.unreadable = true;
     return;
   }
-  entry.hasField = true;
-  if (field.key === "resolution") {
-    if (entry.resolutionSeen || !berryScalar(field.value)) entry.unreadable = true;
-    entry.resolutionSeen = true;
-  } else if (field.key === "version") {
-    if (!berryScalar(field.value)) entry.unreadable = true;
-  } else if (opensUnclosed(field.value)) entry.unreadable = true;
+  entry.field = field.key;
+  if (BERRY_SCALAR_FIELDS.includes(field.key)) readBerryScalar(entry, field);
+  else if (opensUnclosed(field.value)) entry.unreadable = true;
+}
+
+function readBerryScalar(entry, { key, value }) {
+  const given = key === "version" ? entry.version !== undefined : entry.origin !== undefined;
+  if (given || !berryScalar(value)) {
+    entry.unreadable = true;
+    return;
+  }
+  if (key === "version") {
+    entry.version = unquote(value);
+    return;
+  }
+  const resolution = unquote(value);
+  entry.origin = berrySource(resolution);
+  entry.workspace = (afterName(resolution) ?? "").startsWith("workspace:");
+}
+
+// A classic field: a plain name, one space and a double-quoted value with no escape or an unquoted one; or a plain name and a
+// colon opening the deeper lines below it.
+const CLASSIC_FIELD = /^ {2}([A-Za-z]+) ("[^"\\]*"|[^\s"]+)$/;
+const CLASSIC_BLOCK = /^ {2}[A-Za-z]+:$/;
+
+// A line of a classic entry, read only as Yarn writes one; any other shape, a backslash (Yarn decodes quoted strings as JSON) or a
+// tab anywhere in it, makes the entry's source one it cannot read. Deeper lines are passed over under a field that opens them.
+// The first `version` is read, and a later `resolved` replaces an earlier one.
+function readClassicLine(entry, line) {
+  if (line.trim() === "") return;
+  if (line.includes("\\") || line.includes("\t")) {
+    entry.unreadable = true;
+    return;
+  }
+  const indent = leadingSpaces(line);
+  if (indent > 2) {
+    if (!entry.inBlock || indent < 4) entry.unreadable = true;
+    return;
+  }
+  entry.inBlock = CLASSIC_BLOCK.test(line);
+  if (entry.inBlock) return;
+  const match = CLASSIC_FIELD.exec(line);
+  if (!match) entry.unreadable = true;
+  else if (match[1] === "version") entry.version ??= unquote(match[2]);
+  else if (match[1] === "resolved") entry.origin = addressSource(unquote(match[2]));
 }
 
 // Each entry runs from its header to the next header or the end of the file, so its source, on a line after its version, is
 // carried with it. A header that does not end in `:` is an entry it cannot name; an entry is never left out for lacking a version.
-// A Berry file is YAML, read only as Berry writes it: a lone carriage return or a tab makes it one it cannot read, a header in any
-// other shape is an entry it cannot name, and an entry line in any other shape makes its source one it cannot read.
+// A file with a `__metadata:` line is Berry, read by Berry's rules whatever else it holds; any other file must carry the classic
+// marker. Berry is YAML, read only as Berry writes it: a lone carriage return or a tab makes the file one it cannot read, a header
+// in any other shape is an entry it cannot name, and only an entry whose resolution is `workspace:` is skipped. A classic entry is
+// never skipped.
 function readYarnLock(text) {
   const lines = linesOf(text);
   const berry = lines.includes("__metadata:");
   if (!berry && !text.includes("# yarn lockfile v1")) throw new Unreadable("not a Yarn lockfile it can read");
   if (berry && LONE_CR_OR_TAB.test(text)) throw new Unreadable(YARN_LAYOUT);
-  const versionLine = berry ? /^ {2}version: "?([^"\s]+)"?$/ : /^ {2}version "([^"]+)"$/;
-  const sourceLine = berry ? "  resolution: " : "  resolved ";
-  const sourceOf = berry ? berrySource : addressSource;
+  const readLine = berry ? readBerryLine : readClassicLine;
   const out = [];
   let entry = null;
-  let entries = 0;
   const finish = () => {
-    if (!entry) return;
-    const origin = entry.unreadable ? UNREADABLE_ENTRY : entry.origin ?? noOrigin(entry);
-    out.push({ name: entry.name, line: entry.line, version: entry.version ?? null, ...origin });
+    if (entry && !(entry.workspace && !entry.unreadable)) {
+      const origin = entry.unreadable ? UNREADABLE_ENTRY : entry.origin ?? noOrigin(entry);
+      out.push({ name: entry.name, line: entry.line, version: entry.version ?? null, ...origin });
+    }
     entry = null;
   };
   lines.forEach((line, i) => {
-    if (/^[^\s#]/.test(line)) {
-      finish();
-      const spec = unquote(line.replace(/:$/, "").split(/,\s*/)[0]);
-      const skipped = spec === "__metadata" || spec.slice(spec.indexOf("@", 1)).includes("@workspace:");
-      const named = !skipped && line.endsWith(":") && !(berry && !berryHeaderReadable(line));
-      if (!skipped) entries++;
-      if (!skipped && !named) out.push(unnamedEntry(i + 1));
-      entry = named ? { name: yarnSpecName(spec), line: i + 1, unreadable: false, hasField: false, resolutionSeen: false } : null;
+    if (!/^[^\s#]/.test(line)) {
+      if (entry) readLine(entry, line);
       return;
     }
-    if (!entry) return;
-    if (berry) readBerryLine(entry, line);
-    const match = versionLine.exec(line);
-    if (match && entry.version === undefined) entry.version = match[1];
-    else if (line.startsWith(sourceLine)) entry.origin = sourceOf(unquote(line.slice(sourceLine.length)));
+    finish();
+    if (berry && line === "__metadata:") return;
+    const named = line.endsWith(":") && (!berry || berryHeaderReadable(line));
+    const spec = unquote(line.replace(/:$/, "").split(/,\s*/)[0]);
+    if (!named) out.push(unnamedEntry(i + 1));
+    else entry = { name: yarnSpecName(spec), line: i + 1, field: null, inBlock: false, workspace: false, unreadable: false };
   });
   finish();
-  return found(out, entries);
+  return out;
 }
 
 const PNPM_VERSIONS = ["6.0", "6.1", "9.0"];
