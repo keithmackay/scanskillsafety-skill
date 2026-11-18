@@ -273,7 +273,7 @@ function uvTable(value) {
 }
 
 // A uv `source`: exactly one kind, a string: an index (a folder when it has no `:`), a git repository with its commit after `#`,
-// one archive, a local path, or the project itself (`editable`, `virtual`).
+// one archive, a file or folder (local when it stays inside the project), or the project itself (`editable`, `virtual`).
 function uvSourceVerdict(value) {
   const fields = uvTable(value);
   const kinds = fields ? UV_SOURCE_KINDS.filter((kind) => fields.has(kind)) : [];
@@ -283,7 +283,7 @@ function uvSourceVerdict(value) {
   const address = fields.get(kind);
   if (fields.size !== 1 + extra || address.kind !== "string") return UNREADABLE;
   if (kind === "editable" || kind === "virtual") return PROJECT;
-  if (kind === "path" || kind === "directory") return LOCAL;
+  if (kind === "path" || kind === "directory") return staysInside(address.text) ? LOCAL : OUTSIDE_PROJECT;
   if (kind === "registry") return address.text.includes(":") ? classifySource("PyPI", address.text) : LOCAL;
   if (kind === "git") return classifySource("PyPI", gitRepositorySource(address.text, "").source);
   return classifySource("PyPI", address.text, { direct: true });
@@ -331,19 +331,19 @@ function fieldText(block, name) {
   return field.value.kind === "string" && field.value.plain ? field.value.text : null;
 }
 
-// What a finished block stands for: the project itself (skipped, `{ project: true }`), or an entry, null when a block that names
-// no source of its own has no version. A block in a shape the tool does not write is one it cannot read; one with no name it can
-// read is one it cannot name.
+// What a finished block stands for: the project itself (skipped, `{ project: true }`), or an entry. A block in a shape the tool
+// does not write, or with neither a version nor a source of its own, is one it cannot read; one with no name it can read is one
+// it cannot name.
 function blockEntry(block, format) {
   const name = fieldText(block, "name");
   const version = fieldText(block, "version");
   const origin = format.origin(block);
   const odd = format.foreignFields.some((field) => block.fields.has(field));
-  const unreadable = block.unreadable || odd || name === null || version === null;
+  const unversioned = version === undefined && origin === NO_SOURCE;
+  const unreadable = block.unreadable || odd || name === null || version === null || unversioned;
   if (origin === PROJECT && !unreadable) return PROJECT;
-  if (typeof name !== "string") return { entry: unnamedEntry(block.line) };
-  if (version === undefined && origin === NO_SOURCE && !unreadable) return { entry: null };
-  return { entry: { name, version: version ?? null, line: block.fields.get("name").line, ...(unreadable ? UNREADABLE_ENTRY : origin) } };
+  if (typeof name !== "string") return unnamedEntry(block.line);
+  return { name, version: version ?? null, line: block.fields.get("name").line, ...(unreadable ? UNREADABLE_ENTRY : origin) };
 }
 
 // A field of a block's own table, written as the tool writes one and given once, or the block is one it cannot read.
@@ -367,16 +367,13 @@ function readSourceField(block, { key, exact, value }) {
 function readPackageBlocks(text, format) {
   const layout = `not laid out as ${format.tool} writes it`;
   const out = [];
-  let entries = 0;
   let block = null;
   let table = "root";
   const finish = () => {
     if (!block) return;
-    const read = blockEntry(block, format);
+    const entry = blockEntry(block, format);
     block = null;
-    if (read === PROJECT) return;
-    entries++;
-    if (read.entry) out.push(read.entry);
+    if (entry !== PROJECT) out.push(entry);
   };
   for (const statement of tomlStatements(text, layout)) {
     if (statement.header) {
@@ -403,7 +400,7 @@ function readPackageBlocks(text, format) {
     else if (table === "source") readSourceField(block, statement);
   }
   finish();
-  return found(out, entries);
+  return out;
 }
 
 const readPoetryLock = (text) => readPackageBlocks(text, POETRY);

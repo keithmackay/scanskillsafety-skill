@@ -254,12 +254,13 @@ test("a lockfile with entries it cannot make out could not be read, rather than 
       { file: "a/pnpm-lock.yaml", reason: "a package source it could not read" },
       { file: "b/package-lock.json", reason: "no packages found in it" },
       { file: "c/package-lock.json", reason: "no packages found in it" },
-      { file: "poetry.lock", reason: "no packages found in it" },
+      { file: "poetry.lock", reason: "a package source it could not read" },
       { file: "requirements.txt", reason: "no pinned versions in it" },
     ],
     sourced: [
       { ecosystem: "npm", file: "yarn.lock", line: 3, name: null, version: null, kind: "unreadable", address: null },
       { ecosystem: "npm", file: "a/pnpm-lock.yaml", line: 5, name: null, version: null, kind: "unreadable", address: null },
+      { ecosystem: "PyPI", file: "poetry.lock", line: 2, name: "x", version: null, kind: "unreadable", address: null },
     ],
   });
 });
@@ -1313,4 +1314,26 @@ test("Python lockfiles built to make the reader backtrack or rescan are read qui
   quickly(() => readPackages([{ path: "uv.lock", text: `version = 1\nx = ${"[".repeat(200000)}\n` }]));
   quickly(() => readPackages([{ path: "poetry.lock", text: `[[package]]\nname = "${"\\\"".repeat(1000000)}"\n` }]));
   quickly(() => readPackages([{ path: "poetry.lock", text: "[[package]]\n".repeat(200000) }]));
+});
+
+test("poetry.lock: a block with no version and no source of its own is a source it could not read, kept with its name", () => {
+  const text = '[[package]]\nname = "a"\nversion = "1.0.0"\n\n[[package]]\nname = "B_c"\n';
+  assert.deepEqual(readPackages([{ path: "poetry.lock", text }]), {
+    ...EMPTY,
+    packages: [pypi("a", "1.0.0", "poetry.lock", 2)],
+    couldNotRead: [{ file: "poetry.lock", reason: UNREADABLE_SOURCE }],
+    sourced: [pypiSourced("b-c", null, "poetry.lock", 6, "unreadable", null)],
+  });
+});
+
+test("uv.lock: a path or directory source is local only while it stays inside the project", () => {
+  const inside = ['{ path = "dist/a-1.0.0.tar.gz" }', '{ directory = "packages/a" }', '{ directory = "packages/../a" }', '{ path = "." }'];
+  for (const source of inside) assert.deepEqual(readPackages([{ path: "uv.lock", text: uvLock(`source = ${source}`) }]), EMPTY, source);
+  const outside = ['{ path = "/home/someone/a-1.0.0.tar.gz" }', '{ directory = "../a" }', '{ directory = "packages/../../a" }', '{ path = "C:/a.whl" }', '{ directory = "~/a" }'];
+  for (const source of outside) {
+    assert.deepEqual(readPackages([{ path: "uv.lock", text: uvLock(`source = ${source}`) }]), {
+      ...EMPTY,
+      sourced: [pypiSourced("a", "1.0.0", "uv.lock", 5, "url", null, { text: "a path outside the project" })],
+    }, source);
+  }
 });
