@@ -12,6 +12,8 @@ const one = (filePath, fixtureName) => readPackages([{ path: filePath, text: fix
 const npm = (name, version, file, line) => ({ ecosystem: "npm", name, version, file, line });
 const pypi = (name, version, file, line) => ({ ecosystem: "PyPI", name, version, file, line });
 const EMPTY = { packages: [], namesOnly: [], couldNotRead: [], notChecked: [], sourced: [], notRecorded: [] };
+// The note for a lockfile that records no host for some packages, with no config naming a registry for them.
+const notRecorded = (file) => [{ file, ecosystem: "npm" }];
 
 test("package-lock.json version 1: every dependency, nested ones too, with the line naming it", () => {
   assert.deepEqual(one("package-lock.json", "package-lock.v1.json"), {
@@ -343,6 +345,7 @@ test("package-lock.json version 3 sources: the registry and entries recording no
   assert.deepEqual(one(file, "package-lock.v3.sources.json"), {
     ...EMPTY,
     packages: [npm("bundler", "2.0.0", file, 18), npm("bundled", "0.3.1", file, 26), npm("no-host", "1.0.0", file, 45)],
+    notRecorded: notRecorded(file),
     sourced: [
       sourced("left-pad", "1.3.0", file, 31, "git", "ssh://github.com/someone/left-pad.git", { commit: SHA1 }),
       sourced("local-thing", "1.0.0", file, 35, "bundled", "vendor/local-thing-1.0.0.tgz", { text: "a bundled package file the scan cannot read" }),
@@ -396,6 +399,7 @@ test("yarn.lock, Berry sources: npm: and a patch of an npm: package are checked;
   assert.deepEqual(one("app/yarn.lock", "yarn.berry.sources.lock"), {
     ...EMPTY,
     packages: [npm("js-tokens", "4.0.0", "app/yarn.lock", 8), npm("resolve", "1.22.1", "app/yarn.lock", 28)],
+    notRecorded: notRecorded("app/yarn.lock"),
     sourced: [
       sourced("left-pad", "1.3.0", "app/yarn.lock", 15, "git", "https://github.com/someone/left-pad.git", { commit: SHA1 }),
       sourced("tiny", "1.0.0", "app/yarn.lock", 43, "url", "https://files.example.com/tiny-1.0.0.tgz"),
@@ -561,6 +565,7 @@ test("pnpm-lock.yaml version 9 sources: integrity alone is checked; a mirror tar
   assert.deepEqual(one(file, "pnpm-lock.v9.sources.yaml"), {
     ...EMPTY,
     packages: [npm("js-tokens", "4.0.0", file, 39)],
+    notRecorded: notRecorded(file),
     sourced: [
       sourced("@scope/thing", "2.0.0", file, 35, "url", "https://files.example.com/thing-2.0.0.tgz"),
       sourced("left-pad", "1.3.0", file, 42, "git", "git@github.com:someone/left-pad.git", { commit: SHA1 }),
@@ -576,6 +581,7 @@ test("pnpm-lock.yaml version 6 sources: a github.com/u/r/<sha> key is git, named
   assert.deepEqual(one(file, "pnpm-lock.v6.sources.yaml"), {
     ...EMPTY,
     packages: [npm("chalk", "2.4.2", file, 17)],
+    notRecorded: notRecorded(file),
     sourced: [sourced("left-pad", "1.3.0", file, 22, "git", "https://github.com/someone/left-pad", { commit: SHA1 })],
   });
 });
@@ -619,6 +625,7 @@ test("pnpm-lock.yaml: a resolution on following lines is read up to the next fie
   assert.deepEqual(read, {
     ...EMPTY,
     packages: [npm("b", "1.0.0", "pnpm-lock.yaml", 14)],
+    notRecorded: notRecorded("pnpm-lock.yaml"),
     sourced: [sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "git", "https://github.com/u/a.git", { commit: SHA1 })],
   });
 });
@@ -657,7 +664,7 @@ test("pnpm-lock.yaml: a key with no name takes the entry's name line and is clas
 
 test("pnpm-lock.yaml: resolution fields named like built-in object properties are plain names; __proto__ is no plain name", () => {
   const read = pnpmRead("  a@1.0.0:", "    resolution: {constructor: y, hasOwnProperty: z, toString: w, integrity: sha512-x}");
-  assert.deepEqual(read, { ...EMPTY, packages: [npm("a", "1.0.0", "pnpm-lock.yaml", 5)] });
+  assert.deepEqual(read, { ...EMPTY, packages: [npm("a", "1.0.0", "pnpm-lock.yaml", 5)], notRecorded: notRecorded("pnpm-lock.yaml") });
   assert.deepEqual(pnpmRead("  a@1.0.0:", "    resolution: {__proto__: x, integrity: sha512-x}").sourced, [
     sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null),
   ]);
@@ -764,6 +771,7 @@ test("pnpm-lock.yaml version 6: a tarball key with no name line is a source it c
   assert.deepEqual(read, {
     ...EMPTY,
     packages: [npm("chalk", "2.4.2", "pnpm-lock.yaml", 5)],
+    notRecorded: notRecorded("pnpm-lock.yaml"),
     couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
     sourced: [unnamed(8), unnamed(12)],
   });
@@ -785,6 +793,7 @@ test("pnpm-lock.yaml: an entry whose name cannot be found is a source it could n
   assert.deepEqual(read, {
     ...EMPTY,
     packages: [npm("a", "1.0.0", "pnpm-lock.yaml", 5)],
+    notRecorded: notRecorded("pnpm-lock.yaml"),
     couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
     sourced: [unnamed(8), unnamed(12)],
   });
@@ -823,6 +832,7 @@ test("pnpm-lock.yaml: an entry or resolution in a shape pnpm does not write is a
   assert.deepEqual(read, {
     ...EMPTY,
     packages: [npm("d", "1.0.0", "pnpm-lock.yaml", 15)],
+    notRecorded: notRecorded("pnpm-lock.yaml"),
     couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
     sourced: [
       sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null),
@@ -930,7 +940,11 @@ test("pnpm-lock.yaml: YAML that pnpm does not write is a file or a source it cou
 
 test("pnpm-lock.yaml: the top level is plain names, a document start and empty collections only", () => {
   const text = "---\nlockfileVersion: '9.0'\n\nsettings:\n  autoInstallPeers: true\n\noverrides: {}\n\npackages:\n\n  a@1.0.0:\n    resolution: {integrity: sha512-x}\n";
-  assert.deepEqual(readPackages([{ path: "pnpm-lock.yaml", text }]), { ...EMPTY, packages: [npm("a", "1.0.0", "pnpm-lock.yaml", 11)] });
+  assert.deepEqual(readPackages([{ path: "pnpm-lock.yaml", text }]), {
+    ...EMPTY,
+    packages: [npm("a", "1.0.0", "pnpm-lock.yaml", 11)],
+    notRecorded: notRecorded("pnpm-lock.yaml"),
+  });
   for (const header of ["'packages':", '"packages":']) {
     const quoted = `lockfileVersion: '9.0'\n\n${header}\n\n  a@1.0.0:\n    resolution: {tarball: ${EVIL}}\n`;
     assert.deepEqual(readPackages([{ path: "pnpm-lock.yaml", text: quoted }]).couldNotRead, [{ file: "pnpm-lock.yaml", reason: PNPM_LAYOUT }], header);
@@ -970,7 +984,7 @@ test("yarn.lock, Berry: an escape, tag, anchor, alias, merge key or quoted field
 
 test("yarn.lock, Berry: lines below a field other than resolution are passed over, whatever YAML they hold", () => {
   const text = berryText('"a@npm:^1":', "  version: 1.0.0", '  resolution: "a@npm:1.0.0"', "  dependencies:", "    b: *x", '    "c\\u0020": &y "npm:^1"');
-  assert.deepEqual(readPackages([{ path: "yarn.lock", text }]), { ...EMPTY, packages: [npm("a", "1.0.0", "yarn.lock", 4)] });
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text }]), { ...EMPTY, packages: [npm("a", "1.0.0", "yarn.lock", 4)], notRecorded: notRecorded("yarn.lock") });
 });
 
 test("yarn.lock, Berry: a header Berry does not write is an entry it cannot name", () => {
@@ -981,7 +995,7 @@ test("yarn.lock, Berry: a header Berry does not write is an entry it cannot name
     assert.ok(!JSON.stringify(read).includes("evil"), header);
   }
   const plain = readPackages([{ path: "yarn.lock", text: berryText("a@npm:^1:", "  version: 1.0.0", '  resolution: "a@npm:1.0.0"') }]);
-  assert.deepEqual(plain, { ...EMPTY, packages: [npm("a", "1.0.0", "yarn.lock", 4)] });
+  assert.deepEqual(plain, { ...EMPTY, packages: [npm("a", "1.0.0", "yarn.lock", 4)], notRecorded: notRecorded("yarn.lock") });
 });
 
 test("yarn.lock, Berry: a version or resolution that is not a plain or double-quoted scalar on one line, or a field left open, is a source it could not read", () => {

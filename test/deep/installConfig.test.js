@@ -1,0 +1,574 @@
+"use strict";
+// ABOUTME: Tests reading the config files that redirect installs (.npmrc, .yarnrc, .yarnrc.yml, uv.toml, pyproject.toml, and
+// ABOUTME: pnpm-workspace.yaml folders), failing closed, and the note for a lockfile that records no registry.
+const { test } = require("node:test");
+const assert = require("node:assert/strict");
+const { readPackages } = require("../../src/deep/lockfiles");
+
+const EMPTY = { packages: [], namesOnly: [], couldNotRead: [], notChecked: [], sourced: [], notRecorded: [] };
+const UNREADABLE_SOURCE = "a package source it could not read";
+const lines = (...rows) => rows.join("\n");
+const read = (files, leftOut) => readPackages(files.map(([path, text]) => ({ path, text })), leftOut);
+const config = (ecosystem, file, line, kind, address, extra = {}) => ({ ecosystem, file, line, from: "config", kind, address, ...extra });
+const npmConfig = (file) => (line, kind, address, extra) => config("npm", file, line, kind, address, extra);
+const pypiConfig = (file) => (line, kind, address, extra) => config("PyPI", file, line, kind, address, extra);
+const hidden = (result, ...secrets) => {
+  const json = JSON.stringify(result);
+  for (const secret of secrets) assert.ok(!json.includes(secret), secret);
+};
+// A config file holding one line it cannot read, at `line`: reported as such, and once in couldNotRead.
+const assertUnreadableAt = (ecosystem, file, text, line, label = text) => {
+  const result = read([[file, text]]);
+  assert.deepEqual(result.sourced, [config(ecosystem, file, line, "unreadable", null)], label);
+  assert.deepEqual(result.couldNotRead, [{ file, reason: UNREADABLE_SOURCE }], label);
+};
+
+// .npmrc
+
+test(".npmrc: each key that names where packages come from, with its line; auth lines are never read", () => {
+  const text = lines(
+    "; a comment",
+    "# another",
+    "registry=https://npm.example.com/SECRET/",
+    "@myco:registry = https://npm.myco.example/",
+    "replace-registry-host=npm.mirror.example",
+    "omit-lockfile-registry-resolved=true",
+    "//npm.example.com/:_authToken=SECRET",
+    "_auth=SECRET",
+    "  _password = SECRET",
+    "email=someone@example.com",
+    "save-exact=true",
+  );
+  const at = npmConfig("app/.npmrc");
+  const result = read([["app/.npmrc", text]]);
+  assert.deepEqual(result, {
+    ...EMPTY,
+    sourced: [
+      at(3, "host", "https://npm.example.com"),
+      at(4, "host", "https://npm.myco.example", { scope: "@myco" }),
+      at(5, "host", "https://npm.mirror.example"),
+      at(6, "host", null, { text: "hides the registry from package-lock.json" }),
+    ],
+  });
+  hidden(result, "SECRET");
+});
+
+test(".npmrc: Windows line endings, spaces around =, and quoted values read the same", () => {
+  const at = npmConfig(".npmrc");
+  for (const text of [
+    "registry=https://npm.example.com\r\n@s:registry=https://s.example\r\n",
+    '  registry = "https://npm.example.com"  \n@s:registry=\'https://s.example\'\n',
+  ]) {
+    assert.deepEqual(read([[".npmrc", text]]).sourced, [at(1, "host", "https://npm.example.com"), at(2, "host", "https://s.example", { scope: "@s" })], text);
+  }
+});
+
+test(".npmrc: the official registry, and settings that redirect nothing, give no entry", () => {
+  const text = lines(
+    "registry=https://registry.npmjs.org/",
+    '@s:registry="https://registry.npmjs.org"',
+    "registry = 'https://registry.yarnpkg.com'",
+    "replace-registry-host=never",
+    "replace-registry-host=npmjs",
+    "replace-registry-host=always",
+    "replace-registry-host=registry.npmjs.org",
+    "omit-lockfile-registry-resolved=false",
+  );
+  assert.deepEqual(read([[".npmrc", text]]), EMPTY);
+});
+
+test(".npmrc: plain http is reported as http", () => {
+  assert.deepEqual(read([[".npmrc", "registry=http://npm.example.com/\n"]]).sourced, [npmConfig(".npmrc")(1, "http", "http://npm.example.com")]);
+});
+
+test(".npmrc: a line that sets a registry setting in a form it does not model is one it cannot read", () => {
+  const cases = [
+    ["registry=${NPM_REGISTRY}", 1],
+    ["@s:registry=https://${HOST}/", 1],
+    ["registry=https://x.example ;comment", 1],
+    ["registry=https://x.example #comment", 1],
+    ['registry="https://x.example', 1],
+    ["registry=https://x\\.example", 1],
+    ["registry[]=https://x.example", 1],
+    ["REGISTRY=https://x.example", 1],
+    ["replace_registry_host=x.example", 1],
+    ['"registry"=https://x.example', 1],
+    ["registry", 1],
+    ["registry=", 1],
+    ["[section]\nregistry=https://x.example", 2],
+    ["${KEY}=https://x.example", 1],
+    ["myco:registry=https://x.example", 1],
+    ["@my co:registry=https://x.example", 1],
+    ["replace-registry-host=https://x.example", 1],
+    ["replace-registry-host=", 1],
+    ["omit-lockfile-registry-resolved=yes", 1],
+    ["registry=git+https://x.example/r.git", 1],
+    ["registry=file:./mirror", 1],
+    ["registry=not a url", 1],
+    ["save=true\rregistry=${X}", 2],
+    ["registry#note=https://x.example", 1],
+    ["registry;note=https://x.example", 1],
+  ];
+  for (const [text, line] of cases) assertUnreadableAt("npm", ".npmrc", text, line);
+});
+
+// .yarnrc
+
+test(".yarnrc: the registry and a scope's registry, with their lines; auth lines are never read", () => {
+  const text = lines(
+    "# THIS IS AN AUTOGENERATED FILE.",
+    'registry "https://yarn.example.com/SECRET/"',
+    '"@myco:registry" "https://myco.example/" # mirror',
+    '"//yarn.example.com/:_authToken" "SECRET"',
+    "_authToken SECRET",
+    "network-timeout 600000",
+    'yarn-path ".yarn/releases/yarn-1.22.19.cjs"',
+  );
+  const at = npmConfig(".yarnrc");
+  const result = read([[".yarnrc", text]]);
+  assert.deepEqual(result, { ...EMPTY, sourced: [at(2, "host", "https://yarn.example.com"), at(3, "host", "https://myco.example", { scope: "@myco" })] });
+  hidden(result, "SECRET");
+});
+
+test(".yarnrc: the official registry gives no entry", () => {
+  assert.deepEqual(read([[".yarnrc", 'registry "https://registry.yarnpkg.com"\n"@s:registry" "https://registry.npmjs.org/"\n']]), EMPTY);
+});
+
+test(".yarnrc: a registry setting in a form it does not model is one it cannot read", () => {
+  const cases = [
+    ["registry https://x.example", 1],
+    ['registry "${REGISTRY}"', 1],
+    ['--registry "https://x.example"', 1],
+    ['--install.registry "https://x.example"', 1],
+    ['"registry" "https://x\\u002eexample"', 1],
+    ['@myco:registry "https://x.example"', 1],
+    ['registry: "https://x.example"', 1],
+    ['Registry "https://x.example"', 1],
+    ["registry", 1],
+    ['save-exact true\nregistry:\n  url "https://x.example"', 2],
+  ];
+  for (const [text, line] of cases) assertUnreadableAt("npm", ".yarnrc", text, line);
+});
+
+// .yarnrc.yml
+
+test(".yarnrc.yml: npmRegistryServer, a scope's server, npmRegistries keys and unsafeHttpWhitelist hosts; auth lines never read", () => {
+  const text = lines(
+    "yarnPath: .yarn/releases/yarn-4.1.0.cjs",
+    'npmRegistryServer: "https://berry.example.com/SECRET"',
+    "npmScopes:",
+    "  myco:",
+    "    npmRegistryServer: https://myco.example",
+    "    npmAuthToken: SECRET",
+    "npmRegistries:",
+    '  "https://reg.example.com":',
+    '    npmAuthToken: "SECRET"',
+    "    npmAlwaysAuth: true",
+    "  //other.example.com:",
+    "    npmAuthIdent: SECRET",
+    "unsafeHttpWhitelist:",
+    '  - "*.example.org"',
+    "  - localhost # for tests",
+    "packageExtensions:",
+    '  "react-dom@*":',
+    "    peerDependencies:",
+    '      react: "*"',
+    "nodeLinker: node-modules",
+  );
+  const at = npmConfig(".yarnrc.yml");
+  const result = read([[".yarnrc.yml", text]]);
+  assert.deepEqual(result, {
+    ...EMPTY,
+    sourced: [
+      at(2, "host", "https://berry.example.com"),
+      at(5, "host", "https://myco.example", { scope: "@myco" }),
+      at(8, "host", "https://reg.example.com"),
+      at(11, "host", "https://other.example.com"),
+      at(14, "http", "http://*.example.org"),
+      at(15, "http", "http://localhost"),
+    ],
+  });
+  hidden(result, "SECRET");
+});
+
+test(".yarnrc.yml: other ways YAML writes the same keys read the same", () => {
+  const at = npmConfig(".yarnrc.yml");
+  const cases = [
+    ["npmRegistryServer: 'https://x.example'", [at(1, "host", "https://x.example")]],
+    ['"npmRegistryServer": "https://x.example" # mirror', [at(1, "host", "https://x.example")]],
+    ["npmRegistryServer : https://x.example", [at(1, "host", "https://x.example")]],
+    ["---\nnpmRegistryServer: https://x.example\r\n", [at(2, "host", "https://x.example")]],
+    ["unsafeHttpWhitelist:\n- localhost\nnodeLinker: pnp", [at(2, "http", "http://localhost")]],
+    ["npmScopes: {}\nunsafeHttpWhitelist: []\nnpmRegistries: {}", []],
+    ["npmScopes:\n    myco:\n        npmRegistryServer: https://x.example\n    other:\n        npmPublishRegistry: https://p.example", [at(3, "host", "https://x.example", { scope: "@myco" })]],
+  ];
+  for (const [text, sourced] of cases) assert.deepEqual(read([[".yarnrc.yml", text]]), { ...EMPTY, sourced }, text);
+});
+
+test(".yarnrc.yml: the official registry gives no entry", () => {
+  const text = 'npmRegistryServer: "https://registry.yarnpkg.com"\nnpmScopes:\n  s:\n    npmRegistryServer: https://registry.npmjs.org\n';
+  assert.deepEqual(read([[".yarnrc.yml", text]]), EMPTY);
+});
+
+test(".yarnrc.yml: YAML it does not model where a registry can be named is one it cannot read", () => {
+  const cases = [
+    ["npmRegistryServer: &a https://x.example", 1],
+    ["npmRegistryServer: *a", 1],
+    ["npmRegistryServer: !!str https://x.example", 1],
+    ["npmRegistryServer: |\n  https://x.example", 1],
+    ["npmRegistryServer: >-\n  https://x.example", 1],
+    ["npmRegistryServer:\n  https://x.example", 1],
+    ["npmRegistryServer: https://x.example\n  .evil.example", 2],
+    ['npmRegistryServer: "https://x\\u002eexample"', 1],
+    ['"npmRegistry\\u0053erver": https://x.example', 1],
+    ['npmRegistryServer: "${NPM_REGISTRY:-https://x.example}"', 1],
+    ["npmRegistryServer: {url: x}", 1],
+    ["npmRegistryServer: 'https://x.example", 1],
+    ['npmScopes: {myco: {npmRegistryServer: "https://x.example"}}', 1],
+    ['npmScopes:\n  myco: {npmRegistryServer: "https://x.example"}', 2],
+    ["npmScopes:\n  myco:\n    npmRegistryServer:\n      https://x.example", 3],
+    ["npmScopes:\n  myco:\n     npmRegistryServer: https://x.example\n    npmAlwaysAuth: true", 4],
+    ["npmScopes:\n  myco:\n    npmRegistryServer: https://x.example\n      more: x", 4],
+    ["npmScopes:\n  &s myco:\n    npmRegistryServer: https://x.example", 2],
+    ["npmRegistries:\n  ? https://x.example\n  : {}", 2],
+    ["unsafeHttpWhitelist: [x.example]", 1],
+    ["unsafeHttpWhitelist:\n  - *.example.org", 2],
+    ["unsafeHttpWhitelist:\n  - a: b", 2],
+    ["unsafeHttpWhitelist:\n  - ${HOST}", 2],
+    ["unsafeHttpWhitelist:\n  - x.example/path", 2],
+    ["\tnpmRegistryServer: https://x.example", 1],
+    ["nodeLinker: pnp\rnpmRegistryServer: https://x.example", 1],
+    ["<<: *defaults", 1],
+    ["? npmRegistryServer\n: https://x.example", 1],
+    ["%YAML 1.2\n---\nnodeLinker: pnp", 1],
+    ["- npmRegistryServer", 1],
+    ["nodeLinker: pnp\n---\nnpmRegistryServer: https://x.example", 2],
+    ["npmRegistryServer:x", 1],
+  ];
+  for (const [text, line] of cases) assertUnreadableAt("npm", ".yarnrc.yml", text, line);
+});
+
+// uv.toml and pyproject.toml
+
+test("uv.toml: index-url, extra-index-url, find-links and [[index]] urls; PyPI's index gives nothing; a folder of archives is bundled", () => {
+  const text = lines(
+    'index-url = "https://uv.example.com/simple"',
+    'extra-index-url = ["https://pypi.org/simple", "https://user:SECRET@extra.example.com/simple"]',
+    "find-links = [",
+    '  "./wheels",',
+    '  "https://pypi.org/simple/x/",',
+    "]",
+    "",
+    "[[index]]",
+    'name = "torch"',
+    'url = "https://download.pytorch.org/whl/cpu"',
+    "",
+    "[[index]]",
+    'name = "flat"',
+    'url = "https://flat.example.com/links"',
+    'format = "flat"',
+    "",
+    "[[index]]",
+    'url = "https://pypi.org/simple"',
+    "cache-control = { api = \"max-age=600\" }",
+  );
+  const at = pypiConfig("svc/uv.toml");
+  const result = read([["svc/uv.toml", text]]);
+  assert.deepEqual(result, {
+    ...EMPTY,
+    sourced: [
+      at(1, "host", "https://uv.example.com"),
+      at(2, "host", "https://extra.example.com"),
+      at(4, "bundled", "svc/wheels", { text: "a bundled package file the scan cannot read" }),
+      at(5, "host", "https://pypi.org"),
+      at(10, "host", "https://download.pytorch.org"),
+      at(14, "host", "https://flat.example.com"),
+    ],
+  });
+  hidden(result, "SECRET");
+});
+
+test("uv.toml: an index set from an environment variable is reported as one", () => {
+  assert.deepEqual(read([["uv.toml", 'index-url = "${UV_MIRROR}/simple"\n']]).sourced, [
+    pypiConfig("uv.toml")(1, "host", null, { text: "an index set from an environment variable" }),
+  ]);
+});
+
+test("uv.toml: an index setting in a shape uv does not take is one it cannot read", () => {
+  const cases = [
+    ["index-url = 1", 1],
+    ['index-url = """https://x.example/simple"""', 1],
+    ['index-url = ["https://x.example/simple"]', 1],
+    ['extra-index-url = "https://x.example/simple"', 1],
+    ["extra-index-url = [1]", 1],
+    ['find-links = ["https://x.example", { url = "y" }]', 1],
+    ['index-url.x = "https://x.example/simple"', 1],
+    ['[index]\nurl = "https://x.example/simple"', 2],
+    ['[[index]]\nname = "x"', 2],
+    ['[[index]]\nurl = { a = "https://x.example" }', 2],
+    ['index = ["https://x.example/simple"]', 1],
+    ['index = [{ name = "x" }]', 1],
+    ['index-url = "https://x.example/\\q"', 1],
+  ];
+  for (const [text, line] of cases) assertUnreadableAt("PyPI", "uv.toml", text, line);
+});
+
+test("uv.toml that is not TOML it can read could not be read", () => {
+  assert.deepEqual(read([["uv.toml", 'index-url = "https://x.example\n']]), { ...EMPTY, couldNotRead: [{ file: "uv.toml", reason: "not TOML it can read" }] });
+});
+
+test("pyproject.toml: [tool.uv], [[tool.uv.index]], [[tool.poetry.source]] and [[tool.pdm.source]] are read even with a lockfile", () => {
+  const text = lines(
+    "[project]",
+    'name = "t"',
+    'dependencies = ["httpx"]',
+    "",
+    "[tool.uv]",
+    'index-url = "https://uv.example.com/simple"',
+    'find-links = ["wheels"]',
+    "",
+    "[[tool.uv.index]]",
+    'name = "torch"',
+    'url = "https://download.pytorch.org/whl/cpu"',
+    "",
+    "[[tool.poetry.source]]",
+    'name = "PyPI"',
+    'priority = "primary"',
+    "",
+    "[[tool.poetry.source]]",
+    'name = "corp"',
+    'url = "https://poetry.example.com/simple/"',
+    'priority = "supplemental"',
+    "",
+    "[[tool.pdm.source]]",
+    'name = "local"',
+    'url = "file:///${PROJECT_ROOT}/dist"',
+    'type = "find_links"',
+    "",
+    "[[tool.pdm.source]]",
+    'name = "pypi"',
+    'url = "https://pdm.example.com/simple"',
+  );
+  const uvLock = 'version = 1\n\n[[package]]\nname = "httpx"\nversion = "0.27.0"\nsource = { registry = "https://pypi.org/simple" }\n';
+  const at = pypiConfig("pyproject.toml");
+  const result = read([["pyproject.toml", text], ["uv.lock", uvLock]]);
+  assert.deepEqual(result, {
+    ...EMPTY,
+    packages: [{ ecosystem: "PyPI", name: "httpx", version: "0.27.0", file: "uv.lock", line: 4 }],
+    sourced: [
+      at(6, "host", "https://uv.example.com"),
+      at(7, "bundled", "wheels", { text: "a bundled package file the scan cannot read" }),
+      at(11, "host", "https://download.pytorch.org"),
+      at(19, "host", "https://poetry.example.com"),
+      at(24, "bundled", "dist", { text: "a bundled package file the scan cannot read" }),
+      at(29, "host", "https://pdm.example.com"),
+    ],
+  });
+});
+
+test("pyproject.toml with no lockfile: a named index is reported for the dependency and for the config", () => {
+  const text = lines(
+    "[project]",
+    'dependencies = ["torch"]',
+    "[tool.uv.sources]",
+    'torch = { index = "torch" }',
+    "[[tool.uv.index]]",
+    'name = "torch"',
+    'url = "https://download.pytorch.org/whl/cpu"',
+  );
+  assert.deepEqual(read([["pyproject.toml", text]]).sourced, [
+    { ecosystem: "PyPI", file: "pyproject.toml", line: 4, name: "torch", version: null, kind: "host", address: "https://download.pytorch.org" },
+    pypiConfig("pyproject.toml")(7, "host", "https://download.pytorch.org"),
+  ]);
+});
+
+test("pyproject.toml: a source table in a shape the tools do not take is one it cannot read", () => {
+  const cases = [
+    ['[tool.poetry.source]\nname = "x"\nurl = "https://x.example/simple"', 2],
+    ['[[tool.poetry.source]]\nname = "corp"', 2],
+    ['[[tool.pdm.source]]\nname = "x"\nurl = "https://x.example/simple"\ntype = "other"', 3],
+    ['[[tool.pdm.source]]\nname = "x"', 2],
+    ['[tool.uv]\nextra-index-url = "https://x.example/simple"', 2],
+    ['[tool.uv.index]\nurl = "https://x.example/simple"', 2],
+  ];
+  for (const [text, line] of cases) assertUnreadableAt("PyPI", "pyproject.toml", text, line);
+});
+
+test("pip.conf is not read", () => {
+  assert.deepEqual(read([["pip.conf", "[global]\nindex-url = https://pip.example.com/simple\n"]]), EMPTY);
+});
+
+// pnpm-workspace.yaml
+
+test("pnpm-workspace.yaml: packages folders outside the repository are reported when there is no pnpm lockfile", () => {
+  const text = lines(
+    "packages:",
+    "  - 'packages/*'",
+    '  - "../outside/*"',
+    "  - apps/**",
+    "  - '!**/test/**'",
+    "catalog:",
+    "  react: ^18.2.0",
+  );
+  const outside = { ecosystem: "npm", file: "pnpm-workspace.yaml", line: 3, name: null, version: null, kind: "url", address: null, text: "a path outside the project" };
+  assert.deepEqual(read([["pnpm-workspace.yaml", text]]), { ...EMPTY, sourced: [outside] });
+  const lock = "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n";
+  assert.deepEqual(read([["pnpm-workspace.yaml", text], ["pnpm-lock.yaml", lock]]), EMPTY);
+  assert.deepEqual(read([["pnpm-workspace.yaml", text]], [{ path: "pnpm-lock.yaml", reason: "larger than 5 MB" }]).sourced, []);
+});
+
+test("pnpm-workspace.yaml: packages in a shape it does not model is one it cannot read", () => {
+  const unread = (line) => ({ ecosystem: "npm", file: "pnpm-workspace.yaml", line, name: null, version: null, kind: "unreadable", address: null });
+  const cases = [
+    ["packages: ['a', '../b']", 1],
+    ["packages:\n  - *outside", 2],
+    ["packages:\n  - a: b", 2],
+    ["packages: ../b", 1],
+    ["packages:\n  - |\n    ../b", 2],
+    ["packages:\n\t- ../b", 2],
+  ];
+  for (const [text, line] of cases) {
+    const result = read([["pnpm-workspace.yaml", text]]);
+    assert.deepEqual(result.sourced, [unread(line)], text);
+    assert.deepEqual(result.couldNotRead, [{ file: "pnpm-workspace.yaml", reason: UNREADABLE_SOURCE }], text);
+  }
+});
+
+// Files left out
+
+test("a config file or manifest left out of the file list is reported as not checked", () => {
+  const leftOut = [
+    { path: ".npmrc", reason: "larger than 5 MB" },
+    { path: "package.json", reason: "larger than 5 MB" },
+    { path: "a/pyproject.toml", reason: "symbolic link, not followed" },
+    { path: ".yarnrc", reason: "larger than 5 MB" },
+    { path: ".yarnrc.yml", reason: "larger than 5 MB" },
+    { path: "uv.toml", reason: "larger than 5 MB" },
+    { path: "pnpm-workspace.yaml", reason: "larger than 5 MB" },
+    { path: "node_modules/x/.npmrc", reason: "larger than 5 MB" },
+  ];
+  assert.deepEqual(read([], leftOut).couldNotRead, [
+    { file: ".npmrc", reason: "larger than 5 MB, not checked" },
+    { file: "package.json", reason: "larger than 5 MB, not checked" },
+    { file: "a/pyproject.toml", reason: "symbolic link, not followed, not checked" },
+    { file: ".yarnrc", reason: "larger than 5 MB, not checked" },
+    { file: ".yarnrc.yml", reason: "larger than 5 MB, not checked" },
+    { file: "uv.toml", reason: "larger than 5 MB, not checked" },
+    { file: "pnpm-workspace.yaml", reason: "larger than 5 MB, not checked" },
+  ]);
+});
+
+test("config files in vendored folders are not read", () => {
+  assert.deepEqual(read([["node_modules/x/.npmrc", "registry=https://x.example\n"], ["vendor/.yarnrc.yml", "npmRegistryServer: https://x.example\n"]]), EMPTY);
+});
+
+// Registry not recorded
+
+const npmLock = (packages) => JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" }, ...packages } }, null, 2);
+const NO_RESOLVED = npmLock({ "node_modules/a": { version: "1.0.0" }, "node_modules/@myco/b": { version: "2.0.0" } });
+const BERRY = lines(
+  "__metadata:",
+  "  version: 8",
+  "",
+  '"a@npm:^1.0.0":',
+  "  version: 1.0.0",
+  '  resolution: "a@npm:1.0.0"',
+);
+const PNPM = "lockfileVersion: '9.0'\n\npackages:\n\n  a@1.0.0:\n    resolution: {integrity: sha512-x}\n";
+const NOTE = (file) => ({ file, ecosystem: "npm" });
+
+test("registry not recorded: with no config, a lockfile that records no host gets a note; its packages still go to OSV", () => {
+  const result = read([["app/package-lock.json", NO_RESOLVED], ["yarn.lock", BERRY], ["p/pnpm-lock.yaml", PNPM]]);
+  assert.deepEqual(result.notRecorded, [NOTE("app/package-lock.json"), NOTE("yarn.lock"), NOTE("p/pnpm-lock.yaml")]);
+  assert.deepEqual(result.packages.map((p) => p.name), ["a", "@myco/b"]);
+  assert.deepEqual(result.sourced, []);
+});
+
+test("registry not recorded: a config in the lockfile's folder or above naming a mirror covers it, with the config entry", () => {
+  const files = [
+    ["app/package-lock.json", NO_RESOLVED],
+    ["p/pnpm-lock.yaml", PNPM],
+    [".npmrc", "registry=https://mirror.example.com/\n"],
+    ["yarn.lock", BERRY],
+    [".yarnrc.yml", "npmRegistryServer: https://berry.example.com\n"],
+  ];
+  const result = read(files);
+  assert.deepEqual(result.notRecorded, []);
+  assert.deepEqual(result.packages.map((p) => p.name), ["a", "@myco/b"]);
+  assert.deepEqual(result.sourced, [npmConfig(".npmrc")(1, "host", "https://mirror.example.com"), npmConfig(".yarnrc.yml")(1, "host", "https://berry.example.com")]);
+});
+
+test("registry not recorded: a config naming the official registry gives neither a note nor an entry", () => {
+  const files = [
+    ["package-lock.json", NO_RESOLVED],
+    [".npmrc", "registry=https://registry.npmjs.org/\n"],
+    ["yarn.lock", BERRY],
+    [".yarnrc.yml", 'npmRegistryServer: "https://registry.yarnpkg.com"\n'],
+  ];
+  const result = read(files);
+  assert.deepEqual([result.notRecorded, result.sourced], [[], []]);
+});
+
+test("registry not recorded: a config elsewhere, a config of the other tool, or a scope's registry alone does not cover it", () => {
+  assert.deepEqual(read([["app/package-lock.json", NO_RESOLVED], ["other/.npmrc", "registry=https://m.example\n"]]).notRecorded, [NOTE("app/package-lock.json")]);
+  assert.deepEqual(read([["yarn.lock", BERRY], [".npmrc", "registry=https://m.example\n"]]).notRecorded, [NOTE("yarn.lock")]);
+  assert.deepEqual(read([["package-lock.json", NO_RESOLVED], [".npmrc", "@myco:registry=https://m.example\n"]]).notRecorded, [NOTE("package-lock.json")]);
+  const yml = "npmScopes:\n  myco:\n    npmRegistryServer: https://m.example\n";
+  assert.deepEqual(read([["yarn.lock", BERRY], [".yarnrc.yml", yml]]).notRecorded, [NOTE("yarn.lock")]);
+});
+
+test("registry not recorded: a scope's registry covers a lockfile whose unrecorded packages are all in that scope", () => {
+  const scoped = npmLock({ "node_modules/@myco/b": { version: "2.0.0" }, "node_modules/c": { version: "1.0.0", resolved: "https://registry.npmjs.org/c/-/c-1.0.0.tgz" } });
+  assert.deepEqual(read([["package-lock.json", scoped], [".npmrc", "@myco:registry=https://m.example\n"]]).notRecorded, []);
+});
+
+test("registry not recorded: a registry line it cannot read covers the lockfile, since it is reported itself", () => {
+  const result = read([["package-lock.json", NO_RESOLVED], [".npmrc", "registry=${NPM_REGISTRY}\n"]]);
+  assert.deepEqual(result.notRecorded, []);
+  assert.deepEqual(result.sourced, [npmConfig(".npmrc")(1, "unreadable", null)]);
+});
+
+test("registry not recorded: npm entries that are bundled or linked, and lockfiles that record every host, get no note", () => {
+  const bundledOnly = npmLock({
+    "node_modules/a": { version: "1.0.0", resolved: "https://registry.npmjs.org/a/-/a-1.0.0.tgz" },
+    "node_modules/a/node_modules/b": { version: "1.0.0", inBundle: true },
+    "node_modules/w": { link: true, resolved: "packages/w" },
+  });
+  const result = read([["package-lock.json", bundledOnly]]);
+  assert.deepEqual([result.notRecorded, result.packages.map((p) => p.name)], [[], ["a", "b"]]);
+  const classic = '# yarn lockfile v1\n\na@^1.0.0:\n  version "1.0.0"\n  resolved "https://registry.yarnpkg.com/a/-/a-1.0.0.tgz#abc"\n';
+  assert.deepEqual(read([["yarn.lock", classic]]).notRecorded, []);
+});
+
+test("registry not recorded: omit-lockfile-registry-resolved is reported and does not cover the lockfile", () => {
+  const result = read([["package-lock.json", NO_RESOLVED], [".npmrc", "omit-lockfile-registry-resolved=true\n"]]);
+  assert.deepEqual(result.notRecorded, [NOTE("package-lock.json")]);
+  assert.deepEqual(result.sourced, [npmConfig(".npmrc")(1, "host", null, { text: "hides the registry from package-lock.json" })]);
+});
+
+// Hostile input
+
+const quickly = (fn, ms = 5000) => {
+  const start = Date.now();
+  const value = fn();
+  const took = Date.now() - start;
+  assert.ok(took < ms, `took ${took} ms`);
+  return value;
+};
+
+test("config files with lines millions of characters long, or nested 2,000 levels deep, are read quickly", () => {
+  const long = "x".repeat(4 * 1024 * 1024);
+  quickly(() => read([[".npmrc", `registry=https://${long}`], [".yarnrc", `registry "${long}`], [".yarnrc.yml", `npmRegistryServer: "${long}`]]));
+  quickly(() => read([[".npmrc", `[${" ".repeat(4 * 1024 * 1024)}x`], [".yarnrc.yml", `unsafeHttpWhitelist:\n  - ${long} #${long}`]]));
+  const deep = ["npmScopes:", ...Array.from({ length: 2000 }, (_, i) => `${" ".repeat(2 * (i + 1))}s${i}:`)].join("\n");
+  assert.deepEqual(quickly(() => read([[".yarnrc.yml", deep]])).sourced, [config("npm", ".yarnrc.yml", 3, "unreadable", null)]);
+  const many = ["packages:", ...Array.from({ length: 50000 }, (_, i) => `  - "../p${i}"`)].join("\n");
+  assert.equal(quickly(() => read([["pnpm-workspace.yaml", many]])).sourced.length, 50000);
+});
+
+test("keys named like built-in object properties are plain names", () => {
+  const npmrc = "__proto__=https://x.example\nconstructor=https://x.example\n@s:registry=https://s.example\n";
+  assert.deepEqual(read([[".npmrc", npmrc]]).sourced, [npmConfig(".npmrc")(3, "host", "https://s.example", { scope: "@s" })]);
+  const yml = "__proto__:\n  npmRegistryServer: https://x.example\nnpmScopes:\n  __proto__:\n    npmRegistryServer: https://p.example\n";
+  assert.deepEqual(read([[".yarnrc.yml", yml]]).sourced, [npmConfig(".yarnrc.yml")(5, "host", "https://p.example", { scope: "@__proto__" })]);
+});

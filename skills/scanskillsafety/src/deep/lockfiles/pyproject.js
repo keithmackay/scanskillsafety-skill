@@ -1,17 +1,18 @@
-// ABOUTME: Reads a pyproject.toml for a target with no uv or Poetry lockfile: the names sent to OSV, and every dependency, source
-// ABOUTME: and workspace member from outside the registry or the repository, with its line, in any TOML layout; fails closed.
+// ABOUTME: Reads a pyproject.toml: with no uv or Poetry lockfile, the names sent to OSV and every dependency, source and workspace
+// ABOUTME: member from outside the registry or the repository; always, its uv, Poetry and PDM index settings; fails closed.
 "use strict";
 
 const { OBJECT_ID } = require("../util");
 const { EXPECTED, LOCAL, UNREADABLE } = require("../packageSources");
-const { manifestEntries, normalisePyPI, unnamedEntry, unreadableNamed, workspaceEntries } = require("./shared");
+const { configEntry, manifestEntries, normalisePyPI, unnamedEntry, unreadableNamed, workspaceEntries } = require("./shared");
 const { tomlStatements } = require("./toml");
 const { pythonAddress } = require("./python");
-const { addressEntries, specifierEntries, splitName } = require("./requirements");
+const { addressEntries, ENV_INDEX, specifierEntries, splitName } = require("./requirements");
 
 const NAMED_INDEX = Object.freeze({ expected: false, kind: "host", address: null, text: "a named index" });
 
 const TOML_LAYOUT = "not TOML it can read";
+const withoutBom = (text) => (text.startsWith("\uFEFF") ? text.slice(1) : text);
 const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 const WHITESPACE = /\s/;
 
@@ -222,25 +223,121 @@ const poetryVerdict = (fields, folder, indexes) =>
     },
   });
 
-// The indexes a file names by name, `[[tool.uv.index]]` or `[[tool.poetry.source]]`, as tables or as an array of inline tables.
-function namedIndexes(values, prefix) {
+// The tables of an array of tables at `prefix`, written as `[[…]]` tables or as an array of inline tables: each its fields by name
+// (null for an item that is not an inline table of single names), the line it starts on, and the names of fields with values
+// nested below them. `badLine` is the line of the first value at the prefix in any other shape, or null.
+function arrayTables(values, prefix) {
   const tables = new Map();
+  let badLine = null;
   for (const { path, value } of values) {
     const rest = after(path, prefix);
     if (rest === null) continue;
     if (rest.length === 0 && value.kind === "array") {
-      value.items.forEach((item, k) => tables.set(`item${k}`, tableFields(item) ?? new Map()));
-    } else if (rest.length === 2 && typeof rest[0] === "number" && typeof rest[1] === "string") {
-      if (!tables.has(rest[0])) tables.set(rest[0], new Map());
-      tables.get(rest[0]).set(rest[1], value);
+      value.items.forEach((item, k) => tables.set(`item${k}`, { fields: tableFields(item), line: item.line, nested: new Set() }));
+    } else if (rest.length >= 2 && typeof rest[0] === "number" && typeof rest[1] === "string") {
+      if (!tables.has(rest[0])) tables.set(rest[0], { fields: new Map(), line: value.line, nested: new Set() });
+      const table = tables.get(rest[0]);
+      if (rest.length > 2) table.nested.add(rest[1]);
+      else table.fields.set(rest[1], value);
+    } else badLine ??= value.line;
+  }
+  return { tables: [...tables.values()], badLine };
+}
+
+// The indexes a file names by name, `[[tool.uv.index]]` or `[[tool.poetry.source]]`, as tables or as an array of inline tables.
+function namedIndexes(values, prefix) {
+  return arrayTables(values, prefix).tables.map(({ fields: given }) => {
+    const fields = given ?? new Map();
+    return {
+      name: fields.has("name") ? stringOf(fields.get("name")) : null,
+      url: fields.has("url") ? stringOf(fields.get("url")) : null,
+      flat: fields.has("format") && stringOf(fields.get("format")) === "flat",
+    };
+  });
+}
+
+// Config settings that name where packages come from.
+
+// An index or find-links address a setting names, `role` saying which: one set from an environment variable is said to be so;
+// PDM's and Hatch's project folder is read as a path; a path inside the repository is a folder of archives; PyPI's index gives
+// nothing.
+function configAddressEntries(address, line, folder, role) {
+  const relative = projectRelative(address);
+  if (relative.includes("${")) return [configEntry(line, ENV_INDEX)];
+  const verdict = pythonAddress(relative, folder, { pathField: true, role });
+  return verdict.expected ? [] : [configEntry(line, verdict)];
+}
+
+// uv's settings that name an index or a find-links page: one address, or a list of them.
+const UV_ADDRESS_SETTINGS = new Map([
+  ["index-url", { role: "index", list: false }],
+  ["extra-index-url", { role: "index", list: true }],
+  ["find-links", { role: "find-links", list: true }],
+]);
+
+// uv's index-url, extra-index-url and find-links at `prefix` (the top of uv.toml, [tool.uv] in pyproject.toml); a setting that is
+// not a string, or a list of strings where uv takes one, is one it cannot read.
+function uvSettingEntries(values, prefix, folder) {
+  const out = [];
+  for (const { path, value } of values) {
+    const rest = after(path, prefix);
+    if (rest === null || !UV_ADDRESS_SETTINGS.has(rest[0])) continue;
+    const { role, list } = UV_ADDRESS_SETTINGS.get(rest[0]);
+    const items = list && value.kind === "array" ? value.items : [value];
+    const addresses = items.map(stringOf);
+    const shaped = rest.length === 1 && list === (value.kind === "array") && addresses.every((address) => address !== null);
+    if (!shaped) out.push(configEntry(value.line, UNREADABLE));
+    else items.forEach((item, k) => out.push(...configAddressEntries(addresses[k], item.line, folder, role)));
+  }
+  return out;
+}
+
+// The url of each table at `prefix` (uv's indexes, Poetry's and PDM's sources), read as what the table says it is (`roleOf`: an
+// index or a find-links page, or null for a kind the tool does not take). A table with no url is one it cannot read unless the
+// tool needs none for it (`urlOptional`); a malformed section is one it cannot read, once.
+function sourceTableEntries(values, prefix, folder, { roleOf, urlOptional = () => false }) {
+  const { tables, badLine } = arrayTables(values, prefix);
+  const out = badLine === null ? [] : [configEntry(badLine, UNREADABLE)];
+  for (const { fields, line, nested } of tables) {
+    const url = fields?.get("url");
+    const urlLine = url?.line ?? line;
+    if (fields === null || nested.has("url")) out.push(configEntry(urlLine, UNREADABLE));
+    else if (url === undefined) {
+      if (!urlOptional(fields)) out.push(configEntry(line, UNREADABLE));
+    } else {
+      const role = roleOf(fields);
+      const address = stringOf(url);
+      if (role === null || address === null) out.push(configEntry(urlLine, UNREADABLE));
+      else out.push(...configAddressEntries(address, urlLine, folder, role));
     }
   }
-  return [...tables.values()].map((fields) => ({
-    name: fields.has("name") ? stringOf(fields.get("name")) : null,
-    url: fields.has("url") ? stringOf(fields.get("url")) : null,
-    flat: fields.has("format") && stringOf(fields.get("format")) === "flat",
-  }));
+  return out;
 }
+
+// What a table's field names it as, by its value: `kinds` maps each value the tool takes to a role; with no field, `absent`.
+const roleByField = (field, kinds, absent) => (fields) => {
+  if (!fields.has(field)) return absent;
+  return kinds.get(stringOf(fields.get(field))) ?? null;
+};
+
+const UV_INDEX_ROLE = roleByField("format", new Map([["simple", "index"], ["flat", "find-links"]]), "index");
+const PDM_SOURCE_ROLE = roleByField("type", new Map([["index", "index"], ["find_links", "find-links"]]), "index");
+
+// uv's settings and indexes at `prefix`: the top of uv.toml, or [tool.uv] in pyproject.toml.
+const uvConfigEntries = (values, prefix, folder) => [
+  ...uvSettingEntries(values, prefix, folder),
+  ...sourceTableEntries(values, [...prefix, "index"], folder, { roleOf: UV_INDEX_ROLE }),
+];
+
+// pyproject.toml's settings that name where packages come from: uv's, Poetry's sources (one named PyPI needs no url) and PDM's.
+const pyprojectConfigEntries = (values, folder) => [
+  ...uvConfigEntries(values, ["tool", "uv"], folder),
+  ...sourceTableEntries(values, ["tool", "poetry", "source"], folder, {
+    roleOf: () => "index",
+    urlOptional: (fields) => fields.has("name") && stringOf(fields.get("name"))?.toLowerCase() === "pypi",
+  }),
+  ...sourceTableEntries(values, ["tool", "pdm", "source"], folder, { roleOf: PDM_SOURCE_ROLE }),
+];
 
 const PROJECT_DEPENDENCIES = ["project", "dependencies"];
 const OPTIONAL_DEPENDENCIES = ["project", "optional-dependencies"];
@@ -371,9 +468,9 @@ function workspaceMemberEntries(value, folder) {
 // dependencies and PDM's dev-dependencies; [tool.uv.sources]; Poetry's dependency tables. Pixi and Hatch environments are not
 // read. Each value is placed by its whole key path, so dotted keys, inline tables and table headers read alike, and any value in
 // those sections in a shape it does not know is one it cannot read. The names of [project] dependencies and
-// [tool.poetry.dependencies] are sent to OSV.
+// [tool.poetry.dependencies] are sent to OSV. Its settings that name an index or a source follow, read from the same values.
 function readPyproject(text, folder = "") {
-  const values = tomlValues(text.startsWith("\uFEFF") ? text.slice(1) : text);
+  const values = tomlValues(withoutBom(text));
   const indexes = {
     uv: namedIndexes(values, ["tool", "uv", "index"]),
     poetry: namedIndexes(values, ["tool", "poetry", "source"]),
@@ -404,7 +501,11 @@ function readPyproject(text, folder = "") {
     if (unit.list) return requirementListEntries(unit.list, folder, unit.form).map((entry) => ({ entry, checked: unit.checked }));
     return dependencyEntries(unit.dependency, folder, indexes);
   });
-  return manifestEntries(found, (name) => (name === null ? null : normalisePyPI(name)));
+  const entries = manifestEntries(found, (name) => (name === null ? null : normalisePyPI(name)));
+  return [...entries, ...pyprojectConfigEntries(values, folder)];
 }
 
-module.exports = { readPyproject };
+// pyproject.toml read only for its settings that name where packages come from, for a target with a uv or Poetry lockfile.
+const readPyprojectConfig = (text, folder = "") => pyprojectConfigEntries(tomlValues(withoutBom(text)), folder);
+
+module.exports = { readPyproject, readPyprojectConfig, tomlValues, uvConfigEntries };

@@ -17,6 +17,7 @@ const lines = (...rows) => rows.join("\n");
 const named = (ecosystem, file) => (name) => ({ ecosystem, name, version: null, file, line: null });
 const item = (ecosystem, file) => (name, line, kind, address, extra = {}) => ({ ecosystem, file, line, name, version: null, kind, address, ...extra });
 const unreadable = (ecosystem, file) => (name, line) => ({ ecosystem, file, line, name, version: null, kind: "unreadable", address: null });
+const config = (ecosystem, file) => (line, kind, address) => ({ ecosystem, file, line, from: "config", kind, address });
 const quickly = (fn, ms = 5000) => {
   const start = Date.now();
   const value = fn();
@@ -277,6 +278,7 @@ test("pyproject.toml: PEP 508 requirements, uv sources resolved through [[tool.u
       sourced("direct", 35, "url", "https://files.example.com/direct-1.0.tar.gz"),
       sourced("split", 37, "git", "https://github.com/u/split"),
       sourced("split", 38, "host", "https://mirror.example.com"),
+      config("PyPI", file)(43, "host", "https://mirror.example.com"),
     ],
   });
   hidden(read, "SECRET", "TOKEN", "user");
@@ -329,6 +331,7 @@ test("pyproject.toml: Poetry dependency tables with git, url, path and source, i
       sourced("tabled", 16, "url", "https://files.example.com/tabled-1.0.zip"),
       sourced("gdev", 20, "git", "https://github.com/u/gdev"),
       sourced("olddev", 23, "bundled", "dist/olddev-1.0.tar.gz", BUNDLED),
+      config("PyPI", file)(27, "host", "https://mirror.example.com"),
     ],
   });
 });
@@ -350,7 +353,10 @@ test("pyproject.toml: an index named in [tool.uv.sources] whose [[tool.uv.index]
   );
   const read = readOne("pyproject.toml", text);
   assert.deepEqual(read.packages, [named("PyPI", "pyproject.toml")("torch")]);
-  assert.deepEqual(read.sourced, [item("PyPI", "pyproject.toml")("local-wheels", 5, "host", "https://pypi.org")]);
+  assert.deepEqual(read.sourced, [
+    item("PyPI", "pyproject.toml")("local-wheels", 5, "host", "https://pypi.org"),
+    config("PyPI", "pyproject.toml")(11, "host", "https://pypi.org"),
+  ]);
 });
 
 test("pyproject.toml: shapes the TOML spec allows read as TOML reads them, in the sections that name sources and outside them", () => {
@@ -410,7 +416,6 @@ test("pyproject.toml: a shape it does not read where a source can be named is a 
     ['[tool.poetry.dependencies]\nx = """^1"""\n', "x"],
     ['[tool.poetry.group.dev]\ndependencies = "x"\n', null],
     ['[[tool.poetry.group]]\ndependencies = { x = { git = "https://e.example/x" } }\n', null],
-    ['[tool.uv.sources]\nx = { index = "broken" }\n[[tool.uv.index]]\nname = "broken"\nurl = 5\n', "x"],
   ];
   for (const [text, name] of cases) {
     const read = readOne("pyproject.toml", text);
@@ -418,6 +423,10 @@ test("pyproject.toml: a shape it does not read where a source can be named is a 
     assert.deepEqual(read.couldNotRead, [{ file: "pyproject.toml", ...UNREADABLE_SOURCE }], text);
     assert.deepEqual(read.packages, [], text);
   }
+  const brokenIndex = readOne("pyproject.toml", '[tool.uv.sources]\nx = { index = "broken" }\n[[tool.uv.index]]\nname = "broken"\nurl = 5\n');
+  assert.deepEqual(brokenIndex.sourced, [unreadable("PyPI", "pyproject.toml")("x", 2), config("PyPI", "pyproject.toml")(5, "unreadable", null)]);
+  assert.deepEqual(brokenIndex.couldNotRead, [{ file: "pyproject.toml", ...UNREADABLE_SOURCE }]);
+  assert.deepEqual(brokenIndex.packages, []);
 });
 
 test("pyproject.toml: TOML it cannot read at all could not be read, and gives no names", () => {
@@ -682,9 +691,10 @@ test("pyproject.toml: a UTF-8 byte order mark before the TOML is read past", () 
 
 test("pyproject.toml: a Poetry source is found by name in any case, as Poetry compares names; a uv index by its exact name", () => {
   const poetry = '[tool.poetry.dependencies]\na = { version = "^1", source = "Mirror" }\n[[tool.poetry.source]]\nname = "mirror"\nurl = "https://mirror.example.com/simple"\n';
-  assert.deepEqual(readOne("pyproject.toml", poetry).sourced, [item("PyPI", "pyproject.toml")("a", 2, "host", "https://mirror.example.com")]);
+  const mirrorConfig = config("PyPI", "pyproject.toml")(5, "host", "https://mirror.example.com");
+  assert.deepEqual(readOne("pyproject.toml", poetry).sourced, [item("PyPI", "pyproject.toml")("a", 2, "host", "https://mirror.example.com"), mirrorConfig]);
   const uv = '[tool.uv.sources]\na = { index = "Mirror" }\n[[tool.uv.index]]\nname = "mirror"\nurl = "https://mirror.example.com/simple"\n';
-  assert.deepEqual(readOne("pyproject.toml", uv).sourced, [item("PyPI", "pyproject.toml")("a", 2, "host", null, NAMED_INDEX)]);
+  assert.deepEqual(readOne("pyproject.toml", uv).sourced, [item("PyPI", "pyproject.toml")("a", 2, "host", null, NAMED_INDEX), mirrorConfig]);
 });
 
 test("pyproject.toml: [[tool.uv.sources.a]] tables read as the list a = [{ … }] they equal", () => {
