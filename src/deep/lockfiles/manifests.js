@@ -204,28 +204,34 @@ const WHITESPACE = /\s/;
 const stringOf = (value) => ((value.kind === "string" || value.kind === "literal") && value.text !== undefined ? value.text : null);
 const isTrue = (value) => value.kind === "scalar" && value.text === "true";
 
-// Every value of a TOML file with its whole key path: the table it is in, its own dotted key and, for an inline table, each of its
-// entries in turn; an array of tables adds the number of its element to the path, so it never reads as a name.
+// The most parts of a key path kept: more than any section that names a source has. One part past it is kept, so a longer path
+// still reads as deeper than every section, without a long path being copied for each value under it.
+const MAX_PATH = 10;
+const joined = (path, more) => path.concat(more.slice(0, MAX_PATH + 1)).slice(0, MAX_PATH + 1);
+
+// Every value of a TOML file with its key path (at most MAX_PATH parts and one more): the table it is in, its own dotted key and,
+// for an inline table, each of its entries in turn; an array of tables adds the number of its element to the path, so it never
+// reads as a name.
 function tomlValues(text) {
   const values = [];
   let table = [];
   const elements = new Map();
   for (const statement of tomlStatements(text, TOML_LAYOUT, { anyLayout: true })) {
     if (statement.header) {
-      table = statement.header;
+      table = joined([], statement.header);
       if (statement.array) {
         const id = JSON.stringify(table);
         const element = elements.get(id) ?? 0;
         elements.set(id, element + 1);
-        table = [...table, element];
+        table = joined(table, [element]);
       }
       continue;
     }
-    const stack = [{ path: [...table, ...statement.path], value: statement.value }];
+    const stack = [{ path: joined(table, statement.path), value: statement.value }];
     while (stack.length > 0) {
       const { path, value } = stack.pop();
       if (value.kind !== "table") values.push({ path, value });
-      else for (let k = value.entries.length - 1; k >= 0; k--) stack.push({ path: [...path, ...value.entries[k].path], value: value.entries[k].value });
+      else for (let k = value.entries.length - 1; k >= 0; k--) stack.push({ path: joined(path, value.entries[k].path), value: value.entries[k].value });
     }
   }
   return values;
@@ -308,10 +314,11 @@ function requirementListEntries(value, folder, form) {
   });
 }
 
-// An index a dependency names, found by name among the file's indexes (the first of a name wins, as uv and Poetry take it): its
-// address as an index, or a find-links page for a flat one; `builtIn` when no index has the name and the tool knows it.
-function namedIndexVerdict(indexes, name, folder, builtIn) {
-  const index = indexes.find((candidate) => candidate.name === name);
+// An index a dependency names, found by name among the file's indexes (the first of a name wins, as uv and Poetry take it; names
+// compared by `sameName`): its address as an index, or a find-links page for a flat one; `builtIn` when no index has the name and
+// the tool knows it.
+function namedIndexVerdict(indexes, name, folder, builtIn, sameName = (a, b) => a === b) {
+  const index = indexes.find((candidate) => candidate.name !== null && sameName(candidate.name, name));
   if (index === undefined) return builtIn ?? NAMED_INDEX;
   if (index.url === null) return builtIn ?? UNREADABLE;
   return pythonAddress(index.url, folder, { role: index.flat ? "find-links" : "index" });
@@ -372,6 +379,9 @@ const uvSourceVerdict = (fields, folder, indexes) =>
     namedIndex: (name) => namedIndexVerdict(indexes.uv, name, folder),
   });
 
+// Poetry compares source names lowercased.
+const sameIgnoringCase = (a, b) => a.toLowerCase() === b.toLowerCase();
+
 // A Poetry dependency table: at most one of git, url, path or source; with none it is the registry; a source is found among
 // [[tool.poetry.source]], where `pypi` is PyPI unless the file names its own.
 const poetryVerdict = (fields, folder, indexes) =>
@@ -379,7 +389,7 @@ const poetryVerdict = (fields, folder, indexes) =>
     kinds: POETRY_KINDS,
     known: POETRY_FIELDS,
     required: false,
-    namedIndex: (name) => namedIndexVerdict(indexes.poetry, name, folder, name.toLowerCase() === "pypi" ? EXPECTED : undefined),
+    namedIndex: (name) => namedIndexVerdict(indexes.poetry, name, folder, name.toLowerCase() === "pypi" ? EXPECTED : undefined, sameIgnoringCase),
   });
 
 // The indexes a file names by name, `[[tool.uv.index]]` or `[[tool.poetry.source]]`, as tables or as an array of inline tables.
@@ -457,21 +467,45 @@ function placeOf(path) {
 // makes the dependency one it cannot read.
 function dependencyPlace(tool, path, rest, checked) {
   if (rest.length === 0 || typeof rest[0] !== "string") return { bad: true };
-  const field = rest.length === 2 && typeof rest[1] === "string" ? rest[1] : undefined;
+  const element = typeof rest[1] === "number" ? rest[1] : undefined;
+  const fieldAt = element === undefined ? 1 : 2;
+  const field = rest.length === fieldAt + 1 && typeof rest[fieldAt] === "string" ? rest[fieldAt] : undefined;
   const id = JSON.stringify(path.slice(0, path.length - rest.length + 1));
-  return { tool, checked, name: rest[0], field, deeper: rest.length > 1 && field === undefined, id };
+  return { tool, checked, name: rest[0], element, field, deeper: rest.length > 1 && field === undefined, id };
 }
 
-// One uv or Poetry dependency's entries: from its fields, or from its whole value (a version string for Poetry; an array of
-// tables, one source per marker or constraint). Fields given twice, or both a whole value and fields, are one it cannot read.
+const newTable = () => ({ fields: new Map(), lines: new Map() });
+
+// One value of a uv or Poetry dependency, added to what is known of it: its whole value, a field of its own table, or a field of
+// one of its `[[…]]` tables. A field given twice, a second whole value or a value deeper than a field makes it one it cannot read.
+function addDependencyValue(dependency, place, value) {
+  if (place.deeper) dependency.broken = true;
+  else if (place.field === undefined) {
+    dependency.broken ||= dependency.whole;
+    Object.assign(dependency, { whole: true, value });
+  } else {
+    if (place.element !== undefined && !dependency.elements.has(place.element)) dependency.elements.set(place.element, newTable());
+    const table = place.element === undefined ? dependency.own : dependency.elements.get(place.element);
+    if (table.fields.has(place.field)) dependency.broken = true;
+    else {
+      table.fields.set(place.field, value);
+      table.lines.set(place.field, value.line);
+    }
+  }
+}
+
+// One uv or Poetry dependency's entries: from its own table, from each of its `[[…]]` tables, or from its whole value (a version
+// string for Poetry; an array of tables, one source per marker or constraint), each table's at the line of its source field. A
+// dependency written in more than one of those ways, or broken as it was added, is one it cannot read.
 function dependencyEntries(dependency, folder, indexes) {
   const verdictOf = dependency.tool === "uv" ? uvSourceVerdict : poetryVerdict;
+  const kinds = dependency.tool === "uv" ? UV_KINDS : POETRY_KINDS;
   const entry = (verdict, line) => ({ entry: { name: dependency.name, version: null, line, ...(verdict.expected ? {} : { classified: verdict }) }, checked: dependency.checked });
-  if (dependency.broken || (dependency.whole && dependency.fields.size > 0)) return [entry(UNREADABLE, dependency.line)];
-  if (!dependency.whole) {
-    const kindField = [...dependency.lines.keys()].find((field) => UV_KINDS.includes(field) || POETRY_KINDS.includes(field));
-    return [entry(verdictOf(dependency.fields, folder, indexes), dependency.lines.get(kindField) ?? dependency.line)];
-  }
+  const fromTable = ({ fields, lines }) => entry(verdictOf(fields, folder, indexes), lines.get(kinds.find((kind) => lines.has(kind))) ?? dependency.line);
+  const ways = [dependency.whole, dependency.own.fields.size > 0, dependency.elements.size > 0].filter(Boolean).length;
+  if (dependency.broken || ways > 1) return [entry(UNREADABLE, dependency.line)];
+  if (dependency.elements.size > 0) return [...dependency.elements.values()].map(fromTable);
+  if (!dependency.whole) return [fromTable(dependency.own)];
   const { value } = dependency;
   if (dependency.tool === "poetry" && stringOf(value) !== null) return [entry(EXPECTED, value.line)];
   if (value.kind !== "array") return [entry(UNREADABLE, value.line)];
@@ -487,7 +521,7 @@ function dependencyEntries(dependency, folder, indexes) {
 // its whole key path, so dotted keys, inline tables and table headers read alike, and any value in those sections in a shape it does
 // not know is one it cannot read. The names of [project] dependencies and [tool.poetry.dependencies] are sent to OSV.
 function readPyproject(text, folder = "") {
-  const values = tomlValues(text);
+  const values = tomlValues(text.startsWith("\uFEFF") ? text.slice(1) : text);
   const indexes = { uv: namedIndexes(values, ["tool", "uv", "index"]), poetry: namedIndexes(values, ["tool", "poetry", "source"]) };
   // Lists and dependencies, in the order of their first value.
   const units = [];
@@ -500,19 +534,12 @@ function readPyproject(text, folder = "") {
     else if (!(place.tool === "poetry" && place.name === "python")) {
       let dependency = dependencies.get(place.id);
       if (dependency === undefined) {
-        dependency = { tool: place.tool, name: place.name, checked: place.checked, line: value.line, fields: new Map(), lines: new Map(), whole: false, broken: false };
+        const { tool, name, checked } = place;
+        dependency = { tool, name, checked, line: value.line, own: newTable(), elements: new Map(), whole: false, broken: false };
         dependencies.set(place.id, dependency);
         units.push({ dependency });
       }
-      if (place.deeper) dependency.broken = true;
-      else if (place.field === undefined) {
-        dependency.broken ||= dependency.whole;
-        Object.assign(dependency, { whole: true, value });
-      } else if (dependency.fields.has(place.field)) dependency.broken = true;
-      else {
-        dependency.fields.set(place.field, value);
-        dependency.lines.set(place.field, value.line);
-      }
+      addDependencyValue(dependency, place, value);
     }
   }
   const found = units.flatMap((unit) => {

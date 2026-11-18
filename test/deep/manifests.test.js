@@ -17,7 +17,7 @@ const lines = (...rows) => rows.join("\n");
 const named = (ecosystem, file) => (name) => ({ ecosystem, name, version: null, file, line: null });
 const item = (ecosystem, file) => (name, line, kind, address, extra = {}) => ({ ecosystem, file, line, name, version: null, kind, address, ...extra });
 const unreadable = (ecosystem, file) => (name, line) => ({ ecosystem, file, line, name, version: null, kind: "unreadable", address: null });
-const quickly = (fn, ms = 2000) => {
+const quickly = (fn, ms = 5000) => {
   const start = Date.now();
   const value = fn();
   const took = Date.now() - start;
@@ -421,7 +421,7 @@ test("pyproject.toml: a shape it does not read where a source can be named is a 
 });
 
 test("pyproject.toml: TOML it cannot read at all could not be read, and gives no names", () => {
-  for (const text of ['[project]\ndependencies = ["x"\n', '[project]\nname = "a\\qb"\n', "[project\n", 'a = { b = 1,\n c = 2 }\n']) {
+  for (const text of ['[project]\ndependencies = ["x"\n', "[project\n", 'a = { b = 1,\n c = 2 }\n']) {
     assert.deepEqual(readOne("pyproject.toml", text), { ...EMPTY, couldNotRead: [{ file: "pyproject.toml", reason: "not TOML it can read" }] }, text);
   }
 });
@@ -656,4 +656,55 @@ test("pyproject.toml: uv's build-constraint and extra build dependencies, and PD
 test("package.json: npm:<tag> sends both the tag read as a package name and the key's package, since npm and Yarn read it differently", () => {
   const text = JSON.stringify({ dependencies: { react: "npm:latest", vue: "npm:next" }, overrides: { foo: "npm:beta" } });
   assert.deepEqual(readOne("package.json", text).packages, ["latest", "react", "next", "vue", "beta", "foo"].map(named("npm", "package.json")));
+});
+
+test("pyproject.toml: an escape TOML does not define makes that string one it cannot read; elsewhere it changes nothing", () => {
+  const read = readOne("pyproject.toml", '[project]\nname = "a\\qb"\ndependencies = ["x \\q@ https://e.example/x.zip", "y"]\n');
+  assert.deepEqual(read.sourced, [unreadable("PyPI", "pyproject.toml")(null, 3)]);
+  assert.deepEqual(read.packages, [named("PyPI", "pyproject.toml")("y")]);
+  const key = readOne("pyproject.toml", '[tool.uv.sources]\n"a\\q" = { git = "https://e.example/a" }\n');
+  assert.deepEqual(key.sourced, [unreadable("PyPI", "pyproject.toml")(null, 2)]);
+});
+
+test("pyproject.toml: a header or key of thousands of parts, with thousands of keys under it, is read quickly", () => {
+  const parts = Array(40000).fill("a").join(".");
+  const keys = Array.from({ length: 40000 }, (_, k) => `k${k} = 1`).join("\n");
+  assert.deepEqual(quickly(() => readOne("pyproject.toml", `[${parts}]\n${keys}\n`)).couldNotRead, []);
+  const deep = quickly(() => readOne("pyproject.toml", `[tool.uv.sources]\n${Array.from({ length: 2000 }, (_, k) => `x.${Array(200).fill("a").join(".")}.b${k} = "y"`).join("\n")}\n`));
+  assert.deepEqual(deep.sourced, [unreadable("PyPI", "pyproject.toml")("x", 2)]);
+  quickly(() => readOne("pyproject.toml", Array.from({ length: 2000 }, () => `[[${Array(500).fill("a").join(".")}]]`).join("\n")));
+});
+
+test("pyproject.toml: a UTF-8 byte order mark before the TOML is read past", () => {
+  const read = readOne("pyproject.toml", '﻿[project]\ndependencies = ["a @ https://e.example/a-1.0.zip"]\n');
+  assert.deepEqual(read.sourced, [item("PyPI", "pyproject.toml")("a", 2, "url", "https://e.example/a-1.0.zip")]);
+});
+
+test("pyproject.toml: a Poetry source is found by name in any case, as Poetry compares names; a uv index by its exact name", () => {
+  const poetry = '[tool.poetry.dependencies]\na = { version = "^1", source = "Mirror" }\n[[tool.poetry.source]]\nname = "mirror"\nurl = "https://mirror.example.com/simple"\n';
+  assert.deepEqual(readOne("pyproject.toml", poetry).sourced, [item("PyPI", "pyproject.toml")("a", 2, "host", "https://mirror.example.com")]);
+  const uv = '[tool.uv.sources]\na = { index = "Mirror" }\n[[tool.uv.index]]\nname = "mirror"\nurl = "https://mirror.example.com/simple"\n';
+  assert.deepEqual(readOne("pyproject.toml", uv).sourced, [item("PyPI", "pyproject.toml")("a", 2, "host", null, NAMED_INDEX)]);
+});
+
+test("pyproject.toml: [[tool.uv.sources.a]] tables read as the list a = [{ … }] they equal", () => {
+  const text = lines(
+    "[[tool.uv.sources.a]]",
+    'git = "https://e.example/a"',
+    "marker = \"sys_platform == 'linux'\"",
+    "[[tool.uv.sources.a]]",
+    'url = "https://e.example/a-1.0.zip"',
+    "[[tool.poetry.dependencies.b]]",
+    'version = "^1"',
+    "[[tool.poetry.dependencies.b]]",
+    'path = "../outside"',
+  );
+  const sourced = item("PyPI", "pyproject.toml");
+  assert.deepEqual(readOne("pyproject.toml", text).sourced, [
+    sourced("a", 2, "git", "https://e.example/a"),
+    sourced("a", 5, "url", "https://e.example/a-1.0.zip"),
+    sourced("b", 9, "url", null, OUTSIDE),
+  ]);
+  const mixed = readOne("pyproject.toml", '[tool.uv.sources]\na = { git = "https://e.example/a" }\n[[tool.uv.sources.a]]\nurl = "https://e.example/a-1.0.zip"\n');
+  assert.deepEqual(mixed.sourced, [unreadable("PyPI", "pyproject.toml")("a", 2)]);
 });

@@ -44,9 +44,10 @@ const arrayLaidOut = (gaps, items) =>
 // table across lines, a tab or a lone carriage return between tokens, values nested deeper than MAX_NESTING) means the file is not
 // one it can read.
 // With `anyLayout`, it reads any layout TOML 1.0 allows instead: indentation, tabs, quoted and spaced header parts, multi-line
-// strings (kind `multiline`, with no text) and a date-time with a space. Header parts, key parts and string texts are then decoded,
-// and an escape TOML does not define means the file is not one it can read. An inline table across lines, values nested deeper
-// than MAX_NESTING, or a lone carriage return still are too.
+// strings (kind `multiline`, with no text) and a date-time with a space. An inline table across lines, values nested deeper than
+// MAX_NESTING, or a lone carriage return still mean the file is not one it can read.
+// In either mode a basic string's `text` is decoded (`raw` is as written), and a string holding an escape TOML does not define has
+// no text, so a reader treats it as one it cannot read.
 function tomlStatements(text, layout, { anyLayout = false } = {}) {
   const fail = () => {
     throw new Unreadable(layout);
@@ -71,19 +72,20 @@ function tomlStatements(text, layout, { anyLayout = false } = {}) {
     line++;
   };
 
-  // The character an escape at `i` stands for, past which `i` moves; an escape TOML does not define fails.
+  // The character an escape at `i` stands for, past which `i` moves; null for an escape TOML does not define, past whose first
+  // character `i` moves. A backslash ending the line fails.
   function escape() {
     const letter = text[i + 1];
-    if (ESCAPES.has(letter)) {
-      i += 2;
-      return ESCAPES.get(letter);
-    }
+    i++;
+    if (atLineEnd()) fail();
+    i++;
+    if (ESCAPES.has(letter)) return ESCAPES.get(letter);
     const digits = letter === "u" ? 4 : letter === "U" ? 8 : 0;
-    const hex = text.slice(i + 2, i + 2 + digits);
-    if (digits === 0 || hex.length !== digits || !HEX.test(hex)) fail();
+    const hex = text.slice(i, i + digits);
+    if (digits === 0 || hex.length !== digits || !HEX.test(hex)) return null;
     const code = parseInt(hex, 16);
-    if (code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) fail();
-    i += 2 + digits;
+    if (code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return null;
+    i += digits;
     return String.fromCodePoint(code);
   }
 
@@ -110,28 +112,27 @@ function tomlStatements(text, layout, { anyLayout = false } = {}) {
       fail();
     }
     let plain = true;
+    let readable = true;
     let decoded = "";
     const start = ++i;
     let from = start;
     while (text[i] !== '"') {
       if (atLineEnd()) fail();
-      if (text[i] === "\\" && anyLayout) {
-        plain = false;
-        decoded += text.slice(from, i) + escape();
-        from = i;
+      if (text[i] !== "\\") {
+        i++;
         continue;
       }
-      if (text[i] === "\\") {
-        plain = false;
-        i++;
-        if (atLineEnd()) fail();
-      }
-      i++;
+      plain = false;
+      decoded += text.slice(from, i);
+      const character = escape();
+      if (character === null) readable = false;
+      else decoded += character;
+      from = i;
     }
     const raw = text.slice(start, i);
-    const value = anyLayout ? decoded + text.slice(from, i) : raw;
+    const value = readable ? decoded + text.slice(from, i) : undefined;
     i++;
-    return { kind: "string", text: value, plain, exact: plain };
+    return { kind: "string", text: value, raw, plain, exact: plain };
   }
 
   function literalString() {
