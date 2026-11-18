@@ -349,4 +349,4 @@ function readRequirements(text, folder = "") {
 // file of ranges) gives nothing to check rather than a file it could not read.
 const readNamedRequirements = (text, folder = "") => requirementsFile(text, folder).entries;
 
-module.exports = { readRequirements, readNamedRequirements };
+module.exports = { readRequirements, readNamedRequirements, addressEntries, specifierEntries, splitName };

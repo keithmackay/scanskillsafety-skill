@@ -1,18 +1,16 @@
-// ABOUTME: Reads the packages a target pulls in from its lockfiles (npm, Yarn, pnpm, Poetry, uv, pinned requirements), or their
-// ABOUTME: names from its manifests when it has none; formats it cannot read are listed, never ignored.
+// ABOUTME: Reads the packages a target pulls in, and where each comes from, from its lockfiles (npm, Yarn, pnpm, Poetry, uv, pinned
+// ABOUTME: requirements), or from its manifests when it has none; formats it cannot read are listed, never ignored.
 "use strict";
 
 const { baseName, isVendored } = require("../util");
 const { classifySource } = require("../packageSources");
-const { isPep440, localArchiveVerdict, SEMVER, Unreadable, UNREADABLE_ENTRY } = require("./shared");
+const { isPep440, localArchiveVerdict, normalisePyPI, SEMVER, Unreadable, UNREADABLE_ENTRY } = require("./shared");
 const { readNpmLock } = require("./npm");
 const { readYarnLock } = require("./yarn");
 const { readPnpmLock } = require("./pnpm");
 const { readPoetryLock, readUvLock } = require("./python");
 const { readNamedRequirements, readRequirements } = require("./requirements");
-const { packageJsonNames, pyprojectNames } = require("./manifests");
-
-const normalisePyPI = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
+const { readPackageJson, readPyproject } = require("./manifests");
 
 const LOCKFILES = new Map([
   ["package-lock.json", { ecosystem: "npm", read: readNpmLock }],
@@ -32,8 +30,8 @@ const lockfileKind = (p) => LOCKFILES.get(baseName(p)) ?? (/^requirements.*\.txt
 const isLockfile = (p) => LOCKFILES.has(baseName(p)) || NOT_CHECKED.has(baseName(p));
 
 const MANIFESTS = new Map([
-  ["package.json", { ecosystem: "npm", names: packageJsonNames }],
-  ["pyproject.toml", { ecosystem: "PyPI", names: pyprojectNames }],
+  ["package.json", { ecosystem: "npm", read: readPackageJson }],
+  ["pyproject.toml", { ecosystem: "PyPI", read: readPyproject }],
 ]);
 
 // A file read by a reader other than the requirements reader: a lockfile or a manifest.
@@ -142,11 +140,12 @@ function readPackages(files, leftOut = []) {
   // Requirements files read in their own right, and those named by -r or -c still to read; each is read once.
   const visited = new Set(ownFiles.filter((f) => lockfileKind(f.path) === REQUIREMENTS).map((f) => f.path));
   const toFollow = [];
-  const readLockfile = (f, kind) => {
+  // Reads a lockfile, a requirements file or a manifest; false when the file could not be read at all.
+  const readEntries = (f, kind) => {
     const read = readSafely(kind.read, f);
     if (read.reason) {
       result.couldNotRead.push({ file: f.path, reason: read.reason });
-      return;
+      return false;
     }
     const { registry, sourced, requires, unreadable } = classifyEntries(kind.ecosystem, f.path, read.entries);
     for (const entry of registry) add(kind.ecosystem, f.path, entry);
@@ -163,15 +162,16 @@ function readPackages(files, leftOut = []) {
         toFollow.push(byPath.get(r.requires));
       }
     }
+    return true;
   };
   for (const f of ownFiles) {
     if (NOT_CHECKED.has(baseName(f.path))) result.notChecked.push(f.path);
     const kind = lockfileKind(f.path);
     if (!kind) continue;
     locked.add(kind.ecosystem);
-    readLockfile(f, kind);
+    readEntries(f, kind);
   }
-  for (let i = 0; i < toFollow.length; i++) readLockfile(toFollow[i], NAMED_REQUIREMENTS);
+  for (let i = 0; i < toFollow.length; i++) readEntries(toFollow[i], NAMED_REQUIREMENTS);
   const ownLeftOut = leftOut.filter((l) => !isVendored(l.path));
   result.notChecked.push(...ownLeftOut.filter((l) => NOT_CHECKED.has(baseName(l.path))).map((l) => l.path));
   for (const f of ownLeftOut.filter((l) => lockfileKind(l.path))) {
@@ -180,14 +180,7 @@ function readPackages(files, leftOut = []) {
   }
   for (const f of ownFiles) {
     const manifest = MANIFESTS.get(baseName(f.path));
-    if (!manifest || locked.has(manifest.ecosystem)) continue;
-    const read = readSafely(manifest.names, f);
-    if (read.reason) {
-      result.couldNotRead.push({ file: f.path, reason: read.reason });
-      continue;
-    }
-    result.namesOnly.push(f.path);
-    for (const name of read.entries) add(manifest.ecosystem, f.path, { name, version: null, line: null });
+    if (manifest && !locked.has(manifest.ecosystem) && readEntries(f, manifest)) result.namesOnly.push(f.path);
   }
   return result;
 }

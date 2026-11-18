@@ -312,3 +312,11 @@ test("package.json: 4 MB values are answered in bounded time", () => {
     assert.ok(performance.now() - start < 1000);
   }
 });
+
+test("package.json: a value npm reads as a path, one with a slash that is no git form or an archive's file name, is local", () => {
+  for (const value of ["libs/a/b", "@s/x", "x-1.0.0.tgz", "dist/sub/x-1.0.0.tar.gz", "x.TAR"]) {
+    assert.deepEqual(classifyManifestValue("npm", value), LOCAL, value);
+  }
+  assert.deepEqual(classifyManifestValue("npm", "u/r"), offRegistry("git", "https://github.com/u/r"));
+  assert.deepEqual(classifyManifestValue("npm", "1.x.tgz-beta"), EXPECTED);
+});

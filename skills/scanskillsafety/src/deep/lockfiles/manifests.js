@@ -1,67 +1,378 @@
-// ABOUTME: Reads the names of the packages a manifest asks for, package.json or pyproject.toml, for a target with no lockfile
-// ABOUTME: for that ecosystem.
+// ABOUTME: Reads a target's manifests, package.json and pyproject.toml, when it has no lockfile for that ecosystem: the names sent
+// ABOUTME: to OSV, and every dependency from outside the registry with its line; a shape it cannot read is reported, never ignored.
 "use strict";
 
-const { isObject } = require("../util");
-const { parseJson } = require("./shared");
+const { isObject, OBJECT_ID } = require("../util");
+const { classifyManifestValue, LOCAL, UNREADABLE } = require("../packageSources");
+const { jsonMembers, localArchiveVerdict, normalisePyPI, parseJson, ROOT_OBJECT, unnamedEntry, UNREADABLE_ENTRY } = require("./shared");
+const { tomlStatements } = require("./toml");
+const { pythonAddress } = require("./python");
+const { addressEntries, specifierEntries, splitName } = require("./requirements");
 
-function packageJsonNames(text) {
-  const json = parseJson(text);
-  const sections = ["dependencies", "optionalDependencies", "peerDependencies"];
-  return sections.flatMap((section) => (isObject(json) && isObject(json[section]) ? Object.keys(json[section]) : []));
+const EXPECTED = Object.freeze({ expected: true });
+const NAMED_INDEX = Object.freeze({ expected: false, kind: "host", address: null, text: "a named index" });
+
+const unreadableNamed = (name, line) => ({ name, version: null, line, ...UNREADABLE_ENTRY });
+const isRegistry = (entry) => entry.classified === undefined || entry.classified.expected === true;
+
+// What a manifest gives, from what it names (`{ entry, checked }`, `checked` when the section's names are sent to OSV): every
+// entry not from the registry, local ones included so they are dropped later, and the registry names of checked sections, with no
+// line, except a name that also comes from somewhere else in the file (an override, a uv or Poetry source), which is not sent to
+// OSV since its name may not mean what OSV's record means.
+function manifestEntries(found, sameName) {
+  const elsewhere = new Set(found.filter(({ entry }) => !isRegistry(entry)).map(({ entry }) => sameName(entry.name)));
+  const reported = found.filter(({ entry }) => !isRegistry(entry)).map(({ entry }) => entry);
+  const names = found
+    .filter(({ entry, checked }) => checked && isRegistry(entry) && !elsewhere.has(sameName(entry.name)))
+    .map(({ entry }) => ({ name: entry.name, version: null, line: null }));
+  return [...reported, ...names];
 }
 
-// The quoted strings of a TOML array starting at `from`, up to its closing bracket outside quotes (comments skipped), and where
-// the array ends.
-function quotedStrings(text, from) {
-  const strings = [];
-  let quote = null;
-  let current = "";
-  let i = from;
-  for (; i < text.length; i++) {
-    const c = text[i];
-    if (quote) {
-      if (c === quote) {
-        strings.push(current);
-        quote = null;
-        current = "";
-      } else current += c;
-    } else if (c === '"' || c === "'") quote = c;
-    else if (c === "#") {
-      while (i + 1 < text.length && text[i + 1] !== "\n") i++;
-    } else if (c === "]") break;
+// package.json
+
+// The sections whose registry names are sent to OSV; the others are read only for where they fetch from.
+const CHECKED_SECTIONS = new Set(["dependencies", "optionalDependencies", "peerDependencies"]);
+const SOURCE_SECTIONS = new Set([...CHECKED_SECTIONS, "devDependencies", "overrides", "resolutions"]);
+
+// The package an override or resolution key is about: the last package of a pnpm `a>b` chain or of a Yarn `a/**/b` path, without
+// its version range.
+function overrideTarget(key) {
+  const last = key.slice(key.lastIndexOf(">") + 1);
+  const parts = last.split("/");
+  const scoped = parts.length > 1 && parts[parts.length - 2].startsWith("@");
+  const tail = scoped ? parts.slice(-2).join("/") : parts[parts.length - 1];
+  const at = tail.indexOf("@", 1);
+  return at < 0 ? tail : tail.slice(0, at);
+}
+
+// The values of one section, each with its name and the line of its value: walked iteratively, depth first in parse order, through
+// nested override objects (`.` naming the package of the object it is in). A value that is neither a string nor, where overrides
+// nest, an object is one it cannot read (`value: null`). A line is given only when the text at it is the value parsed.
+function sectionValues(section, members, object, nests) {
+  const values = [];
+  const stack = [{ entries: Object.entries(section), next: 0, object, parent: null }];
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    if (frame.next === frame.entries.length) {
+      stack.pop();
+      continue;
+    }
+    const [key, value] = frame.entries[frame.next++];
+    const member = members(frame.object, key);
+    const name = key === "." && frame.parent !== null ? frame.parent : key;
+    if (typeof value === "string") values.push({ name, value, line: member?.text === value ? member.line : null });
+    else if (nests && isObject(value)) stack.push({ entries: Object.entries(value), next: 0, object: member?.object, parent: name });
+    else values.push({ name, value: null, line: member?.line ?? null });
   }
-  return { strings, end: i };
+  return values;
 }
 
-const TABLE_HEADER = /^\[\[?([^[\]]+)\]\]?\s*(#.*)?$/;
+// A package.json value: a local one naming an archive is read from the manifest's folder (bundled inside the repository, a path
+// outside the project otherwise); a local folder stays local.
+function packageJsonVerdict(value, folder) {
+  const verdict = classifyManifestValue("npm", value);
+  return verdict.kind === "local" ? localArchiveVerdict(value, folder, verdict) : verdict;
+}
 
-function pyprojectNames(text) {
-  const names = [];
-  let table = null;
-  // Lines are walked with their offsets, so a dependencies list is read once from where it starts and the lines it spans skipped.
-  const lineBreak = /\r?\n/g;
-  let start = 0;
-  let readUpTo = 0;
-  while (start <= text.length) {
-    const match = lineBreak.exec(text);
-    const end = match ? match.index : text.length;
-    const line = text.slice(start, end);
-    const lineStart = start;
-    start = match ? lineBreak.lastIndex : text.length + 1;
-    if (lineStart < readUpTo) continue;
-    const header = TABLE_HEADER.exec(line);
-    if (header) table = header[1].trim();
-    else if (table === "project" && /^dependencies\s*=\s*\[/.test(line)) {
-      const list = quotedStrings(text, lineStart + line.indexOf("[") + 1);
-      readUpTo = list.end;
-      names.push(...list.strings.map((requirement) => requirement.trim().split(/[<>=!~;[ (]/)[0]));
-    } else if (table === "tool.poetry.dependencies") {
-      const key = /^(["']?)([A-Za-z0-9._-]+)\1\s*=/.exec(line);
-      if (key && key[2] !== "python") names.push(key[2]);
+// package.json's dependencies in every section that can name a source, and the overrides in `pnpm.overrides`. A section that is
+// not an object is one it cannot read.
+function readPackageJson(text, folder = "") {
+  const json = parseJson(text);
+  if (!isObject(json)) return [];
+  const members = jsonMembers(text);
+  const sections = [];
+  for (const [name, value] of Object.entries(json)) {
+    const member = members(ROOT_OBJECT, name);
+    if (SOURCE_SECTIONS.has(name)) sections.push({ name, value, member, nests: name === "overrides" });
+    else if (name === "pnpm" && isObject(value) && Object.hasOwn(value, "overrides")) {
+      sections.push({ name: "pnpm.overrides", value: value.overrides, member: members(member?.object, "overrides"), nests: false });
     }
   }
-  return names.filter(Boolean);
+  const found = [];
+  for (const { name, value, member, nests } of sections) {
+    const checked = CHECKED_SECTIONS.has(name);
+    if (!isObject(value)) {
+      found.push({ entry: unnamedEntry(member?.line ?? null), checked });
+      continue;
+    }
+    for (const dependency of sectionValues(value, members, member?.object, nests)) {
+      const packageName = checked ? dependency.name : overrideTarget(dependency.name);
+      if (dependency.value === null) found.push({ entry: unreadableNamed(packageName, dependency.line), checked });
+      else {
+        const verdict = packageJsonVerdict(dependency.value, folder);
+        const entry = { name: packageName, version: null, line: dependency.line };
+        found.push({ entry: verdict.expected ? entry : { ...entry, classified: verdict }, checked });
+      }
+    }
+  }
+  return manifestEntries(found, (name) => name);
 }
 
-module.exports = { packageJsonNames, pyprojectNames };
+// pyproject.toml
+
+const TOML_LAYOUT = "not TOML it can read";
+const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+const WHITESPACE = /\s/;
+
+// The text of a one-line string, basic or literal; null for any other value.
+const stringOf = (value) => ((value.kind === "string" || value.kind === "literal") && value.text !== undefined ? value.text : null);
+const isTrue = (value) => value.kind === "scalar" && value.text === "true";
+
+// Every value of a TOML file with its whole key path: the table it is in, its own dotted key and, for an inline table, each of its
+// entries in turn; an array of tables adds the number of its element to the path, so it never reads as a name.
+function tomlValues(text) {
+  const values = [];
+  let table = [];
+  const elements = new Map();
+  for (const statement of tomlStatements(text, TOML_LAYOUT, { anyLayout: true })) {
+    if (statement.header) {
+      table = statement.header;
+      if (statement.array) {
+        const id = JSON.stringify(table);
+        const element = elements.get(id) ?? 0;
+        elements.set(id, element + 1);
+        table = [...table, element];
+      }
+      continue;
+    }
+    const stack = [{ path: [...table, ...statement.path], value: statement.value }];
+    while (stack.length > 0) {
+      const { path, value } = stack.pop();
+      if (value.kind !== "table") values.push({ path, value });
+      else for (let k = value.entries.length - 1; k >= 0; k--) stack.push({ path: [...path, ...value.entries[k].path], value: value.entries[k].value });
+    }
+  }
+  return values;
+}
+
+// The path after `prefix`, or null when the path does not start with it.
+function after(path, prefix) {
+  if (path.length < prefix.length || prefix.some((part, k) => path[k] !== part)) return null;
+  return path.slice(prefix.length);
+}
+
+// A PEP 508 requirement: `name [extras] @ url ; marker`, or `name [extras] specifiers ; marker`. A URL ends at whitespace, after
+// which only a marker may follow. One that is not a requirement it can read keeps its name when it has one; a bare URL has none.
+function requirementEntries(text, line, folder) {
+  const requirement = text.trim();
+  const parts = SCHEME.test(requirement) ? null : splitName(requirement);
+  if (parts === null) return [unnamedEntry(line)];
+  if (parts.rest.startsWith("@")) {
+    const address = parts.rest.slice(1).trimStart();
+    const end = address.search(WHITESPACE);
+    const marker = end < 0 ? "" : address.slice(end).trim();
+    if (marker !== "" && !marker.startsWith(";")) return [unreadableNamed(parts.name, line)];
+    const entries = addressEntries(end < 0 ? address : address.slice(0, end), parts.name, line, folder);
+    return entries.length > 0 ? entries : [{ name: parts.name, version: null, line, classified: LOCAL }];
+  }
+  const specified = specifierEntries({ name: parts.name, rest: parts.rest.split(";", 1)[0] }, line);
+  if (specified !== null && specified[0].classified !== undefined) return specified;
+  return [{ name: parts.name, version: null, line }];
+}
+
+// An array of PEP 508 strings; in a dependency group, `{ include-group = "name" }` tables too, which name no source.
+function requirementListEntries(value, folder, groups) {
+  if (value.kind !== "array") return [unnamedEntry(value.line)];
+  return value.items.flatMap((item) => {
+    const text = stringOf(item);
+    if (text !== null) return requirementEntries(text, item.line, folder);
+    const include = groups && item.kind === "table" && item.entries.length === 1 ? item.entries[0] : null;
+    const included = include !== null && include.path.length === 1 && include.path[0] === "include-group" && stringOf(include.value) !== null;
+    return included ? [] : [unnamedEntry(item.line)];
+  });
+}
+
+// An index a dependency names, found by name among the file's indexes (the first of a name wins, as uv and Poetry take it): its
+// address as an index, or a find-links page for a flat one; `builtIn` when no index has the name and the tool knows it.
+function namedIndexVerdict(indexes, name, folder, builtIn) {
+  const index = indexes.find((candidate) => candidate.name === name);
+  if (index === undefined) return builtIn ?? NAMED_INDEX;
+  if (index.url === null) return builtIn ?? UNREADABLE;
+  return pythonAddress(index.url, folder, { role: index.flat ? "find-links" : "index" });
+}
+
+// A git repository, one archive or a path a uv or Poetry dependency names; a git commit is the `rev` when it is a commit id.
+function addressVerdict(kind, address, rev, folder) {
+  if (kind === "url") return pythonAddress(address, folder, { direct: true });
+  if (kind === "path") return pythonAddress(address, folder, { pathField: true });
+  const verdict = pythonAddress(address, folder, { git: true });
+  return verdict.kind === "git" && OBJECT_ID.test(rev) ? { ...verdict, commit: rev } : verdict;
+}
+
+// The fields that name an index by name: uv's `index`, Poetry's `source`.
+const INDEX_FIELDS = new Set(["index", "source"]);
+
+// What a dependency table names, given the tool's fields (`kinds`: those that each name a source, at most one of which may be
+// given, and exactly one when `required`). A field the tool does not have, a second source, or a source field that is not a string
+// is one it cannot read. With no source field, the dependency is from the registry; an index field is found by `namedIndex`.
+function tableVerdict(fields, folder, { kinds, known, required, namedIndex }) {
+  if ([...fields.keys()].some((field) => !known.has(field))) return UNREADABLE;
+  const given = kinds.filter((kind) => fields.has(kind));
+  if (given.length > 1) return UNREADABLE;
+  if (given.length === 0) return required ? UNREADABLE : EXPECTED;
+  const [kind] = given;
+  if (kind === "workspace") return isTrue(fields.get(kind)) ? LOCAL : UNREADABLE;
+  const address = stringOf(fields.get(kind));
+  const rev = fields.has("rev") ? stringOf(fields.get("rev")) : "";
+  if (address === null || rev === null) return UNREADABLE;
+  return INDEX_FIELDS.has(kind) ? namedIndex(address) : addressVerdict(kind, address, rev, folder);
+}
+
+// The fields of an inline table whose keys are single names, given once; null when it is not one.
+function tableFields(value) {
+  if (value.kind !== "table") return null;
+  const fields = new Map();
+  for (const entry of value.entries) {
+    if (entry.path.length !== 1 || fields.has(entry.path[0])) return null;
+    fields.set(entry.path[0], entry.value);
+  }
+  return fields;
+}
+
+const UV_KINDS = ["git", "url", "path", "index", "workspace"];
+const UV_FIELDS = new Set([...UV_KINDS, "rev", "tag", "branch", "subdirectory", "lfs", "editable", "package", "marker", "extra", "group"]);
+const POETRY_KINDS = ["git", "url", "path", "source"];
+const POETRY_FIELDS = new Set([
+  ...POETRY_KINDS, "version", "branch", "tag", "rev", "subdirectory", "develop", "python", "platform", "markers", "optional", "extras",
+  "allow-prereleases", "allows-prereleases",
+]);
+
+// A `[tool.uv.sources]` entry: exactly one of git, url, path, index or workspace; an index is found among [[tool.uv.index]].
+const uvSourceVerdict = (fields, folder, indexes) =>
+  tableVerdict(fields, folder, {
+    kinds: UV_KINDS,
+    known: UV_FIELDS,
+    required: true,
+    namedIndex: (name) => namedIndexVerdict(indexes.uv, name, folder),
+  });
+
+// A Poetry dependency table: at most one of git, url, path or source; with none it is the registry; a source is found among
+// [[tool.poetry.source]], where `pypi` is PyPI unless the file names its own.
+const poetryVerdict = (fields, folder, indexes) =>
+  tableVerdict(fields, folder, {
+    kinds: POETRY_KINDS,
+    known: POETRY_FIELDS,
+    required: false,
+    namedIndex: (name) => namedIndexVerdict(indexes.poetry, name, folder, name.toLowerCase() === "pypi" ? EXPECTED : undefined),
+  });
+
+// The indexes a file names by name, `[[tool.uv.index]]` or `[[tool.poetry.source]]`, as tables or as an array of inline tables.
+function namedIndexes(values, prefix) {
+  const tables = new Map();
+  for (const { path, value } of values) {
+    const rest = after(path, prefix);
+    if (rest === null) continue;
+    if (rest.length === 0 && value.kind === "array") value.items.forEach((item, k) => tables.set(`item${k}`, tableFields(item) ?? new Map()));
+    else if (rest.length === 2 && typeof rest[0] === "number" && typeof rest[1] === "string") {
+      if (!tables.has(rest[0])) tables.set(rest[0], new Map());
+      tables.get(rest[0]).set(rest[1], value);
+    }
+  }
+  return [...tables.values()].map((fields) => ({
+    name: fields.has("name") ? stringOf(fields.get("name")) : null,
+    url: fields.has("url") ? stringOf(fields.get("url")) : null,
+    flat: fields.has("format") && stringOf(fields.get("format")) === "flat",
+  }));
+}
+
+const PROJECT_DEPENDENCIES = ["project", "dependencies"];
+const OPTIONAL_DEPENDENCIES = ["project", "optional-dependencies"];
+const DEPENDENCY_GROUPS = ["dependency-groups"];
+const UV_SOURCES = ["tool", "uv", "sources"];
+const POETRY_TABLES = [["tool", "poetry", "dependencies"], ["tool", "poetry", "dev-dependencies"]];
+const POETRY_GROUPS = ["tool", "poetry", "group"];
+
+// Where a value sits among the sections that can name a source: a list of requirements, a uv or Poetry dependency (its name and
+// the field, if any, the value is), something in such a section in a shape it cannot read (`bad`), or nothing that names one.
+function placeOf(path) {
+  const project = after(path, PROJECT_DEPENDENCIES);
+  if (project !== null) return project.length === 0 ? { list: true, checked: true } : { bad: true };
+  const optional = after(path, OPTIONAL_DEPENDENCIES);
+  if (optional !== null) return optional.length === 1 && typeof optional[0] === "string" ? { list: true } : { bad: true };
+  const groups = after(path, DEPENDENCY_GROUPS);
+  if (groups !== null) return groups.length === 1 && typeof groups[0] === "string" ? { list: true, groups: true } : { bad: true };
+  const uv = after(path, UV_SOURCES);
+  if (uv !== null) return dependencyPlace("uv", path, uv, false);
+  for (const prefix of POETRY_TABLES) {
+    const poetry = after(path, prefix);
+    if (poetry !== null) return dependencyPlace("poetry", path, poetry, prefix[2] === "dependencies");
+  }
+  const group = after(path, POETRY_GROUPS);
+  if (group !== null && group[1] === "dependencies") {
+    if (typeof group[0] !== "string") return { bad: true };
+    return dependencyPlace("poetry", path, group.slice(2), false);
+  }
+  return null;
+}
+
+// A value under a uv or Poetry dependency table (`rest` being its path after the table): the dependency's name, the field the value
+// is (none when it is the whole value), and the path up to the name, which identifies the dependency. A value deeper than a field
+// makes the dependency one it cannot read.
+function dependencyPlace(tool, path, rest, checked) {
+  if (rest.length === 0 || typeof rest[0] !== "string") return { bad: true };
+  const field = rest.length === 2 && typeof rest[1] === "string" ? rest[1] : undefined;
+  const id = JSON.stringify(path.slice(0, path.length - rest.length + 1));
+  return { tool, checked, name: rest[0], field, deeper: rest.length > 1 && field === undefined, id };
+}
+
+// One uv or Poetry dependency's entries: from its fields, or from its whole value (a version string for Poetry; an array of
+// tables, one source per marker or constraint). Fields given twice, or both a whole value and fields, are one it cannot read.
+function dependencyEntries(dependency, folder, indexes) {
+  const verdictOf = dependency.tool === "uv" ? uvSourceVerdict : poetryVerdict;
+  const entry = (verdict, line) => ({ entry: { name: dependency.name, version: null, line, ...(verdict.expected ? {} : { classified: verdict }) }, checked: dependency.checked });
+  if (dependency.broken || (dependency.whole && dependency.fields.size > 0)) return [entry(UNREADABLE, dependency.line)];
+  if (!dependency.whole) {
+    const kindField = [...dependency.lines.keys()].find((field) => UV_KINDS.includes(field) || POETRY_KINDS.includes(field));
+    return [entry(verdictOf(dependency.fields, folder, indexes), dependency.lines.get(kindField) ?? dependency.line)];
+  }
+  const { value } = dependency;
+  if (dependency.tool === "poetry" && stringOf(value) !== null) return [entry(EXPECTED, value.line)];
+  if (value.kind !== "array") return [entry(UNREADABLE, value.line)];
+  return value.items.map((item) => {
+    const fields = tableFields(item);
+    return entry(fields === null ? UNREADABLE : verdictOf(fields, folder, indexes), item.line);
+  });
+}
+
+// pyproject.toml's dependencies in every section that can name a source: PEP 508 strings in [project] dependencies,
+// [project.optional-dependencies] and [dependency-groups]; [tool.uv.sources]; Poetry's dependency tables. Each value is placed by
+// its whole key path, so dotted keys, inline tables and table headers read alike, and any value in those sections in a shape it does
+// not know is one it cannot read. The names of [project] dependencies and [tool.poetry.dependencies] are sent to OSV.
+function readPyproject(text, folder = "") {
+  const values = tomlValues(text);
+  const indexes = { uv: namedIndexes(values, ["tool", "uv", "index"]), poetry: namedIndexes(values, ["tool", "poetry", "source"]) };
+  // Lists and dependencies, in the order of their first value.
+  const units = [];
+  const dependencies = new Map();
+  for (const { path, value } of values) {
+    const place = placeOf(path);
+    if (place === null) continue;
+    if (place.bad) units.push({ bad: value.line });
+    else if (place.list) units.push({ list: value, checked: place.checked === true, groups: place.groups === true });
+    else if (!(place.tool === "poetry" && place.name === "python")) {
+      let dependency = dependencies.get(place.id);
+      if (dependency === undefined) {
+        dependency = { tool: place.tool, name: place.name, checked: place.checked, line: value.line, fields: new Map(), lines: new Map(), whole: false, broken: false };
+        dependencies.set(place.id, dependency);
+        units.push({ dependency });
+      }
+      if (place.deeper) dependency.broken = true;
+      else if (place.field === undefined) {
+        dependency.broken ||= dependency.whole;
+        Object.assign(dependency, { whole: true, value });
+      } else if (dependency.fields.has(place.field)) dependency.broken = true;
+      else {
+        dependency.fields.set(place.field, value);
+        dependency.lines.set(place.field, value.line);
+      }
+    }
+  }
+  const found = units.flatMap((unit) => {
+    if (unit.bad !== undefined) return [{ entry: unnamedEntry(unit.bad), checked: false }];
+    if (unit.list) return requirementListEntries(unit.list, folder, unit.groups).map((entry) => ({ entry, checked: unit.checked }));
+    return dependencyEntries(unit.dependency, folder, indexes);
+  });
+  return manifestEntries(found, (name) => (name === null ? null : normalisePyPI(name)));
+}
+
+module.exports = { readPackageJson, readPyproject };

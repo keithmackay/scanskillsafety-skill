@@ -1,5 +1,5 @@
-// ABOUTME: Helpers the lockfile and manifest readers share: line and YAML-field reading, the Unreadable error, JSON key lines,
-// ABOUTME: the semver and PEP 440 tests, unreadable and unnamed entries, git, GitHub and codeload addresses, and repository paths.
+// ABOUTME: Helpers the lockfile and manifest readers share: line and YAML-field reading, the Unreadable error, JSON key and member
+// ABOUTME: lines, the semver and PEP 440 tests, unreadable and unnamed entries, git, GitHub and codeload addresses, repository paths.
 "use strict";
 
 const { OBJECT_ID } = require("../util");
@@ -102,6 +102,65 @@ function jsonKeyLines(text) {
   };
 }
 
+// Where a JSON string starting at `start` ends: the index after its closing quote.
+function jsonStringEnd(text, start) {
+  let i = start + 1;
+  while (i < text.length && text[i] !== '"') i += text[i] === "\\" ? 2 : 1;
+  return i + 1;
+}
+
+const JSON_PRIMITIVE_END = new Set([",", "}", "]", " ", "\t", "\n", "\r"]);
+const ROOT_OBJECT = 0;
+
+// The members of every object in valid JSON text, read in one pass, so a value parsed with JSON.parse can be given its line:
+// `member(object, key)` is the member a key names in an object (ROOT_OBJECT for the top level), the last of a repeated key as
+// JSON.parse keeps the last, with the line its value starts on, its text when it is a string, and its own object when it is one;
+// undefined when there is none. Keys are matched as JSON.parse decodes them, in a Map, so any key is a plain name.
+function jsonMembers(text) {
+  const objects = [];
+  // The open containers, innermost last: an object's members and the key read whose value is next, or null for an array.
+  const open = [];
+  let line = 1;
+  let i = 0;
+  const setMember = (member) => {
+    const top = open[open.length - 1];
+    if (!top || top.members === null) return;
+    top.members.set(top.key, member);
+    top.key = undefined;
+  };
+  while (i < text.length) {
+    const c = text[i];
+    const top = open[open.length - 1];
+    if (c === '"') {
+      const start = i;
+      i = jsonStringEnd(text, i);
+      if (top && top.members !== null && top.key === undefined) top.key = JSON.parse(text.slice(start, i));
+      else setMember({ line, start, end: i });
+    } else if (c === "{" || c === "[") {
+      const members = c === "{" ? new Map() : null;
+      const object = members === null ? undefined : objects.push(members) - 1;
+      setMember({ line, object });
+      open.push({ members, key: undefined });
+      i++;
+    } else if (c === "}" || c === "]") {
+      open.pop();
+      i++;
+    } else if (c === "\n" || c === "\r" || c === " " || c === "\t" || c === ":" || c === ",") {
+      if (c === "\n") line++;
+      i++;
+    } else {
+      setMember({ line });
+      while (i < text.length && !JSON_PRIMITIVE_END.has(text[i])) i++;
+    }
+  }
+  return (object, key) => {
+    const found = object === undefined ? undefined : objects[object]?.get(key);
+    if (found === undefined) return undefined;
+    const member = { line: found.line, object: found.object };
+    return found.start === undefined ? member : { ...member, text: JSON.parse(text.slice(found.start, found.end)) };
+  };
+}
+
 // A version as npm writes one for a package it installed by version. Any other npm version text is never kept or sent to OSV:
 // in a version 1 `version` (a git URL, a tarball URL, `file:`) it is the package's source; anywhere else it is no version at all.
 const SEMVER = /^\d+\.\d+\.\d+([-+][0-9A-Za-z.+-]+)?$/;
@@ -123,6 +182,9 @@ function isPep440(version) {
   const release = match[0].endsWith(".") ? match[0].slice(0, -1) : match[0];
   return !release.includes("..") && PEP440_SUFFIXES.test(publicPart.slice(release.length));
 }
+
+// A PyPI name as PyPI compares names: lower case, each run of `-`, `_` and `.` one `-`.
+const normalisePyPI = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
 
 const OUTSIDE_PROJECT = Object.freeze({ expected: false, kind: "url", address: null, text: "a path outside the project" });
 
@@ -219,8 +281,11 @@ module.exports = {
   found,
   parseJson,
   jsonKeyLines,
+  jsonMembers,
+  ROOT_OBJECT,
   SEMVER,
   isPep440,
+  normalisePyPI,
   UNREADABLE_ENTRY,
   unnamedEntry,
   githubCommit,

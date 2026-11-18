@@ -171,6 +171,9 @@ function patchedResolution(value) {
   return at < 0 ? null : decoded.slice(at + 1);
 }
 
+// An archive's file name as npm reads one: a value ending so is a file, whatever else it holds.
+const NPM_FILE_NAME = /[.](?:tgz|tar\.gz|tar)$/i;
+
 // `u/r` or `u/r#ref`: GitHub shorthand, exactly one `/`, not a scoped name.
 function isGithubShorthand(value) {
   const segments = withoutQuery(value).split("/");
@@ -178,8 +181,8 @@ function isGithubShorthand(value) {
 }
 
 // A package.json dependency value, in the order the package managers read it. A git or http(s) value it cannot read is reported
-// with a fixed text in place of the address; a value that is none of the source forms is a version range or a tag, so the
-// registry: this never answers unreadable.
+// with a fixed text in place of the address; a value npm reads as a path (a slash in a value that is no git form, or an archive's
+// file name) is local; any other value is a version range or a tag, so the registry: this never answers unreadable.
 function classifyManifestValue(ecosystem, value) {
   let resolution = value;
   for (let depth = 0; resolution.startsWith("patch:"); depth++) {
@@ -198,6 +201,7 @@ function classifyManifestValue(ecosystem, value) {
   const web = webUrl(ecosystem, resolution, true);
   if (web && !web.unreadable) return web;
   if (web) return { expected: false, kind: prefixOf(resolution, ["https:"]) ? "url" : "http", address: null, text: UNREAD_ADDRESS_TEXT };
+  if (resolution.includes("/") || NPM_FILE_NAME.test(resolution)) return LOCAL;
   return EXPECTED;
 }
 
