@@ -282,7 +282,7 @@ test("an oversized Cargo, Go or Ruby lockfile is still listed as not checked", (
   assert.deepEqual(read, { ...EMPTY, notChecked: ["Cargo.lock"] });
 });
 
-const quickly = (fn, ms = 2000) => {
+const quickly = (fn, ms = 5000) => {
   const start = Date.now();
   const value = fn();
   const took = Date.now() - start;

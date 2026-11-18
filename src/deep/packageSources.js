@@ -194,11 +194,11 @@ const NPM_FILE_NAME = /[.](?:tgz|tar\.gz|tar)$/i;
 // A file spec as npm reads one before any other form: a dot, `~/`, `/` or a drive letter at the start.
 const NPM_FILE_SPEC = /^(?:[.]|~[/]|[/]|[a-zA-Z]:)/;
 
-// A repository on GitHub, GitLab, Bitbucket, sourcehut or GitHub Gist named by an http(s) URL, as npm's hosted-git-info reads one:
-// GitHub `/<u>/<r>` or `/<u>/<r>/tree/<committish>`, GitLab `/<group>/…/<r>` with no `/-/` part, Bitbucket `/<u>/<r>` unless it
-// is a `/get/` download, sourcehut `/~<u>/<r>` unless it is an `/archive/`, a gist `/[<u>/]<id>` unless it is a `/raw/` file
-// (shown as `https://gist.github.com/<id>`, as the `gist:` shorthand is). Shown as the repository, with a commit from the fragment
-// or the tree. null for any other URL, such as an archive.
+// A repository on GitHub, GitLab, Bitbucket, sourcehut or GitHub Gist named by an http(s) URL, as npm's hosted-git-info reads
+// one: GitHub `/<u>/<r>` or `/<u>/<r>/tree/<committish>`, GitLab `/<group>/…/<r>` with no `/-/` part, Bitbucket `/<u>/<r>` unless
+// it is a `/get/` download, sourcehut `/~<u>/<r>` unless it is an `/archive/`, a gist `/[<u>/]<id>` unless it is a `/raw/` file
+// (shown as `https://gist.github.com/<id>`, as the `gist:` shorthand is). Shown as the repository, with a commit from the
+// fragment or the tree. null for any other URL, such as an archive.
 function hostedRepository(text) {
   if (!prefixOf(text, ["https:", "http:"])) return null;
   const url = parseUrl(text);
@@ -238,9 +238,9 @@ function isGithubShorthand(value) {
 // A package.json dependency value, in the order the package managers read it. A file spec npm reads first (a dot, `~/`, `/` or a
 // drive letter at the start) is local; an http(s) URL naming a GitHub, GitLab or Bitbucket repository is git; a git or http(s)
 // value it cannot read is reported with a fixed text in place of the address; a value npm reads as a path (a slash, or `\`, in a
-// value that is no git form, or an archive's file name) is local, unless it starts with whitespace or `=`, which makes it a source
-// it could not read, as does an alias of anything but a registry range; any other value is a version range or a tag, so the
-// registry: this never answers unreadable.
+// value that is no git form, or an archive's file name) is local, unless it starts with whitespace or `=`, which makes it a
+// source it could not read, as does an alias of anything but a registry range; any other value is a version range or a tag, so
+// the registry: this never answers unreadable.
 function classifyManifestValue(ecosystem, value) {
   let resolution = value;
   for (let depth = 0; resolution.startsWith("patch:"); depth++) {
@@ -267,4 +267,4 @@ function classifyManifestValue(ecosystem, value) {
   return EXPECTED;
 }
 
-module.exports = { classifySource, classifyManifestValue, commitFrom, LOCAL, OFFICIAL_HOSTS, NAME_SEGMENT, UNREADABLE };
+module.exports = { classifySource, classifyManifestValue, commitFrom, EXPECTED, LOCAL, OFFICIAL_HOSTS, NAME_SEGMENT, UNREADABLE };

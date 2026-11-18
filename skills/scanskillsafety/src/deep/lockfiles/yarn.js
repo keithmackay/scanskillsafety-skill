@@ -181,14 +181,14 @@ function readClassicLine(entry, line) {
 }
 
 // Each entry runs from its header to the next header or the end of the file, so its source, on a line after its version, is
-// carried with it. A header that does not end in `:` is an entry it cannot name; an entry is never left out for lacking a version.
-// A file with a `__metadata:` line is Berry, read by Berry's rules whatever else it holds; any other file must carry the classic
-// marker. Yarn itself reads a file with its classic parser when the opening comments carry `# yarn lockfile v1`; such a file with
-// a `__metadata:` line is read here by the stricter Berry rules, under which a classic-shaped line makes its entry unreadable,
-// so a source Yarn reads is never taken for the registry. Berry is YAML, read only as Berry writes it: a lone carriage return or
-// a tab makes the file one it cannot read, a header in any other shape is an entry it cannot name, and only an entry whose
-// resolution is a `workspace:` folder inside the repository (read from the lockfile's `folder`) is skipped; one outside it is
-// classified as that source. A classic entry is never skipped.
+// carried with it. A header that does not end in `:` is an entry it cannot name; an entry is never left out for lacking a
+// version. A file with a `__metadata:` line is Berry, read by Berry's rules whatever else it holds; any other file must carry the
+// classic marker. Yarn itself reads a file with its classic parser when the opening comments carry `# yarn lockfile v1`; such a
+// file with a `__metadata:` line is read here by the stricter Berry rules, under which a classic-shaped line makes its entry
+// unreadable, so a source Yarn reads is never taken for the registry. Berry is YAML, read only as Berry writes it: a lone
+// carriage return or a tab makes the file one it cannot read, a header in any other shape is an entry it cannot name, and only an
+// entry whose resolution is a `workspace:` folder inside the repository (read from the lockfile's `folder`) is skipped; one
+// outside it is classified as that source. A classic entry is never skipped.
 function readYarnLock(text, folder = "") {
   const lines = linesOf(text);
   const berry = lines.includes("__metadata:");
@@ -200,7 +200,8 @@ function readYarnLock(text, folder = "") {
   const finish = () => {
     const workspace = entry && entry.workspace !== false && !entry.unreadable;
     if (entry && !(workspace && staysInside(folder, entry.workspace))) {
-      const origin = entry.unreadable ? UNREADABLE_ENTRY : workspace ? { source: `${WORKSPACE}${entry.workspace}` } : entry.origin ?? noOrigin(entry);
+      const workspaceSource = workspace ? { source: `${WORKSPACE}${entry.workspace}` } : null;
+      const origin = entry.unreadable ? UNREADABLE_ENTRY : workspaceSource ?? entry.origin ?? noOrigin(entry);
       out.push({ name: entry.name, line: entry.line, version: entry.version ?? null, ...origin });
     }
     entry = null;

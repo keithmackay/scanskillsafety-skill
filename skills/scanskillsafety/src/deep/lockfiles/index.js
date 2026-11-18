@@ -1,5 +1,5 @@
-// ABOUTME: Reads the packages a target pulls in, and where each comes from, from its lockfiles (npm, Yarn, pnpm, Poetry, uv, pinned
-// ABOUTME: requirements), or from its manifests when it has none; formats it cannot read are listed, never ignored.
+// ABOUTME: Reads the packages a target pulls in, and where each comes from, from its lockfiles (npm, Yarn, pnpm, Poetry, uv,
+// ABOUTME: pinned requirements), or from its manifests when it has none; formats it cannot read are listed, never ignored.
 "use strict";
 
 const { baseName, isVendored } = require("../util");
@@ -10,7 +10,8 @@ const { readYarnLock } = require("./yarn");
 const { readPnpmLock } = require("./pnpm");
 const { readPoetryLock, readUvLock } = require("./python");
 const { readNamedRequirements, readRequirements } = require("./requirements");
-const { readPackageJson, readPyproject } = require("./manifests");
+const { readPackageJson } = require("./packageJson");
+const { readPyproject } = require("./pyproject");
 
 const LOCKFILES = new Map([
   ["package-lock.json", { ecosystem: "npm", read: readNpmLock }],
@@ -55,8 +56,8 @@ function readSafely(read, file) {
 const UNREADABLE_SOURCE_REASON = "a package source it could not read";
 
 // What a reader's entry is: the reader's own verdict when it decided, the classifier's on its source, or the registry when it
-// names no source. A commit the reader found wins over one in the text, and only a git source keeps one. A local path is read from
-// the lockfile's folder.
+// names no source. A commit the reader found wins over one in the text, and only a git source keeps one. A local path is read
+// from the lockfile's folder.
 function verdictOf(ecosystem, entry, folder) {
   if (entry.classified) return entry.classified;
   if (entry.source === undefined) return { expected: true };
@@ -144,9 +145,9 @@ function readPackages(files, leftOut = []) {
   // Requirements files read in their own right, and those named by -r or -c still to read; each is read once.
   const visited = new Set(ownFiles.filter((f) => lockfileKind(f.path) === REQUIREMENTS).map((f) => f.path));
   const toFollow = [];
-  // Reads a lockfile, a requirements file or a manifest, its registry packages sent to OSV unless `sourcesOnly`; false when the file
-  // could not be read at all.
-  const readEntries = (f, kind, sourcesOnly = false) => {
+  // Reads a lockfile, a requirements file or a manifest, its registry packages sent to OSV unless `sourcesOnly`; false when the
+  // file could not be read at all.
+  const readEntries = (f, kind, { sourcesOnly = false } = {}) => {
     const read = readSafely(kind.read, f);
     if (read.reason) {
       result.couldNotRead.push({ file: f.path, reason: read.reason });
@@ -187,7 +188,7 @@ function readPackages(files, leftOut = []) {
     const manifest = MANIFESTS.get(baseName(f.path));
     if (!manifest || locked.has(manifest.ecosystem)) continue;
     const sourcesOnly = pinned.has(manifest.ecosystem);
-    if (readEntries(f, manifest, sourcesOnly) && !sourcesOnly) result.namesOnly.push(f.path);
+    if (readEntries(f, manifest, { sourcesOnly }) && !sourcesOnly) result.namesOnly.push(f.path);
   }
   return result;
 }

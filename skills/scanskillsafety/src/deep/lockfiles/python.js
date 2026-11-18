@@ -76,9 +76,9 @@ function uvSourceVerdict(value, folder) {
   const extra = kind === "url" && fields.has("subdirectory") ? 1 : 0;
   const address = fields.get(kind);
   if (fields.size !== 1 + extra || address.kind !== "string") return UNREADABLE;
-  if (kind === "git") return pythonAddress(address.text, folder, { git: true });
-  if (kind === "url") return pythonAddress(address.text, folder, { direct: true });
-  const verdict = pythonAddress(address.text, folder, { pathField: true, role: kind === "registry" ? "index" : undefined });
+  if (kind === "git") return pythonAddress(address.raw, folder, { git: true });
+  if (kind === "url") return pythonAddress(address.raw, folder, { direct: true });
+  const verdict = pythonAddress(address.raw, folder, { pathField: true, role: kind === "registry" ? "index" : undefined });
   return (kind === "editable" || kind === "virtual") && verdict === LOCAL ? PROJECT : verdict;
 }
 
@@ -91,7 +91,7 @@ function uvFileVerdict(value, folder) {
   const address = fields.get("url") ?? fields.get("path");
   if (address === undefined) return null;
   if (address.kind !== "string") return UNREADABLE;
-  return pythonAddress(address.text, folder, { pathField: fields.has("path") });
+  return pythonAddress(address.raw, folder, { pathField: fields.has("path") });
 }
 
 // Where a uv package comes from: the first address that is neither the registry nor a path inside the project among its source,
@@ -137,7 +137,7 @@ const UV = {
 function fieldText(block, name) {
   const field = block.fields.get(name);
   if (field === undefined) return undefined;
-  return field.value.kind === "string" && field.value.plain ? field.value.text : null;
+  return field.value.kind === "string" && field.value.plain ? field.value.raw : null;
 }
 
 // What a finished block stands for: the project itself (skipped, `{ project: true }`), or an entry. A block in a shape the tool
@@ -164,7 +164,7 @@ function readBlockField(block, { key, exact, value, line }) {
 // A field of Poetry's [package.source]: one Poetry writes, written as it writes it, a basic string with no escape, given once.
 function readSourceField(block, { key, exact, value }) {
   const known = exact && POETRY_SOURCE_FIELDS.has(key) && !block.source.has(key);
-  if (known && value.kind === "string" && value.plain) block.source.set(key, value.text);
+  if (known && value.kind === "string" && value.plain) block.source.set(key, value.raw);
   else block.unreadable = true;
 }
 

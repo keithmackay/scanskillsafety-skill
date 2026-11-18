@@ -1,11 +1,10 @@
-// ABOUTME: Reads TOML statement by statement: table headers and key/value pairs with their lines, either strictly as Poetry and uv
-// ABOUTME: write their lockfiles (anything else is unreadable) or in any layout TOML allows, for hand-written files.
+// ABOUTME: Reads TOML statement by statement: table headers and key/value pairs with their lines, either strictly as Poetry and
+// ABOUTME: uv write their lockfiles (anything else is unreadable) or in any layout TOML allows, for hand-written files.
 "use strict";
 
 const { Unreadable } = require("./shared");
 
 const BARE_KEY_CHAR = /[A-Za-z0-9_-]/;
-const HEADER_CHAR = /[A-Za-z0-9_.-]/;
 // The characters of an unquoted TOML value Poetry and uv write: integers, booleans and dates without a space.
 const SCALAR_CHAR = /[A-Za-z0-9_.:+-]/;
 // How deep arrays and inline tables nest; Poetry and uv write three levels at most.
@@ -37,17 +36,17 @@ const arrayLaidOut = (gaps, items) =>
 
 // The statements of a TOML file, in order: table headers `{ line, header, array }` and key/value pairs `{ line, key, path, exact,
 // value }`. A key is its name when it is one bare key, otherwise null, and `path` is its dotted parts; `exact` says the pair is
-// written as Poetry and uv write one: at the start of its line, `name = value`, nothing after the value. A value, with the line it
-// starts on, is a string (`plain` when it is a basic string with no escape), a literal string, a scalar, an array or an inline
-// table, each `exact` when written as uv writes it. TOML that neither tool writes in a way that changes which table a line belongs
-// to (a multi-line string, a statement that does not start its line, a header that is not bare names joined by dots, an inline
-// table across lines, a tab or a lone carriage return between tokens, values nested deeper than MAX_NESTING) means the file is not
-// one it can read.
+// written as Poetry and uv write one: at the start of its line, `name = value`, nothing after the value. A value, with the line
+// it starts on, is a string (`plain` when it is a basic string with no escape), a literal string, a scalar, an array or an inline
+// table, each `exact` when written as uv writes it. TOML that neither tool writes in a way that changes which table a line
+// belongs to (a multi-line string, a statement that does not start its line, a header that is not bare names joined by dots, an
+// inline table across lines, a tab or a lone carriage return between tokens, values nested deeper than MAX_NESTING) means the
+// file is not one it can read.
 // With `anyLayout`, it reads any layout TOML 1.0 allows instead: indentation, tabs, quoted and spaced header parts, multi-line
 // strings (kind `multiline`, with no text) and a date-time with a space. An inline table across lines, values nested deeper than
 // MAX_NESTING, or a lone carriage return still mean the file is not one it can read.
-// In either mode a basic string's `text` is decoded (`raw` is as written), and a string holding an escape TOML does not define has
-// no text, so a reader treats it as one it cannot read.
+// In either mode a basic string's `text` is decoded (`raw` is as written), and a string holding an escape TOML does not define
+// has no text, so a reader treats it as one it cannot read.
 function tomlStatements(text, layout, { anyLayout = false } = {}) {
   const fail = () => {
     throw new Unreadable(layout);
@@ -162,9 +161,12 @@ function tomlStatements(text, layout, { anyLayout = false } = {}) {
     return { kind: "scalar", text: text.slice(start, i), exact: true };
   }
 
-  // A key, dotted or not, each part bare or quoted, as TOML allows: its name when it is one bare key, otherwise null, and its parts.
+  // A key, dotted or not, each part bare or quoted, as TOML allows: its name when it is one bare key, otherwise null; its parts;
+  // whether every part is bare; and whether any space sits around a dot.
   function key() {
     let name = null;
+    let bare = true;
+    let spaced = false;
     const path = [];
     for (let parts = 1; ; parts++) {
       const start = i;
@@ -177,15 +179,17 @@ function tomlStatements(text, layout, { anyLayout = false } = {}) {
         path.push(text.slice(start, i));
       }
       const quoted = text[start] === '"' || text[start] === "'";
+      bare &&= !quoted;
       name = parts === 1 && !quoted ? text.slice(start, i) : null;
       const end = i;
-      spaces();
+      const before = spaces();
       if (text[i] !== ".") {
         i = end;
-        return { name, path };
+        return { name, path, bare, spaced };
       }
       i++;
-      spaces();
+      const after = spaces();
+      spaced ||= before > 0 || after > 0;
     }
   }
 
@@ -266,18 +270,12 @@ function tomlStatements(text, layout, { anyLayout = false } = {}) {
     const array = text.startsWith("[[", i);
     i += array ? 2 : 1;
     const close = array ? "]]" : "]";
-    if (anyLayout) {
-      spaces();
-      const { path } = key();
-      spaces();
-      if (!text.startsWith(close, i)) fail();
-      i += close.length;
-      return { header: path, array };
-    }
-    const start = i;
-    while (i < text.length && HEADER_CHAR.test(text[i])) i++;
-    const path = text.slice(start, i).split(".");
-    if (path.includes("") || !text.startsWith(close, i)) fail();
+    const leading = spaces();
+    const { path, bare, spaced } = key();
+    const trailing = spaces();
+    if (!text.startsWith(close, i)) fail();
+    // Poetry and uv write a header as bare names joined by dots, with no space anywhere in it.
+    if (!anyLayout && (!bare || spaced || leading > 0 || trailing > 0)) fail();
     i += close.length;
     return { header: path, array };
   }

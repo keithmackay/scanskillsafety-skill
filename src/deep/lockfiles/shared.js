@@ -1,5 +1,5 @@
-// ABOUTME: Helpers the lockfile and manifest readers share: line and YAML-field reading, the Unreadable error, JSON key and member
-// ABOUTME: lines, the semver and PEP 440 tests, unreadable and unnamed entries, git, GitHub and codeload addresses, repository paths.
+// ABOUTME: Helpers the lockfile and manifest readers share: line and YAML-field reading, the Unreadable error, JSON key and
+// ABOUTME: member lines, semver and PEP 440, unreadable entries, git addresses, repository paths, and what a manifest gives.
 "use strict";
 
 const { OBJECT_ID } = require("../util");
@@ -221,8 +221,8 @@ const bundled = (repositoryPath) =>
 // The first character that makes a workspace pattern a glob.
 const GLOB_CHARACTER = /[*?[{]/;
 
-// Whether a workspace folder pattern, read from a file's folder, reaches outside the repository: judged on its literal part before
-// the first glob character (none of it, as in `*`, is the file's own folder). A negated pattern (`!…`) adds no folder.
+// Whether a workspace folder pattern, read from a file's folder, reaches outside the repository: judged on its literal part
+// before the first glob character (none of it, as in `*`, is the file's own folder). A negated pattern (`!…`) adds no folder.
 function workspaceOutside(folder, pattern) {
   if (pattern.startsWith("!")) return false;
   const glob = pattern.search(GLOB_CHARACTER);
@@ -230,14 +230,14 @@ function workspaceOutside(folder, pattern) {
   return literal !== "" && !staysInside(folder, literal);
 }
 
-// Local protocols followed by a path: `link:` and `portal:` always; `workspace:` when what follows is a folder (`.`, or a path with a
-// `/`) rather than a range or a workspace's name.
+// Local protocols followed by a path: `link:` and `portal:` always; `workspace:` when what follows is a folder (`.`, or a path
+// with a `/`) rather than a range or a workspace's name.
 const PATH_PROTOCOLS = ["link:", "portal:", "workspace:"];
 const isWorkspacePath = (rest) => rest.startsWith(".") || rest.includes("/");
 
-// What a local source in a JavaScript lockfile or package.json (`file:x.tgz`, `./x.tgz`, `file:../dir`, `portal:../x`) is, read from
-// its file's folder: a path that leaves the repository is a path outside the project; inside it, an archive is bundled and a folder
-// stays local. A catalog entry, or a workspace named by range or name, stays local.
+// What a local source in a JavaScript lockfile or package.json (`file:x.tgz`, `./x.tgz`, `file:../dir`, `portal:../x`) is, read
+// from its file's folder: a path that leaves the repository is a path outside the project; inside it, an archive is bundled and a
+// folder stays local. A catalog entry, or a workspace named by range or name, stays local.
 function localPathVerdict(source, folder, local) {
   if (source.startsWith("catalog:")) return local;
   const protocol = PATH_PROTOCOLS.find((prefix) => source.startsWith(prefix));
@@ -283,6 +283,32 @@ function addressSource(address, direct = false) {
   return codeload ? { classified: codeload } : { source: address, direct };
 }
 
+// The manifest readers' shared rules.
+
+const unreadableNamed = (name, line) => ({ name, version: null, line, ...UNREADABLE_ENTRY });
+const isRegistry = (entry) => entry.classified === undefined || entry.classified.expected === true;
+
+// What a manifest gives, from what it names (`{ entry, checked }`, `checked` when the entry's name is sent to OSV): every entry
+// not from the registry, local ones included so they are dropped later, and the registry names checked, with the version when the
+// manifest gives one and no line, except a name that also comes from somewhere else in the file (an override, a uv or Poetry
+// source), which is not sent to OSV since its name may not mean what OSV's record means.
+function manifestEntries(found, sameName) {
+  const elsewhere = new Set(found.filter(({ entry }) => !isRegistry(entry)).map(({ entry }) => sameName(entry.name)));
+  const reported = found.filter(({ entry }) => !isRegistry(entry)).map(({ entry }) => entry);
+  const names = found
+    .filter(({ entry, checked }) => checked && isRegistry(entry) && !elsewhere.has(sameName(entry.name)))
+    .map(({ entry }) => ({ name: entry.name, version: entry.version ?? null, line: null }));
+  return [...reported, ...names];
+}
+
+// The entries of a list of workspace folder patterns read from a file's folder, all at `line`: one for each pattern that leaves
+// the repository, a path outside the project; a list that is not an array of strings is one it cannot read.
+function workspaceEntries(patterns, line, folder) {
+  if (!Array.isArray(patterns) || patterns.some((pattern) => typeof pattern !== "string")) return [unnamedEntry(line)];
+  const outside = patterns.filter((pattern) => workspaceOutside(folder, pattern));
+  return outside.map(() => ({ name: null, version: null, line, classified: OUTSIDE_PROJECT }));
+}
+
 module.exports = {
   OUTSIDE_PROJECT,
   pathFrom,
@@ -291,6 +317,9 @@ module.exports = {
   bundled,
   localPathVerdict,
   workspaceOutside,
+  manifestEntries,
+  unreadableNamed,
+  workspaceEntries,
   unquote,
   linesOf,
   leadingSpaces,
