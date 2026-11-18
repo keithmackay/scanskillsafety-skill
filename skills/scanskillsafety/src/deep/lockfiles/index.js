@@ -83,6 +83,12 @@ function sourcedPackage(ecosystem, file, entry, verdict) {
   return item;
 }
 
+// A line that names where packages come from rather than one package (a requirements file's index option), as the reader read it.
+function sourcedLine(ecosystem, file, { line, from, classified }) {
+  const item = { ecosystem, file, line, from, kind: classified.kind, address: classified.address };
+  return classified.text ? { ...item, text: classified.text } : item;
+}
+
 // One lockfile's entries sorted by source: those from the official registry, those from anywhere else (local ones dropped), and
 // whether any source could not be read.
 function classifyEntries(ecosystem, file, entries) {
@@ -90,6 +96,10 @@ function classifyEntries(ecosystem, file, entries) {
   const sourced = [];
   let unreadable = false;
   for (const readEntry of entries) {
+    if (readEntry.from) {
+      sourced.push(sourcedLine(ecosystem, file, readEntry));
+      continue;
+    }
     const entry = withCheckedVersion(ecosystem, readEntry);
     const verdict = verdictOf(ecosystem, entry);
     if (verdict.expected) registry.push(entry);

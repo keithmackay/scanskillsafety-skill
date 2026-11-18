@@ -1472,3 +1472,160 @@ test("a uv.lock or poetry.lock with no [[package]] block at all could not be rea
     assert.deepEqual(readPackages([{ path: file, text }]), { ...EMPTY, couldNotRead: [{ file, reason: "no packages found in it" }] }, text);
   }
 });
+
+const requirementsLine = (line, kind, address, extra = {}) => ({ ecosystem: "PyPI", file: "requirements.txt", line, from: "requirements", kind, address, ...extra });
+const ENV_INDEX = { text: "an index set from an environment variable" };
+const OUTSIDE_TEXT = { text: "a path outside the project" };
+
+test("requirements*.txt: index options in every form, --trusted-host, VCS lines, name @ url and bare archive URLs are reported; == pins under an index option are still checked", () => {
+  const file = "requirements.txt";
+  const read = one(file, "requirements.sources.txt");
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [pypi("requests", "2.32.3", file, 10), pypi("idna", "3.10", file, 21)],
+    sourced: [
+      requirementsLine(2, "host", "https://mirror.example.com"),
+      requirementsLine(3, "host", "https://extra.example.com"),
+      requirementsLine(5, "host", "https://other.example.com"),
+      requirementsLine(7, "url", null, OUTSIDE_TEXT),
+      requirementsLine(8, "http", "http://mirror.example.com"),
+      requirementsLine(9, "host", null, ENV_INDEX),
+      pypiSourced("left-pad", null, file, 13, "git", "https://github.com/someone/left-pad.git", { commit: SHA1 }),
+      pypiSourced("tool", null, file, 14, "git", "ssh://github.com/someone/tool.git"),
+      pypiSourced("hgpkg", null, file, 15, "git", "hg+https://hg.example.com/repo"),
+      pypiSourced("named", null, file, 16, "url", "https://files.example.com/named-1.0-py3-none-any.whl"),
+      pypiSourced(null, null, file, 17, "url", "https://files.example.com/bare-1.0.tar.gz"),
+      pypiSourced("local", null, file, 18, "url", null, OUTSIDE_TEXT),
+    ],
+  });
+  const json = JSON.stringify(read);
+  assert.ok(!json.includes("SECRET") && !json.includes("TOKEN") && !json.includes("user"));
+});
+
+test("requirements*.txt: a file with only name @ url lines and no == pin is read, not unreadable", () => {
+  const file = "requirements.txt";
+  assert.deepEqual(one(file, "requirements.direct.txt"), {
+    ...EMPTY,
+    sourced: [
+      pypiSourced("alpha", null, file, 1, "url", "https://files.example.com/alpha-1.0.tar.gz"),
+      pypiSourced("beta", null, file, 2, "git", "https://github.com/someone/beta", { commit: SHA1 }),
+    ],
+  });
+});
+
+test("requirements*.txt: a path is local inside the repository and outside the project when it leaves it, measured from the repository root", () => {
+  const read = (file, text) => readPackages([{ path: file, text: `${text}\nidna==3.10\n` }]).sourced;
+  assert.deepEqual(read("api/requirements.txt", "-f ../wheels\n-e ../packages/x\n-r ../requirements-base.txt"), []);
+  const outside = ["-f ../../wheels", "-e ../../x", "../../x", "-f file:///opt/wheels", "-e /opt/x", "-r ../../base.txt", "y @ file:./y"];
+  for (const line of outside) {
+    const file = "api/requirements.txt";
+    const [item] = read(file, line);
+    assert.deepEqual({ kind: item.kind, address: item.address, text: item.text }, { kind: "url", address: null, ...OUTSIDE_TEXT }, line);
+  }
+});
+
+test("requirements*.txt: shapes pip accepts that hold no source, or a pin, read as pip reads them", () => {
+  const cases = [
+    ["requests==2.0 --hash=sha256:abc", [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ["requests==2.0 --hash sha256:abc --config-settings=a=b", [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ['requests[socks, security] == 2.0 ; python_version < "3.8"', [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ["requests (==2.0)", [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ["requests==2.0  # pinned", [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ["requests==2.0 \\", [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ["requests==2.0\\\n", [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ["﻿requests==2.0", [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ["# a comment that ends in a backslash \\\nrequests==2.0", [pypi("requests", "2.0", "requirements.txt", 2)], []],
+    ["requests==2.0.*", [pypi("requests", null, "requirements.txt", 1)], []],
+    ["requests===2.0", [pypi("requests", null, "requirements.txt", 1)], []],
+    ["requests>=2.0\nrequests~=2.0\nrequests\nrequests>=1,<3\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 5)], []],
+    ["--index-url=https://pypi.org/simple\n--extra-index-url https://files.pythonhosted.org/simple\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 3)], []],
+    ["--pre\n--no-index\n--prefer-binary\n--require-hashes\n--only-binary :all:\n--no-binary=:none:\n--use-feature=truststore\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 8)], []],
+    ["-f wheels\n-e .[dev]\n-e.\n--editable=./x\n-c constraints.txt\n-rrequirements-dev.txt\n.\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 8)], []],
+    ["https://files.example.com/x-1.0.whl#egg=xpkg", [], [pypiSourced("xpkg", null, "requirements.txt", 1, "url", "https://files.example.com/x-1.0.whl")]],
+    ["https://user:SECRET@files.example.com/TOKEN/x-1.0.whl", [], [pypiSourced(null, null, "requirements.txt", 1, "url", "https://files.example.com/x-1.0.whl")]],
+    ["x @ https://files.pythonhosted.org/packages/x-1.0.whl", [pypi("x", null, "requirements.txt", 1)], []],
+    ["git+https://github.com/u/r@feature/x#egg=r", [], [pypiSourced("r", null, "requirements.txt", 1, "git", "https://github.com/u/r")]],
+    ["svn+https://svn.example.com/repo/trunk#egg=s", [], [pypiSourced("s", null, "requirements.txt", 1, "git", "svn+https://svn.example.com/repo/trunk")]],
+    ["--trusted-host host.example:8080", [], [requirementsLine(1, "http", "http://host.example:8080")]],
+    ["-f https://download.pytorch.org/whl/cpu", [], [requirementsLine(1, "host", "https://download.pytorch.org")]],
+    ["-i http://mirror.example.com/simple", [], [requirementsLine(1, "http", "http://mirror.example.com")]],
+    ["-i https://${USER}:${TOKEN}@mirror.example.com/simple", [], [requirementsLine(1, "host", null, ENV_INDEX)]],
+    ["-f ${WHEELS}", [], [requirementsLine(1, "host", null, ENV_INDEX)]],
+    ["requests==2.0 \\\n  --hash=sha256:abc\n-i https://mirror.example.com/simple", [pypi("requests", "2.0", "requirements.txt", 1)], [requirementsLine(3, "host", "https://mirror.example.com")]],
+  ];
+  for (const [text, packages, sourced] of cases) {
+    for (const lines of [text, text.replace(/\n/g, "\r\n")]) {
+      const read = readPackages([{ path: "requirements.txt", text: lines }]);
+      assert.deepEqual(read, { ...EMPTY, packages, sourced }, JSON.stringify(lines));
+      assert.ok(!JSON.stringify(read).includes("SECRET"), lines);
+    }
+  }
+});
+
+test("requirements*.txt: a line that could name a source and is not one it can read is a source it could not read, never ignored or taken for a pin", () => {
+  const lines = [
+    "requests==2.0 --index-url https://evil.example/SECRET/simple",
+    "requests==2.0 \\\n-i https://evil.example/SECRET/simple",
+    "requests==2.0 -f https://evil.example/SECRET",
+    "--index=https://evil.example/SECRET/simple",
+    "--extra-index https://evil.example/SECRET/simple",
+    "--index-url",
+    "-i",
+    "-e",
+    "--pre requests==2.0",
+    "--pre=yes",
+    "-i https://evil.example/SECRET/simple extra",
+    "-e git+https://evil.example/SECRET.git --index-url https://evil.example/simple",
+    "-e ./a -e ./b",
+    "-x https://evil.example/SECRET",
+    "--foo",
+    '-i "https://evil.example/SECRET/simple"',
+    "-i https://evil.example/SECRET/simple\\ x",
+    "requests==2.0\t--index-url\thttps://evil.example/SECRET/simple",
+    "requests==2.0\r-i https://evil.example/SECRET/simple",
+    "# a comment -i https://evil.example/SECRET/simple",
+    "# a comment\f-i https://evil.example/SECRET/simple",
+    "${PACKAGE}==1.0",
+    "requests @ https://${TOKEN}@evil.example/SECRET/x.whl",
+    "--trusted-host ${HOST}",
+    "--trusted-host evil.example/SECRET",
+    "-r https://evil.example/SECRET/requirements.txt",
+    "-c ${CONSTRAINTS}",
+    "git+git@github.com:someone/SECRET.git",
+    "git+ssh://git@github.com:someone/SECRET.git",
+    "git+https://",
+    "ftp://evil.example/SECRET/x.tar.gz",
+    "-i SECRET",
+    "requests=2.0",
+    "requests==",
+    "requests 2.0",
+    "requests==2.0 junk",
+    "requests>=",
+    "pkg @",
+    "pkg @ https://evil.example/SECRET/x.whl extra",
+    "@ https://evil.example/SECRET/x.whl",
+  ];
+  for (const text of lines) {
+    const read = readPackages([{ path: "requirements.txt", text: `${text}\nidna==3.10\n` }]);
+    assert.equal(read.sourced.length, 1, JSON.stringify(text));
+    assert.equal(read.sourced[0].kind, "unreadable", JSON.stringify(text));
+    assert.equal(read.sourced[0].address, null, JSON.stringify(text));
+    assert.deepEqual(read.couldNotRead, [{ file: "requirements.txt", reason: UNREADABLE_SOURCE }], JSON.stringify(text));
+    assert.deepEqual(read.packages.map((p) => p.name), ["idna"], JSON.stringify(text));
+    assert.ok(!JSON.stringify(read).includes("SECRET"), JSON.stringify(text));
+  }
+});
+
+test("requirements*.txt: a requirement whose specifier is not one it can read keeps its name; one it cannot read at all has none", () => {
+  const read = readPackages([{ path: "requirements.txt", text: "requests=2.0\n-x\n" }]);
+  assert.deepEqual(read.sourced, [
+    pypiSourced("requests", null, "requirements.txt", 1, "unreadable", null),
+    pypiSourced(null, null, "requirements.txt", 2, "unreadable", null),
+  ]);
+});
+
+test("a long requirements line of any shape is read quickly", () => {
+  for (const line of [`-i ${"a".repeat(4000000)}`, `x${" ".repeat(4000000)}@`, `x${"[".repeat(4000000)}`, `x==1.0 ${"\\".repeat(4000000)}`, `${"#".repeat(4000000)}`]) {
+    quickly(() => readPackages([{ path: "requirements.txt", text: line }]));
+  }
+});
