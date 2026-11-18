@@ -218,15 +218,20 @@ const isPackageArchive = (path) => PACKAGE_ARCHIVE.test(path.split("#", 1)[0].sp
 const bundled = (repositoryPath) =>
   Object.freeze({ expected: false, kind: "bundled", address: repositoryPath === "" ? "." : repositoryPath, text: "a bundled package file the scan cannot read" });
 
-// Local sources that name a workspace, a link or a catalog entry rather than a path to read.
-const NOT_A_PATH = ["workspace:", "link:", "portal:", "catalog:"];
+// Local protocols followed by a path: `link:` and `portal:` always; `workspace:` when what follows is a folder (`.`, or a path with a
+// `/`) rather than a range or a workspace's name.
+const PATH_PROTOCOLS = ["link:", "portal:", "workspace:"];
+const isWorkspacePath = (rest) => rest.startsWith(".") || rest.includes("/");
 
-// What a local source in a JavaScript lockfile or package.json (`file:x.tgz`, `./x.tgz`, `file:../dir`) is, read from its file's
-// folder: a path that leaves the repository is a path outside the project; inside it, an archive is bundled and a folder stays
-// local. A workspace, link or catalog source stays local.
+// What a local source in a JavaScript lockfile or package.json (`file:x.tgz`, `./x.tgz`, `file:../dir`, `portal:../x`) is, read from
+// its file's folder: a path that leaves the repository is a path outside the project; inside it, an archive is bundled and a folder
+// stays local. A catalog entry, or a workspace named by range or name, stays local.
 function localPathVerdict(source, folder, local) {
-  if (NOT_A_PATH.some((prefix) => source.startsWith(prefix))) return local;
-  const path = source.replace(/^file:/i, "").split("#", 1)[0].split("?", 1)[0].split("::", 1)[0];
+  if (source.startsWith("catalog:")) return local;
+  const protocol = PATH_PROTOCOLS.find((prefix) => source.startsWith(prefix));
+  const rest = protocol === undefined ? source.replace(/^file:/i, "") : source.slice(protocol.length);
+  if (protocol === "workspace:" && !isWorkspacePath(rest)) return local;
+  const path = rest.split("#", 1)[0].split("?", 1)[0].split("::", 1)[0];
   if (!staysInside(folder, path)) return OUTSIDE_PROJECT;
   return isPackageArchive(path) ? bundled(pathFrom(folder, path)) : local;
 }

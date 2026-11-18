@@ -11,6 +11,7 @@ const {
   opensUnclosed,
   PLAIN_NAME,
   startsWithAny,
+  staysInside,
   unnamedEntry,
   unquote,
   Unreadable,
@@ -129,7 +130,7 @@ const WORKSPACE = "workspace:";
 const isWorkspaceFolder = (folder) => folder !== "" && !folder.startsWith("/") && !folder.includes(":") && !folder.includes("//");
 
 // The `version` or `resolution` field of a Berry entry, each given once and holding a scalar, or the entry's source is one it
-// cannot read. A resolution of `workspace:` and a relative folder is the project's own workspace, skipped; one naming anything
+// cannot read. A resolution of `workspace:` and a relative folder is a workspace, kept as `entry.workspace`; one naming anything
 // else is one it cannot read.
 function readBerryScalar(entry, { key, value }) {
   const given = key === "version" ? entry.version !== undefined : entry.origin !== undefined;
@@ -145,7 +146,7 @@ function readBerryScalar(entry, { key, value }) {
   const named = afterName(resolution) ?? "";
   entry.origin = berrySource(resolution);
   if (!named.startsWith(WORKSPACE)) return;
-  if (isWorkspaceFolder(named.slice(WORKSPACE.length))) entry.workspace = true;
+  if (isWorkspaceFolder(named.slice(WORKSPACE.length))) entry.workspace = named.slice(WORKSPACE.length);
   else entry.unreadable = true;
 }
 
@@ -186,8 +187,9 @@ function readClassicLine(entry, line) {
 // a `__metadata:` line is read here by the stricter Berry rules, under which a classic-shaped line makes its entry unreadable,
 // so a source Yarn reads is never taken for the registry. Berry is YAML, read only as Berry writes it: a lone carriage return or
 // a tab makes the file one it cannot read, a header in any other shape is an entry it cannot name, and only an entry whose
-// resolution is a `workspace:` folder is skipped. A classic entry is never skipped.
-function readYarnLock(text) {
+// resolution is a `workspace:` folder inside the repository (read from the lockfile's `folder`) is skipped; one outside it is
+// classified as that source. A classic entry is never skipped.
+function readYarnLock(text, folder = "") {
   const lines = linesOf(text);
   const berry = lines.includes("__metadata:");
   if (!berry && !text.includes("# yarn lockfile v1")) throw new Unreadable("not a Yarn lockfile it can read");
@@ -196,8 +198,9 @@ function readYarnLock(text) {
   const out = [];
   let entry = null;
   const finish = () => {
-    if (entry && !(entry.workspace && !entry.unreadable)) {
-      const origin = entry.unreadable ? UNREADABLE_ENTRY : entry.origin ?? noOrigin(entry);
+    const workspace = entry && entry.workspace !== false && !entry.unreadable;
+    if (entry && !(workspace && staysInside(folder, entry.workspace))) {
+      const origin = entry.unreadable ? UNREADABLE_ENTRY : workspace ? { source: `${WORKSPACE}${entry.workspace}` } : entry.origin ?? noOrigin(entry);
       out.push({ name: entry.name, line: entry.line, version: entry.version ?? null, ...origin });
     }
     entry = null;

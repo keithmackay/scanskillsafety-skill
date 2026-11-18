@@ -393,12 +393,12 @@ test("yarn.lock, classic sources: the registry is checked, a mirror is not and i
 });
 
 test("yarn.lock, Berry sources: npm: and a patch of an npm: package are checked; #commit= is git; an https tarball pins one archive; portal: is local", () => {
-  assert.deepEqual(one("yarn.lock", "yarn.berry.sources.lock"), {
+  assert.deepEqual(one("app/yarn.lock", "yarn.berry.sources.lock"), {
     ...EMPTY,
-    packages: [npm("js-tokens", "4.0.0", "yarn.lock", 8), npm("resolve", "1.22.1", "yarn.lock", 28)],
+    packages: [npm("js-tokens", "4.0.0", "app/yarn.lock", 8), npm("resolve", "1.22.1", "app/yarn.lock", 28)],
     sourced: [
-      sourced("left-pad", "1.3.0", "yarn.lock", 15, "git", "https://github.com/someone/left-pad.git", { commit: SHA1 }),
-      sourced("tiny", "1.0.0", "yarn.lock", 43, "url", "https://files.example.com/tiny-1.0.0.tgz"),
+      sourced("left-pad", "1.3.0", "app/yarn.lock", 15, "git", "https://github.com/someone/left-pad.git", { commit: SHA1 }),
+      sourced("tiny", "1.0.0", "app/yarn.lock", 43, "url", "https://files.example.com/tiny-1.0.0.tgz"),
     ],
   });
 });
@@ -1067,7 +1067,7 @@ test("yarn.lock, classic: a second version in an entry is a source it could not 
 test("yarn.lock, Berry: a workspace resolution is skipped only when it names a relative folder; any other is a source it could not read", () => {
   const lock = (resolution) => berryText('"a@workspace:x":', "  version: 1.0.0", `  resolution: "a@workspace:${resolution}"`);
   for (const folder of [".", "./packages/a", "../a", "packages/a"]) {
-    assert.deepEqual(readPackages([{ path: "yarn.lock", text: lock(folder) }]), EMPTY, folder);
+    assert.deepEqual(readPackages([{ path: "app/yarn.lock", text: lock(folder) }]), EMPTY, folder);
   }
   for (const odd of [EVIL, "/abs/a", "x:y", "a//b", ""]) {
     const read = readPackages([{ path: "yarn.lock", text: lock(odd) }]);
@@ -1858,4 +1858,16 @@ test("JavaScript lockfiles: a file: folder outside the repository is a path outs
     { name: "b", ...outside },
     { name: "c", kind: "unreadable", address: null, text: undefined },
   ]);
+});
+
+test("yarn.lock, Berry: a workspace, portal or link folder that leaves the repository is a path outside the project; inside it stays local", () => {
+  const outside = { kind: "url", address: null, text: "a path outside the project" };
+  const pick = (read) => read.sourced.map(({ name, kind, address, text }) => ({ name, kind, address, text }));
+  const lock = (resolution) => berryText('"a@x":', "  version: 1.0.0", `  resolution: "a@${resolution}"`);
+  for (const resolution of ["workspace:../a", "portal:../a::locator=t%40workspace%3A.", "link:../../a::locator=t%40workspace%3A."]) {
+    assert.deepEqual(pick(readPackages([{ path: "yarn.lock", text: lock(resolution) }])), [{ name: "a", ...outside }], resolution);
+  }
+  for (const resolution of ["workspace:packages/a", "portal:./a::locator=t%40workspace%3A.", "link:a::locator=t%40workspace%3A."]) {
+    assert.deepEqual(readPackages([{ path: "yarn.lock", text: lock(resolution) }]).sourced, [], resolution);
+  }
 });

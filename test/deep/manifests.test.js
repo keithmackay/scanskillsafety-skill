@@ -501,6 +501,8 @@ test("package.json: a file: folder or path outside the repository is a path outs
     sourced("abs", 6, "url", null, OUTSIDE),
     sourced("home", 7, "url", null, OUTSIDE),
     sourced("url", 8, "url", null, OUTSIDE),
+    sourced("ws", 9, "url", null, OUTSIDE),
+    sourced("linked", 10, "url", null, OUTSIDE),
   ]);
 });
 
@@ -531,4 +533,115 @@ test("pyproject.toml: [build-system] requires and [tool.uv]'s dev, override and 
 test("package.json: an npm alias sends the package it names to OSV, in any case, scoped or with no version", () => {
   const text = JSON.stringify({ dependencies: { x: "npm:real@^1", y: "NPM:@s/scoped@~2", z: "npm:bare" } });
   assert.deepEqual(readOne("package.json", text).packages, ["real", "@s/scoped", "bare"].map(named("npm", "package.json")));
+});
+
+test("package.json: an alias whose text after npm: is no package name is the key's package", () => {
+  const text = JSON.stringify({ dependencies: { lodash: "npm:^4.17.21", react: "npm:18.2.0", vue: "npm:~3", x: "npm:real@^1" } });
+  assert.deepEqual(readOne("package.json", text).packages, ["lodash", "react", "vue", "real"].map(named("npm", "package.json")));
+});
+
+test("package.json: a value starting with a dot or a drive letter is a path; outside the repository it is reported; its name is never sent to OSV", () => {
+  const file = "app/package.json";
+  const text = lines("{", '  "dependencies": {', '    "dot": ".",', '    "up": "..",', '    "hidden": ".hidden",', '    "drive": "C:/x",', '    "upup": "../.."', "  }", "}");
+  const read = readOne(file, text);
+  assert.deepEqual(read.packages, []);
+  assert.deepEqual(read.sourced, [item("npm", file)("drive", 6, "url", null, OUTSIDE), item("npm", file)("upup", 7, "url", null, OUTSIDE)]);
+});
+
+test("package.json: a tarball on the official registry is checked by the name and version its path gives, never by the key", () => {
+  const text = JSON.stringify({
+    dependencies: {
+      x: "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
+      y: "https://registry.yarnpkg.com/@babel/core/-/core-7.0.0.tgz",
+      z: "https://registry.npmjs.org/@s%2fname/-/name-1.0.0-beta.1.tgz",
+      w: "https://registry.npmjs.org/weird/path.tgz",
+      v: "https://registry.npmjs.org/left-pad/-/other-1.0.0.tgz",
+    },
+  });
+  const read = readOne("package.json", text);
+  const pkg = (name, version) => ({ ecosystem: "npm", name, version, file: "package.json", line: null });
+  assert.deepEqual(read.packages, [pkg("lodash", "4.17.21"), pkg("@babel/core", "7.0.0"), pkg("@s/name", "1.0.0-beta.1")]);
+  assert.deepEqual(read.sourced, []);
+});
+
+test("package.json: an alias in overrides, resolutions or pnpm.overrides, and the package a patch patches, are sent to OSV", () => {
+  const text = JSON.stringify({
+    dependencies: { foo2: "patch:foo@npm%3Abar%40^1#./p.patch", lodash: "patch:lodash@npm%3A4.17.21#./p.patch" },
+    devDependencies: { tap: "npm:not-sent@1" },
+    overrides: { foo: "npm:evil@1", nested: { ".": "npm:evil-nested@1" }, plain: "^1", patched: "patch:q@npm%3Aqq%40^1#./p.patch" },
+    resolutions: { bar: "npm:@s/evil2@^2" },
+    pnpm: { overrides: { baz: "npm:evil3" } },
+  });
+  assert.deepEqual(readOne("package.json", text).packages, ["bar", "lodash", "evil", "evil-nested", "qq", "@s/evil2", "evil3"].map(named("npm", "package.json")));
+});
+
+test("package.json: a UTF-8 byte order mark before the JSON is read past, the lines unchanged", () => {
+  const text = '\uFEFF{\n  "dependencies": {\n    "a": "^1",\n    "b": "github:u/b"\n  }\n}\n';
+  const read = readOne("package.json", text);
+  assert.deepEqual(read.packages, [named("npm", "package.json")("a")]);
+  assert.deepEqual(read.sourced, [item("npm", "package.json")("b", 4, "git", "https://github.com/u/b")]);
+});
+
+test("pyproject.toml: PDM's ${PROJECT_ROOT} and Hatch's {root:uri} are the project's folder, so the path is local, bundled or outside as usual", () => {
+  const text = lines(
+    "[project]",
+    "dependencies = [",
+    '    "a @ file:///${PROJECT_ROOT}/libs/a",',
+    '    "b @ file:///${PROJECT_ROOT}/dist/b-1.0-py3-none-any.whl",',
+    '    "c @ {root:uri}/../../c",',
+    '    "d @ {root:uri}/d-1.0.tar.gz",',
+    '    "e @ {root:uri}",',
+    "]",
+  );
+  const file = "py/pyproject.toml";
+  const read = readOne(file, text);
+  assert.deepEqual(read.packages, []);
+  assert.deepEqual(read.sourced, [
+    item("PyPI", file)("b", 4, "bundled", "py/dist/b-1.0-py3-none-any.whl", BUNDLED),
+    item("PyPI", file)("c", 5, "url", null, OUTSIDE),
+    item("PyPI", file)("d", 6, "bundled", "py/d-1.0.tar.gz", BUNDLED),
+  ]);
+});
+
+test("pyproject.toml: uv's build-constraint and extra build dependencies, and PDM's dev-dependencies (with -e), are read for sources; their names are not sent to OSV", () => {
+  const text = lines(
+    "[tool.uv]",
+    'build-constraint-dependencies = ["setuptools<70", "bc @ https://e.example/bc-1.0.zip"]',
+    "[tool.uv.extra-build-dependencies]",
+    "flash = [",
+    '    "x @ https://e.example/x-1.0.tar.gz",',
+    '    { requirement = "y @ git+https://e.example/y", match-runtime = true },',
+    '    { requirement = "torch" },',
+    "]",
+    "[tool.pdm.dev-dependencies]",
+    "dev = [",
+    '    "pytest",',
+    '    "z @ https://e.example/z-1.0.zip",',
+    '    "-e file:///${PROJECT_ROOT}/libs/e#egg=e",',
+    '    "-e git+https://e.example/f#egg=f",',
+    "]",
+  );
+  const sourced = item("PyPI", "pyproject.toml");
+  assert.deepEqual(readOne("pyproject.toml", text), {
+    ...EMPTY,
+    namesOnly: ["pyproject.toml"],
+    sourced: [
+      sourced("bc", 2, "url", "https://e.example/bc-1.0.zip"),
+      sourced("x", 5, "url", "https://e.example/x-1.0.tar.gz"),
+      sourced("y", 6, "git", "https://e.example/y"),
+      sourced("z", 12, "url", "https://e.example/z-1.0.zip"),
+      sourced("f", 14, "git", "https://e.example/f"),
+    ],
+  });
+  const bad = [
+    '[tool.uv.extra-build-dependencies]\nflash = "x"\n',
+    '[tool.uv.extra-build-dependencies]\nflash = [{ requirement = "x", evil = 1 }]\n',
+    '[tool.uv.extra-build-dependencies]\nflash = [{ match-runtime = true }]\n',
+    '[tool.uv]\nextra-build-dependencies = "x"\n',
+    '[tool.pdm.dev-dependencies]\ndev = "x"\n',
+    '[tool.pdm]\ndev-dependencies = ["x"]\n',
+    '[tool.pdm.dev-dependencies]\ndev = ["-e"]\n',
+    '[dependency-groups]\ndev = [{ requirement = "x" }]\n',
+  ];
+  for (const text of bad) assert.deepEqual(readOne("pyproject.toml", text).sourced, [unreadable("PyPI", "pyproject.toml")(null, 2)], text);
 });

@@ -173,6 +173,34 @@ function patchedResolution(value) {
 
 // An archive's file name as npm reads one: a value ending so is a file, whatever else it holds.
 const NPM_FILE_NAME = /[.](?:tgz|tar\.gz|tar)$/i;
+// A file spec as npm reads one before any other form: a dot, `~/`, `/` or a drive letter at the start.
+const NPM_FILE_SPEC = /^(?:[.]|~[/]|[/]|[a-zA-Z]:)/;
+
+// A repository on GitHub, GitLab or Bitbucket named by an http(s) URL, as npm's hosted-git-info reads one: GitHub `/<u>/<r>` or
+// `/<u>/<r>/tree/<committish>`, GitLab `/<group>/…/<r>` with no `/-/` part, Bitbucket `/<u>/<r>` unless it is a `/get/`
+// download. Shown as the repository, with a commit from the fragment or the tree. null for any other URL, such as an archive.
+function hostedRepository(text) {
+  if (!prefixOf(text, ["https:", "http:"])) return null;
+  const url = parseUrl(text);
+  if (!url || !url.host) return null;
+  const host = url.hostname.startsWith("www.") ? url.hostname.slice(4) : url.hostname;
+  const segments = url.pathname.slice(1).split("/");
+  let repository = segments.slice(0, 2);
+  let committish = "";
+  if (host === "github.com") {
+    if (segments[2] && segments[2] !== "tree") return null;
+    if (segments[2] === "tree") committish = segments.slice(3).join("/");
+  } else if (host === "gitlab.com") {
+    if (url.pathname.includes("/-/") || url.pathname.includes("/archive.tar.gz")) return null;
+    repository = segments;
+  } else if (host === "bitbucket.org") {
+    if (segments[2] === "get") return null;
+  } else return null;
+  if (repository.length < 2 || !repository.every((segment) => NAME_SEGMENT.test(segment))) return null;
+  const address = `${url.protocol}//${url.host}/${repository.join("/")}`;
+  const commit = commitFrom(text) ?? (OBJECT_ID.test(committish) ? committish : null);
+  return commit ? { expected: false, kind: "git", address, commit } : { expected: false, kind: "git", address };
+}
 
 // `u/r` or `u/r#ref`: GitHub shorthand, exactly one `/`, not a scoped name.
 function isGithubShorthand(value) {
@@ -180,9 +208,11 @@ function isGithubShorthand(value) {
   return segments.length === 2 && segments.every((s) => NAME_SEGMENT.test(s)) && !value.startsWith("@");
 }
 
-// A package.json dependency value, in the order the package managers read it. A git or http(s) value it cannot read is reported
-// with a fixed text in place of the address; a value npm reads as a path (a slash in a value that is no git form, or an archive's
-// file name) is local; any other value is a version range or a tag, so the registry: this never answers unreadable.
+// A package.json dependency value, in the order the package managers read it. A file spec npm reads first (a dot, `~/`, `/` or a
+// drive letter at the start) is local; an http(s) URL naming a GitHub, GitLab or Bitbucket repository is git; a git or http(s)
+// value it cannot read is reported with a fixed text in place of the address; a value npm reads as a path (a slash in a value that
+// is no git form, or an archive's file name) is local; any other value is a version range or a tag, so the registry: this never
+// answers unreadable.
 function classifyManifestValue(ecosystem, value) {
   let resolution = value;
   for (let depth = 0; resolution.startsWith("patch:"); depth++) {
@@ -190,7 +220,7 @@ function classifyManifestValue(ecosystem, value) {
     resolution = patchedResolution(resolution);
     if (resolution === null) return UNREAD_SOURCE;
   }
-  if (isLocal(resolution)) return LOCAL;
+  if (NPM_FILE_SPEC.test(resolution) || isLocal(resolution)) return LOCAL;
   if (prefixOf(resolution, ["npm:"])) return EXPECTED;
   if (resolution.startsWith("jsr:")) return { expected: false, kind: "host", address: "https://npm.jsr.io" };
   if (resolution.startsWith("exec:")) return { expected: false, kind: "url", address: null, text: EXEC_TEXT };
@@ -198,6 +228,8 @@ function classifyManifestValue(ecosystem, value) {
   const git = gitSource(gitText);
   if (git && git.kind === "git") return git;
   if (git || prefixOf(resolution, GIT_FORMS)) return { expected: false, kind: "git", address: null, text: UNREAD_GIT_TEXT };
+  const hosted = hostedRepository(resolution);
+  if (hosted) return hosted;
   const web = webUrl(ecosystem, resolution, true);
   if (web && !web.unreadable) return web;
   if (web) return { expected: false, kind: prefixOf(resolution, ["https:"]) ? "url" : "http", address: null, text: UNREAD_ADDRESS_TEXT };

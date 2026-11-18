@@ -4,7 +4,7 @@
 
 const { isObject, OBJECT_ID } = require("../util");
 const { classifyManifestValue, LOCAL, UNREADABLE } = require("../packageSources");
-const { jsonMembers, localPathVerdict, normalisePyPI, parseJson, ROOT_OBJECT, unnamedEntry, UNREADABLE_ENTRY } = require("./shared");
+const { jsonMembers, localPathVerdict, normalisePyPI, parseJson, ROOT_OBJECT, SEMVER, unnamedEntry, UNREADABLE_ENTRY } = require("./shared");
 const { tomlStatements } = require("./toml");
 const { pythonAddress } = require("./python");
 const { addressEntries, specifierEntries, splitName } = require("./requirements");
@@ -15,16 +15,16 @@ const NAMED_INDEX = Object.freeze({ expected: false, kind: "host", address: null
 const unreadableNamed = (name, line) => ({ name, version: null, line, ...UNREADABLE_ENTRY });
 const isRegistry = (entry) => entry.classified === undefined || entry.classified.expected === true;
 
-// What a manifest gives, from what it names (`{ entry, checked }`, `checked` when the section's names are sent to OSV): every
-// entry not from the registry, local ones included so they are dropped later, and the registry names of checked sections, with no
-// line, except a name that also comes from somewhere else in the file (an override, a uv or Poetry source), which is not sent to
-// OSV since its name may not mean what OSV's record means.
+// What a manifest gives, from what it names (`{ entry, checked }`, `checked` when the entry's name is sent to OSV): every entry not
+// from the registry, local ones included so they are dropped later, and the registry names checked, with the version when the
+// manifest gives one and no line, except a name that also comes from somewhere else in the file (an override, a uv or Poetry
+// source), which is not sent to OSV since its name may not mean what OSV's record means.
 function manifestEntries(found, sameName) {
   const elsewhere = new Set(found.filter(({ entry }) => !isRegistry(entry)).map(({ entry }) => sameName(entry.name)));
   const reported = found.filter(({ entry }) => !isRegistry(entry)).map(({ entry }) => entry);
   const names = found
     .filter(({ entry, checked }) => checked && isRegistry(entry) && !elsewhere.has(sameName(entry.name)))
-    .map(({ entry }) => ({ name: entry.name, version: null, line: null }));
+    .map(({ entry }) => ({ name: entry.name, version: entry.version ?? null, line: null }));
   return [...reported, ...names];
 }
 
@@ -33,6 +33,8 @@ function manifestEntries(found, sameName) {
 // The sections whose registry names are sent to OSV; the others are read only for where they fetch from.
 const CHECKED_SECTIONS = new Set(["dependencies", "optionalDependencies", "peerDependencies"]);
 const SOURCE_SECTIONS = new Set([...CHECKED_SECTIONS, "devDependencies", "overrides", "resolutions"]);
+// The sections that replace a package wherever it is installed, so one they name in place of the key's is sent to OSV.
+const OVERRIDE_SECTIONS = new Set(["overrides", "resolutions", "pnpm.overrides"]);
 
 // The package an override or resolution key is about: the last package of a pnpm `a>b` chain or of a Yarn `a/**/b` path, without
 // its version range.
@@ -45,13 +47,63 @@ function overrideTarget(key) {
   return at < 0 ? tail : tail.slice(0, at);
 }
 
-// The package an npm alias (`npm:<name>@<range>`, `npm:<name>`, in any case) installs; null for any other value.
+// An npm package name, scoped or not, in the characters npm allows; a version or range (`18.2.0`, `1.x`, `~3`) is not one.
+const NPM_NAME = /^(?:@[A-Za-z0-9-][A-Za-z0-9._~-]*\/)?[A-Za-z0-9-][A-Za-z0-9._~-]*$/;
+const VERSION_LIKE = /^v?\d+(?:\.(?:\d+|x|\*))*(?:[-+][0-9A-Za-z.+-]*)?$/i;
+const isPackageName = (text) => NPM_NAME.test(text) && !VERSION_LIKE.test(text);
+
+// The package an npm alias (`npm:<name>@<range>`, `npm:<name>`, in any case) installs; null for any other value, or when the text
+// after `npm:` is no package name (`npm:^4.17.21`), which leaves the key's package.
 function aliasTarget(value) {
   if (value.slice(0, 4).toLowerCase() !== "npm:") return null;
   const spec = value.slice(4);
   const at = spec.indexOf("@", 1);
   const name = at < 0 ? spec : spec.slice(0, at);
-  return name === "" ? null : name;
+  return isPackageName(name) ? name : null;
+}
+
+// The package a `patch:` value patches: the alias its inner resolution names, else the package named before it; null when it names
+// none.
+function patchTarget(value) {
+  if (!value.startsWith("patch:")) return null;
+  let body = value.slice("patch:".length).split("#", 1)[0];
+  try {
+    body = decodeURIComponent(body);
+  } catch {
+    return null;
+  }
+  const at = body.indexOf("@", 1);
+  if (at < 0) return null;
+  const name = body.slice(0, at);
+  return aliasTarget(body.slice(at + 1)) ?? (isPackageName(name) ? name : null);
+}
+
+// The package and version a tarball on the official npm registry is, from its path: `/<name>/-/<name>-<version>.tgz`, or
+// `/@<scope>/<name>/-/<name>-<version>.tgz` (the `/` after the scope possibly encoded); null when the path is not one.
+function registryTarball(value) {
+  let segments;
+  try {
+    segments = decodeURIComponent(new URL(value).pathname).slice(1).split("/");
+  } catch {
+    return null;
+  }
+  const scoped = segments[0].startsWith("@");
+  const name = scoped ? segments.slice(0, 2).join("/") : segments[0];
+  const [dash, file, ...more] = segments.slice(scoped ? 2 : 1);
+  const base = `${name.slice(name.indexOf("/") + 1)}-`;
+  if (dash !== "-" || more.length > 0 || file === undefined || !file.startsWith(base) || !file.endsWith(".tgz")) return null;
+  const version = file.slice(base.length, -".tgz".length);
+  return isPackageName(name) && SEMVER.test(version) ? { name, version } : null;
+}
+
+// What a registry value names beyond its key: the package an alias or a patch installs, or the package and version a registry
+// tarball is (`UNNAMED` when its path gives none, so no name is sent); null when it is a range or a tag for the key's package.
+const UNNAMED = Object.freeze({});
+function namedPackage(value) {
+  const target = aliasTarget(value) ?? patchTarget(value);
+  if (target !== null) return { name: target, version: null };
+  if (!/^https?:/i.test(value)) return null;
+  return registryTarball(value) ?? UNNAMED;
 }
 
 // The values of one section, each with its name and the line of its value: walked iteratively, depth first in parse order, through
@@ -83,12 +135,24 @@ function packageJsonVerdict(value, folder) {
   return verdict.kind === "local" ? localPathVerdict(value, folder, verdict) : verdict;
 }
 
+// What one package.json dependency gives: its source when that is not the registry; from the registry, in a checked section, the
+// package it names (the key's, or the one an alias, a patch or a registry tarball names); in an override section, only a package
+// an alias, a patch or a registry tarball names, which is installed in place of the key's; in any other section, nothing.
+function dependencyFound(packageName, { value, line }, { checked, overrides }, folder) {
+  const verdict = packageJsonVerdict(value, folder);
+  if (!verdict.expected) return [{ entry: { name: packageName, version: null, line, classified: verdict }, checked }];
+  const named = namedPackage(value);
+  if (named === UNNAMED || (named === null && !checked) || (!checked && !overrides)) return [];
+  return [{ entry: { name: named?.name ?? packageName, version: named?.version ?? null, line }, checked: true }];
+}
+
 // package.json's dependencies in every section that can name a source, and the overrides in `pnpm.overrides`. A section that is
 // not an object is one it cannot read.
 function readPackageJson(text, folder = "") {
-  const json = parseJson(text);
+  const unmarked = text.startsWith("\uFEFF") ? text.slice(1) : text;
+  const json = parseJson(unmarked);
   if (!isObject(json)) return [];
-  const members = jsonMembers(text);
+  const members = jsonMembers(unmarked);
   const sections = [];
   for (const [name, value] of Object.entries(json)) {
     const member = members(ROOT_OBJECT, name);
@@ -107,11 +171,7 @@ function readPackageJson(text, folder = "") {
     for (const dependency of sectionValues(value, members, member?.object, nests)) {
       const packageName = checked ? dependency.name : overrideTarget(dependency.name);
       if (dependency.value === null) found.push({ entry: unreadableNamed(packageName, dependency.line), checked });
-      else {
-        const verdict = packageJsonVerdict(dependency.value, folder);
-        const entry = { name: (checked && aliasTarget(dependency.value)) || packageName, version: null, line: dependency.line };
-        found.push({ entry: verdict.expected ? entry : { ...entry, classified: verdict }, checked });
-      }
+      else found.push(...dependencyFound(packageName, dependency, { checked, overrides: OVERRIDE_SECTIONS.has(name) }, folder));
     }
   }
   return manifestEntries(found, (name) => name);
@@ -160,6 +220,25 @@ function after(path, prefix) {
   return path.slice(prefix.length);
 }
 
+// The project's own folder as PDM (`file:///${PROJECT_ROOT}`) and Hatch (`{root:uri}`) write it in a dependency's URL.
+const PROJECT_ROOTS = ["file:///${PROJECT_ROOT}", "{root:uri}"];
+
+// An address with the project's folder written as PDM or Hatch write it, as a path from the pyproject's folder; any other unchanged.
+function projectRelative(address) {
+  for (const root of PROJECT_ROOTS) {
+    if (address === root) return ".";
+    if (address.startsWith(`${root}/`)) return `./${address.slice(root.length + 1)}`;
+  }
+  return address;
+}
+
+// The entries of one address a requirement installs from (`name` null when it gives none), a local one kept so its name is held
+// back from OSV.
+function requirementAddressEntries(address, name, line, folder) {
+  const entries = addressEntries(projectRelative(address), name, line, folder);
+  return entries.length > 0 ? entries : [{ name, version: null, line, classified: LOCAL }];
+}
+
 // A PEP 508 requirement: `name [extras] @ url ; marker`, or `name [extras] specifiers ; marker`. A URL ends at whitespace, after
 // which only a marker may follow. One that is not a requirement it can read keeps its name when it has one; a bare URL has none.
 function requirementEntries(text, line, folder) {
@@ -171,23 +250,44 @@ function requirementEntries(text, line, folder) {
     const end = address.search(WHITESPACE);
     const marker = end < 0 ? "" : address.slice(end).trim();
     if (marker !== "" && !marker.startsWith(";")) return [unreadableNamed(parts.name, line)];
-    const entries = addressEntries(end < 0 ? address : address.slice(0, end), parts.name, line, folder);
-    return entries.length > 0 ? entries : [{ name: parts.name, version: null, line, classified: LOCAL }];
+    return requirementAddressEntries(end < 0 ? address : address.slice(0, end), parts.name, line, folder);
   }
   const specified = specifierEntries({ name: parts.name, rest: parts.rest.split(";", 1)[0] }, line);
   if (specified !== null && specified[0].classified !== undefined) return specified;
   return [{ name: parts.name, version: null, line }];
 }
 
-// An array of PEP 508 strings; in a dependency group, `{ include-group = "name" }` tables too, which name no source.
-function requirementListEntries(value, folder, groups) {
+// How a list's items may be written besides PEP 508 strings: a dependency group's `{ include-group = "name" }`, which names no
+// source; uv's extra build dependency `{ requirement = "…", match-runtime = … }`; PDM's editable `-e <address>`.
+const GROUPS = "groups";
+const BUILD = "build";
+const EDITABLE = "editable";
+
+// The requirement in a uv extra build dependency table, or null when the table is not one.
+function buildRequirement(item) {
+  const fields = tableFields(item);
+  if (fields === null || [...fields.keys()].some((field) => field !== "requirement" && field !== "match-runtime")) return null;
+  return fields.has("requirement") ? stringOf(fields.get("requirement")) : null;
+}
+
+const isIncludeGroup = (item) => {
+  const fields = tableFields(item);
+  return fields !== null && fields.size === 1 && fields.has("include-group") && stringOf(fields.get("include-group")) !== null;
+};
+
+// An array of PEP 508 strings, with the other items its `form` allows; any other item is one it cannot read.
+function requirementListEntries(value, folder, form) {
   if (value.kind !== "array") return [unnamedEntry(value.line)];
   return value.items.flatMap((item) => {
     const text = stringOf(item);
+    if (text !== null && form === EDITABLE && /^-e\s/.test(`${text.trim()} `)) {
+      const address = text.trim().slice(2).trim();
+      return address === "" ? [unnamedEntry(item.line)] : requirementAddressEntries(address, null, item.line, folder);
+    }
     if (text !== null) return requirementEntries(text, item.line, folder);
-    const include = groups && item.kind === "table" && item.entries.length === 1 ? item.entries[0] : null;
-    const included = include !== null && include.path.length === 1 && include.path[0] === "include-group" && stringOf(include.value) !== null;
-    return included ? [] : [unnamedEntry(item.line)];
+    if (form === GROUPS && isIncludeGroup(item)) return [];
+    const requirement = form === BUILD ? buildRequirement(item) : null;
+    return requirement === null ? [unnamedEntry(item.line)] : requirementEntries(requirement, item.line, folder);
   });
 }
 
@@ -293,6 +393,12 @@ const OTHER_REQUIREMENT_LISTS = [
   ["tool", "uv", "dev-dependencies"],
   ["tool", "uv", "override-dependencies"],
   ["tool", "uv", "constraint-dependencies"],
+  ["tool", "uv", "build-constraint-dependencies"],
+];
+// Tables of named lists that are build or development inputs, each with the form its items may take.
+const OTHER_REQUIREMENT_TABLES = [
+  { prefix: ["tool", "uv", "extra-build-dependencies"], form: BUILD },
+  { prefix: ["tool", "pdm", "dev-dependencies"], form: EDITABLE },
 ];
 const UV_SOURCES = ["tool", "uv", "sources"];
 const POETRY_TABLES = [["tool", "poetry", "dependencies"], ["tool", "poetry", "dev-dependencies"]];
@@ -307,10 +413,14 @@ function placeOf(path) {
     const other = after(path, prefix);
     if (other !== null) return other.length === 0 ? { list: true } : { bad: true };
   }
+  for (const { prefix, form } of OTHER_REQUIREMENT_TABLES) {
+    const other = after(path, prefix);
+    if (other !== null) return other.length === 1 && typeof other[0] === "string" ? { list: true, form } : { bad: true };
+  }
   const optional = after(path, OPTIONAL_DEPENDENCIES);
   if (optional !== null) return optional.length === 1 && typeof optional[0] === "string" ? { list: true } : { bad: true };
   const groups = after(path, DEPENDENCY_GROUPS);
-  if (groups !== null) return groups.length === 1 && typeof groups[0] === "string" ? { list: true, groups: true } : { bad: true };
+  if (groups !== null) return groups.length === 1 && typeof groups[0] === "string" ? { list: true, form: GROUPS } : { bad: true };
   const uv = after(path, UV_SOURCES);
   if (uv !== null) return dependencyPlace("uv", path, uv, false);
   for (const prefix of POETRY_TABLES) {
@@ -355,8 +465,8 @@ function dependencyEntries(dependency, folder, indexes) {
 }
 
 // pyproject.toml's dependencies in every section that can name a source: PEP 508 strings in [project] dependencies,
-// [project.optional-dependencies], [dependency-groups], [build-system] requires and uv's dev, override and constraint dependencies;
-// [tool.uv.sources]; Poetry's dependency tables. Each value is placed by
+// [project.optional-dependencies], [dependency-groups], [build-system] requires, uv's dev, override, constraint and build
+// dependencies and PDM's dev-dependencies; [tool.uv.sources]; Poetry's dependency tables. Pixi and Hatch environments are not read. Each value is placed by
 // its whole key path, so dotted keys, inline tables and table headers read alike, and any value in those sections in a shape it does
 // not know is one it cannot read. The names of [project] dependencies and [tool.poetry.dependencies] are sent to OSV.
 function readPyproject(text, folder = "") {
@@ -369,7 +479,7 @@ function readPyproject(text, folder = "") {
     const place = placeOf(path);
     if (place === null) continue;
     if (place.bad) units.push({ bad: value.line });
-    else if (place.list) units.push({ list: value, checked: place.checked === true, groups: place.groups === true });
+    else if (place.list) units.push({ list: value, checked: place.checked === true, form: place.form });
     else if (!(place.tool === "poetry" && place.name === "python")) {
       let dependency = dependencies.get(place.id);
       if (dependency === undefined) {
@@ -390,7 +500,7 @@ function readPyproject(text, folder = "") {
   }
   const found = units.flatMap((unit) => {
     if (unit.bad !== undefined) return [{ entry: unnamedEntry(unit.bad), checked: false }];
-    if (unit.list) return requirementListEntries(unit.list, folder, unit.groups).map((entry) => ({ entry, checked: unit.checked }));
+    if (unit.list) return requirementListEntries(unit.list, folder, unit.form).map((entry) => ({ entry, checked: unit.checked }));
     return dependencyEntries(unit.dependency, folder, indexes);
   });
   return manifestEntries(found, (name) => (name === null ? null : normalisePyPI(name)));
