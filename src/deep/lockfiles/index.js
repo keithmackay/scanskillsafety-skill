@@ -8,7 +8,8 @@ const { isPep440, SEMVER, Unreadable, UNREADABLE_ENTRY } = require("./shared");
 const { readNpmLock } = require("./npm");
 const { readYarnLock } = require("./yarn");
 const { readPnpmLock } = require("./pnpm");
-const { readNamedRequirements, readPoetryLock, readRequirements, readUvLock } = require("./python");
+const { readPoetryLock, readUvLock } = require("./python");
+const { readNamedRequirements, readRequirements } = require("./requirements");
 const { packageJsonNames, pyprojectNames } = require("./manifests");
 
 const normalisePyPI = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
