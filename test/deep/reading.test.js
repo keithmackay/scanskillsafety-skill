@@ -3,6 +3,7 @@
 // ABOUTME: read and in what order, packing and the plan id, and every way a run stops, against a stand-in claude program.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { createHash } = require("crypto");
@@ -41,6 +42,9 @@ test("runClaude: a program that is not there resolves as missing", async () => {
 
 test("runClaude: a call that keeps running through SIGTERM settles at its time limit and is killed after the grace period", { skip }, async () => {
   const { env, log } = fakeEnv({ FAKE_CLAUDE_MODE: "stubborn" });
+  // The first run of a newly written program is checked by the system and can take far longer than later runs; it is paid here,
+  // before the timed call.
+  spawnSync(FAKE, [], { input: "", env: { ...env, FAKE_CLAUDE_MODE: "garbage", FAKE_CLAUDE_LOG: "" } });
   const started = Date.now();
   // The time limit leaves the fake time to start and log itself on a busy machine; a SIGTERM before Node has started would end it
   // before it could ignore the signal.
