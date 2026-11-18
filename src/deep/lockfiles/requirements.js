@@ -4,12 +4,18 @@
 
 const { OBJECT_ID } = require("../util");
 const { classifySource, UNREADABLE } = require("../packageSources");
-const { found, linesOf, UNREADABLE_ENTRY } = require("./shared");
+const { found, linesOf, Unreadable, UNREADABLE_ENTRY } = require("./shared");
 const { OUTSIDE_PROJECT, pathFrom, pythonAddress } = require("./python");
 
 // pip ends a line at each of these as well as at \n and \r\n (Python's splitlines), so
 // a line holding one is read differently by pip than line by line.
 const PIP_LINE_BREAK = /[\r\v\f\x1c-\x1e\x85\u2028\u2029]/;
+// Characters JavaScript reads as whitespace and pip's patterns do not (a BOM after the first character, and \x1f, which Python
+// strips but its \s does not match), so a comment or a word would end in a different place.
+const SPACE_PIP_READS_OTHERWISE = /[\uFEFF\x1f]/;
+// PEP 263's coding line, which pip honours in the first two lines when the file has no BOM.
+const CODING = /coding[:=][ \t\n\r\f\v]*([-\w.]+)/;
+const UTF8_NAMES = new Set(["utf-8", "utf8", "utf_8", "u8", "utf-8-sig"]);
 // Whitespace other than a space: pip splits a line into words at spaces only.
 const OTHER_WHITESPACE = /[^\S ]/;
 const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
@@ -74,6 +80,18 @@ function withoutEndBackslashes(text) {
   return text.slice(start, end);
 }
 
+const withoutBom = (text) => (text.startsWith("\uFEFF") ? text.slice(1) : text);
+
+// A file whose first or second line, starting with `#`, names an encoding other than UTF-8, and that has no BOM: pip decodes it
+// with that encoding, so its lines are not the ones read here.
+function declaresOtherEncoding(text) {
+  if (text.startsWith("\uFEFF")) return false;
+  return text.split("\n", 2).some((line) => {
+    const coding = line.startsWith("#") ? CODING.exec(line) : null;
+    return coding !== null && !UTF8_NAMES.has(coding[1].toLowerCase());
+  });
+}
+
 const isCommentLine = (text) => text.trimStart().startsWith("#");
 
 // pip's lines: physical lines joined across a trailing backslash (a comment line never continues), each with the number of its
@@ -85,8 +103,8 @@ function logicalLines(text) {
     if (joined) out.push(joined);
     joined = null;
   };
-  linesOf(text.startsWith("\uFEFF") ? text.slice(1) : text).forEach((physical, i) => {
-    if (PIP_LINE_BREAK.test(physical)) {
+  linesOf(withoutBom(text)).forEach((physical, i) => {
+    if (PIP_LINE_BREAK.test(physical) || SPACE_PIP_READS_OTHERWISE.test(physical)) {
       flush();
       out.push({ line: i + 1, text: null });
     } else if (physical.endsWith("\\") && !isCommentLine(physical)) {
@@ -281,8 +299,9 @@ function requirementsLineEntries(text, line, folder) {
 
 // text: a requirements file; folder: its folder in the repository, which a relative path in it is read from. Pinned requirements,
 // sources (version control, URLs, paths outside the project), index options and the -r and -c files it names, line by line, and
-// how many of its requirements are unpinned.
+// how many of its requirements are unpinned. One that declares an encoding other than UTF-8 is one it cannot read.
 function requirementsFile(text, folder) {
+  if (declaresOtherEncoding(text)) throw new Unreadable("an encoding it cannot read");
   const entries = [];
   let unpinned = 0;
   for (const logical of logicalLines(text)) {
