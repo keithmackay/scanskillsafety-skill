@@ -28,6 +28,14 @@ function fieldOf(text) {
 
 const startsWithAny = (value, chars) => value !== "" && chars.includes(value[0]);
 
+const COLLECTION_OR_QUOTE_CLOSERS = new Map([["{", "}"], ["[", "]"], ['"', '"'], ["'", "'"]]);
+
+// A value that opens a collection or a quoted string and does not close it on the same line, so YAML reads on into the next.
+function opensUnclosed(value) {
+  const closer = COLLECTION_OR_QUOTE_CLOSERS.get(value[0]);
+  return closer !== undefined && (value.length < 2 || !value.endsWith(closer));
+}
+
 class Unreadable extends Error {}
 const unsupportedVersion = (version) => new Unreadable(`lockfileVersion ${version ?? "(none)"} is not a version it can read`);
 
@@ -240,23 +248,55 @@ const noOrigin = (entry) => (entry.version === undefined ? UNREADABLE_ENTRY : {}
 const YARN_LAYOUT = "not laid out as Yarn writes it";
 // The first character of a YAML tag, anchor or alias.
 const YAML_NODE_PROPERTY = "!&*";
+// How an unquoted Berry header never starts: like a YAML indicator, a merge key or a quoted string.
+const BERRY_HEADER_ODD_START = "?{}[]&*!|>%@#`'\",-<";
+// How a Berry `version` or `resolution` value never starts: like a YAML indicator or a single-quoted string.
+const BERRY_VALUE_ODD_START = "|>{[&*!%@#`'";
+const DOUBLE_QUOTED = /^"[^"\\]*"$/;
 
-// A Berry line YAML would read differently from the way it is read here: one with an escape, a key or value that starts with a
-// tag, anchor or alias, a merge key, or a 2-space field whose name is not a plain name.
-function berryLineOdd(line) {
+// A header as Berry writes one: `name:`, unquoted with nothing YAML would read differently, or a double-quoted `"…":` with no
+// escape in it.
+function berryHeaderReadable(line) {
+  if (!line.endsWith(":")) return false;
+  const key = line.slice(0, -1);
+  if (key.startsWith('"')) return DOUBLE_QUOTED.test(key);
+  return key !== "" && !startsWithAny(key, BERRY_HEADER_ODD_START) && !/["'\\]|: | #/.test(key);
+}
+
+// A `version` or `resolution` value as Berry writes one: a plain scalar, or a double-quoted string with no escape, on one line.
+function berryScalar(value) {
+  if (value.startsWith('"')) return DOUBLE_QUOTED.test(value);
+  return value !== "" && !startsWithAny(value, BERRY_VALUE_ODD_START);
+}
+
+// A line of a Berry entry, read only as Berry writes one; any other shape makes the entry's source one it cannot read. Its fields
+// are at 2 spaces, each a plain name with no escape, tag, anchor or alias in the line, and not left open at the end of it;
+// `version` and `resolution` hold a scalar, and `resolution` is given once. Deeper lines under a field are passed over, since
+// Yarn takes the source only from `resolution`; a deeper line before any field, or a line at 1 space, is not.
+function readBerryLine(entry, line) {
+  if (line.trim() === "") return;
   const indent = leadingSpaces(line);
+  if (indent > 2 && entry.hasField) return;
+  const field = indent === 2 ? fieldOf(line.slice(2)) : null;
   const text = line.slice(indent);
-  const field = fieldOf(text);
-  const key = field ? field.key : text;
-  if (text.includes("\\") || key.startsWith("<<") || startsWithAny(key, YAML_NODE_PROPERTY)) return true;
-  if (field && startsWithAny(field.value, YAML_NODE_PROPERTY)) return true;
-  return indent === 2 && !PLAIN_NAME.test(key);
+  const odd = text.includes("\\") || (field && startsWithAny(field.value, YAML_NODE_PROPERTY));
+  if (!field || odd || !PLAIN_NAME.test(field.key)) {
+    entry.unreadable = true;
+    return;
+  }
+  entry.hasField = true;
+  if (field.key === "resolution") {
+    if (entry.resolutionSeen || !berryScalar(field.value)) entry.unreadable = true;
+    entry.resolutionSeen = true;
+  } else if (field.key === "version") {
+    if (!berryScalar(field.value)) entry.unreadable = true;
+  } else if (opensUnclosed(field.value)) entry.unreadable = true;
 }
 
 // Each entry runs from its header to the next header or the end of the file, so its source, on a line after its version, is
 // carried with it. A header that does not end in `:` is an entry it cannot name; an entry is never left out for lacking a version.
-// A Berry file is YAML: a lone carriage return or a tab makes it one it cannot read, a header YAML would read differently is an
-// entry it cannot name, and any other such line makes its entry's source one it cannot read.
+// A Berry file is YAML, read only as Berry writes it: a lone carriage return or a tab makes it one it cannot read, a header in any
+// other shape is an entry it cannot name, and an entry line in any other shape makes its source one it cannot read.
 function readYarnLock(text) {
   const lines = linesOf(text);
   const berry = lines.includes("__metadata:");
@@ -279,14 +319,14 @@ function readYarnLock(text) {
       finish();
       const spec = unquote(line.replace(/:$/, "").split(/,\s*/)[0]);
       const skipped = spec === "__metadata" || spec.slice(spec.indexOf("@", 1)).includes("@workspace:");
-      const named = !skipped && line.endsWith(":") && !(berry && berryLineOdd(line));
+      const named = !skipped && line.endsWith(":") && !(berry && !berryHeaderReadable(line));
       if (!skipped) entries++;
       if (!skipped && !named) out.push(unnamedEntry(i + 1));
-      entry = named ? { name: yarnSpecName(spec), line: i + 1, unreadable: false } : null;
+      entry = named ? { name: yarnSpecName(spec), line: i + 1, unreadable: false, hasField: false, resolutionSeen: false } : null;
       return;
     }
     if (!entry) return;
-    if (berry && berryLineOdd(line)) entry.unreadable = true;
+    if (berry) readBerryLine(entry, line);
     const match = versionLine.exec(line);
     if (match && entry.version === undefined) entry.version = match[1];
     else if (line.startsWith(sourceLine)) entry.origin = sourceOf(unquote(line.slice(sourceLine.length)));
@@ -325,7 +365,6 @@ const PNPM_LAYOUT = "not laid out as pnpm writes it";
 const ODD_VALUE_START = "{[&*|>!#'\"%@`";
 // How a top-level value never starts; a quoted scalar (`lockfileVersion: '9.0'`) is allowed.
 const ODD_TOP_VALUE_START = "{[&*|>!#%@`";
-const COLLECTION_OR_QUOTE_CLOSERS = new Map([["{", "}"], ["[", "]"], ['"', '"'], ["'", "'"]]);
 // A URL scheme at the start of a key's version (`git+ssh:`, `https:`, `file:`): one class, so it cannot backtrack.
 const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 
@@ -422,12 +461,6 @@ function readResolution(entry, value) {
   if (value === "") entry.inResolution = true;
   else if (fields) entry.resolution = fields;
   else entry.unreadable = true;
-}
-
-// A value that opens a collection or a quoted string and does not close it on the same line, so YAML reads on into the next.
-function opensUnclosed(value) {
-  const closer = COLLECTION_OR_QUOTE_CLOSERS.get(value[0]);
-  return closer !== undefined && (value.length < 2 || !value.endsWith(closer));
 }
 
 // A 4-space field of an entry, its name a plain name, so `resolutions` is not `resolution` and a quoted, escaped, tagged or merge

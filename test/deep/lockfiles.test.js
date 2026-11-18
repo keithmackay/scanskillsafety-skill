@@ -517,9 +517,9 @@ test("yarn.lock, Berry: a version that is not semver from npm: has no source of 
   assert.ok(!JSON.stringify(read).includes("SECRET"));
 });
 
-test("yarn.lock: a second source line in one entry replaces the first entirely", () => {
+test("yarn.lock: a second source line in a classic entry replaces the first entirely; in a Berry entry it is a source it could not read", () => {
   const berry = '__metadata:\n  version: 8\n\n"a@npm:^1":\n  version: 1.0.0\n  resolution: "a@https://files.example.com/a-1.0.0.tgz"\n  resolution: "a@npm:1.0.0"\n';
-  assert.deepEqual(readPackages([{ path: "yarn.lock", text: berry }]), { ...EMPTY, packages: [npm("a", "1.0.0", "yarn.lock", 4)] });
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text: berry }]).sourced, [sourced("a", "1.0.0", "yarn.lock", 4, "unreadable", null)]);
   const classic = [
     "# yarn lockfile v1", "",
     "a@^1:", '  version "1.0.0"', `  resolved "https://codeload.github.com/u/r/tar.gz/${SHA1}"`, '  resolved "https://registry.yarnpkg.com/a/-/a-1.0.0.tgz"', "",
@@ -950,7 +950,6 @@ test("yarn.lock, Berry: an escape, tag, anchor, alias, merge key or quoted field
     ["a merge key", entry('  resolution: "a@npm:1.0.0"', "  <<: *m")],
     ["a quoted field name", entry('  resolution: "a@npm:1.0.0"', `  "resolution": "a@${EVIL}"`)],
     ["an escape in a value", entry('  resolution: "a@https\\u003a//evil.example/a.tgz"')],
-    ["an alias deeper down", entry('  resolution: "a@npm:1.0.0"', "  dependencies:", "    b: *x")],
   ];
   for (const [shape, text] of shapes) {
     const read = readPackages([{ path: "yarn.lock", text }]);
@@ -962,4 +961,42 @@ test("yarn.lock, Berry: an escape, tag, anchor, alias, merge key or quoted field
   }
   const header = readPackages([{ path: "yarn.lock", text: berryText('"a@npm:^1\\u0020":', "  version: 1.0.0", '  resolution: "a@npm:1.0.0"') }]);
   assert.deepEqual(header.sourced, [sourced(null, null, "yarn.lock", 4, "unreadable", null)]);
+});
+
+test("yarn.lock, Berry: lines below a field other than resolution are passed over, whatever YAML they hold", () => {
+  const text = berryText('"a@npm:^1":', "  version: 1.0.0", '  resolution: "a@npm:1.0.0"', "  dependencies:", "    b: *x", '    "c\\u0020": &y "npm:^1"');
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text }]), { ...EMPTY, packages: [npm("a", "1.0.0", "yarn.lock", 4)] });
+});
+
+test("yarn.lock, Berry: a header Berry does not write is an entry it cannot name", () => {
+  const headers = ['? "a@npm:^1"', "{a@npm:^1: x}", '"a@npm:^1": &x', "'a@npm:^1':", '"a@npm:^1" #c:', "<<: *m"];
+  for (const header of headers) {
+    const read = readPackages([{ path: "yarn.lock", text: berryText(header, "  version: 1.0.0", `  resolution: "a@${EVIL}"`) }]);
+    assert.deepEqual(read.sourced, [sourced(null, null, "yarn.lock", 4, "unreadable", null)], header);
+    assert.ok(!JSON.stringify(read).includes("evil"), header);
+  }
+  const plain = readPackages([{ path: "yarn.lock", text: berryText("a@npm:^1:", "  version: 1.0.0", '  resolution: "a@npm:1.0.0"') }]);
+  assert.deepEqual(plain, { ...EMPTY, packages: [npm("a", "1.0.0", "yarn.lock", 4)] });
+});
+
+test("yarn.lock, Berry: a version or resolution that is not a plain or double-quoted scalar on one line, or a field left open, is a source it could not read", () => {
+  const entry = (...fields) => berryText('"a@npm:^1":', ...fields);
+  const shapes = [
+    ["a block scalar resolution", entry("  version: 1.0.0", "  resolution: |", `    a@${EVIL}`)],
+    ["a single-quoted resolution", entry("  version: 1.0.0", `  resolution: 'a@${EVIL}'`)],
+    ["a flow map resolution", entry("  version: 1.0.0", `  resolution: {a: ${EVIL}}`)],
+    ["a flow list resolution", entry("  version: 1.0.0", `  resolution: [a@${EVIL}]`)],
+    ["a resolution on the next line", entry("  version: 1.0.0", "  resolution:", `    "a@${EVIL}"`)],
+    ["a folded version", entry("  version: >", "    1.0.0", `  resolution: "a@${EVIL}"`)],
+    ["a flow map left open", entry("  version: 1.0.0", `  resolution: "a@${EVIL}"`, "  checksum: {x: y,", '  resolution: "a@npm:1.0.0"}')],
+    ["a flow list left open", entry("  version: 1.0.0", `  resolution: "a@${EVIL}"`, "  checksum: [x,", '  resolution: "a@npm:1.0.0"]')],
+    ["a quoted string left open", entry("  version: 1.0.0", `  resolution: "a@${EVIL}"`, '  checksum: "x', '  resolution: a@npm:1.0.0"')],
+  ];
+  for (const [shape, text] of shapes) {
+    const read = readPackages([{ path: "yarn.lock", text }]);
+    assert.deepEqual(read.couldNotRead, [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }], shape);
+    assert.equal(read.sourced.length, 1, shape);
+    assert.equal(read.sourced[0].kind, "unreadable", shape);
+    assert.ok(!JSON.stringify(read).includes("evil"), shape);
+  }
 });
