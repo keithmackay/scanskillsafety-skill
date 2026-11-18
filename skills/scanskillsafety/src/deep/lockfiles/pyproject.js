@@ -346,17 +346,25 @@ const uvConfigEntries = (values, prefix, folder) => [
   ...sourceTableEntries(values, [...prefix, "index"], folder, { roleOf: UV_INDEX_ROLE }),
 ];
 
-// pdm.toml's indexes: [pypi] url, PyPI's replacement, and [pypi.<name>] url, each an index. A url in any other place under
-// [pypi], or not a string, is one it cannot read.
+// pdm.toml's indexes: [pypi] url, PyPI's replacement, an index; and [pypi.<name>] url, an index or, with `type = "find_links"`, a
+// find-links page. A url in any other place under [pypi], one that is not a string, or a type PDM does not take is one it cannot
+// read.
 function pdmTomlEntries(values, folder) {
+  const types = new Map();
+  for (const { path, value } of values) {
+    if (path.length === 3 && path[0] === "pypi" && typeof path[1] === "string" && path[2] === "type") types.set(path[1], value);
+  }
+  const roleOf = (name) => (name === null ? "index" : PDM_SOURCE_ROLE(types.has(name) ? new Map([["type", types.get(name)]]) : new Map()));
   const out = [];
   for (const { path, value } of values) {
     if (path[0] !== "pypi") continue;
     const rest = path.slice(1);
-    const atUrl = (rest.length === 1 && rest[0] === "url") || (rest.length === 2 && typeof rest[0] === "string" && rest[1] === "url");
+    const named = rest.length === 2 && typeof rest[0] === "string" && rest[1] === "url";
+    const atUrl = (rest.length === 1 && rest[0] === "url") || named;
     const address = atUrl ? stringOf(value) : null;
+    const role = atUrl ? roleOf(named ? rest[0] : null) : null;
     const misplaced = rest.length === 0 || typeof rest[0] !== "string" || rest.slice(0, 2).includes("url");
-    if (atUrl && address !== null) out.push(...configAddressEntries(address, value.line, folder, "index"));
+    if (address !== null && role !== null) out.push(...configAddressEntries(address, value.line, folder, role));
     else if (atUrl || misplaced) out.push(configEntry(value.line, UNREADABLE));
   }
   return out;

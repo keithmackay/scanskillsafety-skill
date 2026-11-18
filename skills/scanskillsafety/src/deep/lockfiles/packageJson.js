@@ -162,23 +162,61 @@ function workspaceFound(json, members, folder) {
   return workspaceEntries(patterns, line, folder).map((entry) => ({ entry, checked: false }));
 }
 
-// package.json's dependencies in every section that can name a source, and the overrides in `pnpm.overrides`. A section that is
-// not an object is one it cannot read.
+// The sections of a package extension that add dependencies; `peerDependenciesMeta` names none and is passed over.
+const EXTENSION_SECTIONS = new Set(["dependencies", "optionalDependencies", "peerDependencies"]);
+const EXTENSION_META = "peerDependenciesMeta";
+
+// What `pnpm.packageExtensions` gives (`{ <selector>: { dependencies: { <name>: <value> } } }`, read from `member`): each
+// dependency it adds from outside the registry; an extension, a section or a value in any other shape is one it cannot read.
+function packageExtensionsFound(extensions, member, members, folder) {
+  const unreadable = (at) => ({ entry: unnamedEntry(at?.line ?? null), checked: false });
+  if (!isObject(extensions)) return [unreadable(member)];
+  const found = [];
+  for (const [selector, extension] of Object.entries(extensions)) {
+    const selectorMember = members(member?.object, selector);
+    if (!isObject(extension)) {
+      found.push(unreadable(selectorMember));
+      continue;
+    }
+    for (const [field, section] of Object.entries(extension)) {
+      const fieldMember = members(selectorMember?.object, field);
+      if (field === EXTENSION_META) continue;
+      if (!EXTENSION_SECTIONS.has(field) || !isObject(section)) {
+        found.push(unreadable(fieldMember));
+        continue;
+      }
+      for (const dependency of sectionValues(section, members, fieldMember?.object, false)) {
+        if (dependency.value === null) found.push({ entry: unreadableNamed(dependency.name, dependency.line), checked: false });
+        else found.push(...dependencyFound(dependency.name, dependency, { checked: false, overrides: false }, folder));
+      }
+    }
+  }
+  return found;
+}
+
+// package.json's dependencies in every section that can name a source, and the overrides in `pnpm.overrides` and package
+// extensions in `pnpm.packageExtensions`. A section that is not an object is one it cannot read.
 function readPackageJson(text, folder = "") {
   const unmarked = text.startsWith("\uFEFF") ? text.slice(1) : text;
   const json = parseJson(unmarked);
   if (!isObject(json)) return [];
   const members = jsonMembers(unmarked);
   const sections = [];
+  const found = workspaceFound(json, members, folder);
   for (const [name, value] of Object.entries(json)) {
     const member = members(ROOT_OBJECT, name);
     if (SOURCE_SECTIONS.has(name)) sections.push({ name, value, member, nests: name === "overrides" });
-    else if (name === "pnpm" && isObject(value) && Object.hasOwn(value, "overrides")) {
-      const overrides = members(member?.object, "overrides");
-      sections.push({ name: "pnpm.overrides", value: value.overrides, member: overrides, nests: false });
+    else if (name === "pnpm" && isObject(value)) {
+      if (Object.hasOwn(value, "overrides")) {
+        const overrides = members(member?.object, "overrides");
+        sections.push({ name: "pnpm.overrides", value: value.overrides, member: overrides, nests: false });
+      }
+      if (Object.hasOwn(value, "packageExtensions")) {
+        const extensions = members(member?.object, "packageExtensions");
+        found.push(...packageExtensionsFound(value.packageExtensions, extensions, members, folder));
+      }
     }
   }
-  const found = workspaceFound(json, members, folder);
   for (const { name, value, member, nests } of sections) {
     const checked = CHECKED_SECTIONS.has(name);
     if (!isObject(value)) {
@@ -194,4 +232,4 @@ function readPackageJson(text, folder = "") {
   return manifestEntries(found, (name) => name);
 }
 
-module.exports = { readPackageJson, overrideTarget, packageJsonVerdict };
+module.exports = { readPackageJson, dependencyFound, overrideTarget };

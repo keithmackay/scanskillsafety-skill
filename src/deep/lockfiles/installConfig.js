@@ -3,9 +3,9 @@
 "use strict";
 
 const { classifySource, EXPECTED, UNREADABLE } = require("../packageSources");
-const { configEntry, fieldOf, leadingSpaces, linesOf, startsWithAny, unnamedEntry, workspaceEntries } = require("./shared");
+const { configEntry, fieldOf, leadingSpaces, linesOf, manifestEntries, startsWithAny, unnamedEntry, workspaceEntries } = require("./shared");
 const { pdmTomlEntries, tomlValues, uvConfigEntries } = require("./pyproject");
-const { overrideTarget, packageJsonVerdict } = require("./packageJson");
+const { dependencyFound, overrideTarget } = require("./packageJson");
 
 const withoutBom = (text) => (text.startsWith("\uFEFF") ? text.slice(1) : text);
 
@@ -319,25 +319,49 @@ const YARNRC_YML_SECTIONS = new Map([
   ["npmScopes", section(npmScopesEntries)],
   ["npmRegistries", section(npmRegistriesEntries)],
   ["unsafeHttpWhitelist", section(unsafeHttpEntries, unreadableConfig)],
+  ["packageExtensions", section(packageExtensionsEntries, unnamedEntry)],
 ]);
 
 // pnpm-workspace.yaml's packages: each folder pattern that leaves the repository.
 const pnpmPackagesEntries = (root, folder) =>
   collectionChildren(root, "item").flatMap((item) => workspaceEntries([scalarText(item)], item.line, folder));
 
-// A package a catalog or override names, by a value read as package.json's are: reported when it is not from the registry.
-function namedValueEntries(name, field, folder) {
-  const verdict = packageJsonVerdict(scalarText(field), folder);
-  return verdict.expected ? [] : [{ name, version: null, line: field.line, classified: verdict }];
-}
+// What a mapping of package names to values gives, each value read as a package.json dependency's is (`role`: `checked` when the
+// registry names are sent to OSV, `overrides` when only the packages a value names in place of its key's are): the packages from
+// outside the registry, and the registry names sent to OSV.
+const dependencyFields = (node, folder, nameOf, role) =>
+  collectionChildren(node, "key").flatMap((field) =>
+    dependencyFound(nameOf(field.key), { value: scalarText(field), line: field.line }, role, folder),
+  );
+const asEntries = (found) => manifestEntries(found, (name) => name);
+const CATALOG = { checked: true, overrides: false };
+const OVERRIDE = { checked: false, overrides: true };
+const EXTENSION = { checked: false, overrides: false };
+const ownName = (name) => name;
 
-// pnpm-workspace.yaml's catalog: each package's version or source.
-const catalogEntries = (root, folder) => collectionChildren(root, "key").flatMap((field) => namedValueEntries(field.key, field, folder));
+// pnpm-workspace.yaml's catalog: each package's version or source; a registry range's package is sent to OSV by name.
+const catalogEntries = (root, folder) => asEntries(dependencyFields(root, folder, ownName, CATALOG));
 // pnpm-workspace.yaml's catalogs: catalogs by name, each read as the catalog is.
-const catalogsEntries = (root, folder) => collectionChildren(root, "key").flatMap((catalog) => catalogEntries(catalog, folder));
+const catalogsEntries = (root, folder) =>
+  asEntries(collectionChildren(root, "key").flatMap((catalog) => dependencyFields(catalog, folder, ownName, CATALOG)));
 // pnpm-workspace.yaml's overrides: each named by the package it replaces.
-const overridesEntries = (root, folder) =>
-  collectionChildren(root, "key").flatMap((field) => namedValueEntries(overrideTarget(field.key), field, folder));
+const overridesEntries = (root, folder) => asEntries(dependencyFields(root, folder, overrideTarget, OVERRIDE));
+
+// The sections of a package extension that add dependencies; `peerDependenciesMeta` names none and is passed over.
+const EXTENSION_SECTIONS = new Set(["dependencies", "optionalDependencies", "peerDependencies"]);
+
+// packageExtensions (pnpm-workspace.yaml, .yarnrc.yml): `<selector>: { dependencies: { <name>: <value> } }`, each dependency it adds
+// from outside the registry; any other section is one it does not model.
+function packageExtensionsEntries(root, folder) {
+  const found = collectionChildren(root, "key").flatMap((selector) =>
+    collectionChildren(selector, "key").flatMap((field) => {
+      if (field.key === "peerDependenciesMeta") return [];
+      if (!EXTENSION_SECTIONS.has(field.key)) throw new Unmodelled(field.line);
+      return dependencyFields(field, folder, ownName, EXTENSION);
+    }),
+  );
+  return asEntries(found);
+}
 
 // A scope as pnpm names one in `scopes`; a bare `@` is the unscoped default registry.
 const PNPM_SCOPE = /^@(?:[A-Za-z0-9._~-]+)?$/;
@@ -399,6 +423,7 @@ const PNPM_SETTINGS_SECTIONS = new Map([
   ["catalog", section(catalogEntries, unnamedEntry)],
   ["catalogs", section(catalogsEntries, unnamedEntry)],
   ["overrides", section(overridesEntries, unnamedEntry)],
+  ["packageExtensions", section(packageExtensionsEntries, unnamedEntry)],
 ]);
 const PNPM_WORKSPACE_SECTIONS = new Map([...PNPM_SETTINGS_SECTIONS, ["packages", section(pnpmPackagesEntries, unnamedEntry)]]);
 

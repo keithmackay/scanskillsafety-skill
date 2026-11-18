@@ -221,13 +221,13 @@ function readPackages(files, leftOut = []) {
   // Requirements files read in their own right, and those named by -r or -c still to read; each is read once.
   const visited = new Set(ownFiles.filter((f) => lockfileKind(f.path) === REQUIREMENTS).map((f) => f.path));
   const toFollow = [];
-  // Reads a lockfile, a requirements file or a manifest, its registry packages sent to OSV unless `sourcesOnly`; false when the
-  // file could not be read at all.
+  // Reads a lockfile, a requirements file, a manifest or a config file, its registry packages sent to OSV unless `sourcesOnly`:
+  // those registry packages, or null when the file could not be read at all.
   const readEntries = (f, kind, { sourcesOnly = false } = {}) => {
     const read = readSafely(kind.read, f);
     if (read.reason) {
       result.couldNotRead.push({ file: f.path, reason: read.reason });
-      return false;
+      return null;
     }
     const { registry, sourced, requires, unreadable, unrecorded, covers } = classifyEntries(kind.ecosystem, f.path, read.entries);
     if (!sourcesOnly) for (const entry of registry) add(kind.ecosystem, f.path, entry);
@@ -246,13 +246,12 @@ function readPackages(files, leftOut = []) {
         toFollow.push(byPath.get(r.requires));
       }
     }
-    return true;
+    return registry;
   };
   for (const f of ownFiles) {
     if (NOT_CHECKED.has(baseName(f.path))) result.notChecked.push(f.path);
     const config = CONFIGS.get(baseName(f.path));
     if (config) readEntries(f, config);
-    if (baseName(f.path) === PNPM_WORKSPACE) readEntries(f, pnpmLocked.has(folderOf(f.path)) ? PNPM_WORKSPACE_SETTINGS_KIND : PNPM_WORKSPACE_KIND);
     const kind = lockfileKind(f.path);
     if (!kind) continue;
     lockedBy(f.path).add(kind.ecosystem);
@@ -274,6 +273,14 @@ function readPackages(files, leftOut = []) {
     }
     const sourcesOnly = pinned.has(manifest.ecosystem);
     if (readEntries(f, manifest, { sourcesOnly }) && !sourcesOnly) result.namesOnly.push(f.path);
+  }
+  // pnpm-workspace.yaml, once the lockfiles are known: its catalogs' registry names are sent to OSV only for a pnpm project with no
+  // lockfile, as package.json's are.
+  for (const f of ownFiles.filter((file) => baseName(file.path) === PNPM_WORKSPACE)) {
+    const pnpmLock = pnpmLocked.has(folderOf(f.path));
+    const sourcesOnly = pnpmLock || locked.has("npm");
+    const registry = readEntries(f, pnpmLock ? PNPM_WORKSPACE_SETTINGS_KIND : PNPM_WORKSPACE_KIND, { sourcesOnly });
+    if (registry?.length > 0 && !sourcesOnly) result.namesOnly.push(f.path);
   }
   const projects = new Set([...ownFiles, ...ownLeftOut].filter((f) => baseName(f.path) === "package.json").map((f) => folderOf(f.path)));
   result.notRecorded.push(...notRecordedNotes(unrecordedFiles, settings, projects));

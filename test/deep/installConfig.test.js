@@ -411,7 +411,8 @@ test("pnpm-workspace.yaml: packages folders outside the repository are reported 
     "  react: ^18.2.0",
   );
   const outside = { ecosystem: "npm", file: "pnpm-workspace.yaml", line: 3, name: null, version: null, kind: "url", address: null, text: "a path outside the project" };
-  assert.deepEqual(read([["pnpm-workspace.yaml", text]]), { ...EMPTY, sourced: [outside] });
+  const catalogName = { ecosystem: "npm", name: "react", version: null, file: "pnpm-workspace.yaml", line: null };
+  assert.deepEqual(read([["pnpm-workspace.yaml", text]]), { ...EMPTY, packages: [catalogName], namesOnly: ["pnpm-workspace.yaml"], sourced: [outside] });
   const lock = "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n";
   assert.deepEqual(read([["pnpm-workspace.yaml", text], ["pnpm-lock.yaml", lock]]), EMPTY);
   assert.deepEqual(read([["pnpm-workspace.yaml", text]], [{ path: "pnpm-lock.yaml", reason: "larger than 5 MB" }]).sourced, []);
@@ -684,7 +685,8 @@ test("pnpm-workspace.yaml: catalogs and overrides from outside the registry are 
     at("bar", 10, "git", "https://github.com/u/bar.git"),
     at("qux", 12, "bundled", "vendor/qux-1.0.0.tgz", BUNDLED),
   ];
-  assert.deepEqual(read([["pnpm-workspace.yaml", text]]), { ...EMPTY, sourced: expected });
+  const names = ["react", "@s/real"].map((name) => ({ ecosystem: "npm", name, version: null, file: "pnpm-workspace.yaml", line: null }));
+  assert.deepEqual(read([["pnpm-workspace.yaml", text]]), { ...EMPTY, packages: names, namesOnly: ["pnpm-workspace.yaml"], sourced: expected });
   const lock = "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n";
   assert.deepEqual(read([["pnpm-workspace.yaml", text], ["pnpm-lock.yaml", lock]]).sourced, expected);
   const unread = (line) => pkg("pnpm-workspace.yaml")(null, line, "unreadable", null);
@@ -783,4 +785,80 @@ test("registry not recorded: any registry line it cannot read covers the lockfil
   for (const yml of ["npmRegistryServer: *a", "npmScopes:\n  s:\n    npmRegistryServer: |\n      x", '"npmRegistry\\u0053erver": https://m.example']) {
     assert.deepEqual(read([["yarn.lock", BERRY], [".yarnrc.yml", yml]]).notRecorded, [], yml);
   }
+});
+
+// packageExtensions, catalog names, pdm.toml find-links
+
+test("packageExtensions in pnpm-workspace.yaml, .yarnrc.yml and package.json's pnpm field report dependencies from outside the registry", () => {
+  const yaml = lines(
+    "packageExtensions:",
+    '  "react-dom@*":',
+    "    dependencies:",
+    '      react-is: "*"',
+    "      evil: git+https://github.com/u/evil.git",
+    "    optionalDependencies:",
+    "      tiny: https://files.example.com/tiny-1.0.0.tgz",
+    "    peerDependencies:",
+    "      far: link:../far",
+    "    peerDependenciesMeta:",
+    "      far:",
+    "        optional: true",
+  );
+  for (const file of ["pnpm-workspace.yaml", ".yarnrc.yml"]) {
+    const at = pkg(file);
+    assert.deepEqual(read([[file, yaml]]), {
+      ...EMPTY,
+      sourced: [at("evil", 5, "git", "https://github.com/u/evil.git"), at("tiny", 7, "url", "https://files.example.com/tiny-1.0.0.tgz"), at("far", 9, "url", null, OUTSIDE)],
+    }, file);
+  }
+  const json = JSON.stringify({ pnpm: { packageExtensions: { "react-dom@*": { dependencies: { "react-is": "*", evil: "git+https://github.com/u/evil.git" }, peerDependenciesMeta: { x: { optional: true } } } } } }, null, 2);
+  assert.deepEqual(read([["package.json", json]]).sourced, [pkg("package.json")("evil", 7, "git", "https://github.com/u/evil.git")]);
+});
+
+test("packageExtensions in a shape it does not model is one it cannot read", () => {
+  const unread = (file, line, name = null) => pkg(file)(name, line, "unreadable", null);
+  for (const file of ["pnpm-workspace.yaml", ".yarnrc.yml"]) {
+    for (const [text, line] of [
+      ["packageExtensions: {a: b}", 1],
+      ['packageExtensions:\n  "a@*":\n    devDependencies:\n      x: "1"', 3],
+      ['packageExtensions:\n  "a@*":\n    dependencies: {x: "1"}', 3],
+      ['packageExtensions:\n  "a@*":\n    dependencies:\n      x: *v', 4],
+    ]) {
+      const result = read([[file, text]]);
+      assert.deepEqual(result.sourced, [unread(file, line)], `${file} ${text}`);
+      assert.deepEqual(result.couldNotRead, [{ file, reason: UNREADABLE_SOURCE }], `${file} ${text}`);
+    }
+  }
+  const json = (extensions) => JSON.stringify({ pnpm: { packageExtensions: extensions } }, null, 2);
+  assert.deepEqual(read([["package.json", json("x")]]).sourced, [unread("package.json", 3)]);
+  assert.deepEqual(read([["package.json", json({ "a@*": { devDependencies: { x: "1" } } })]]).sourced, [unread("package.json", 5)]);
+  assert.deepEqual(read([["package.json", json({ "a@*": { dependencies: { x: 1 } } })]]).sourced, [unread("package.json", 6, "x")]);
+});
+
+test("catalog entries from the registry go to OSV by name in a pnpm project with no lockfile, and not with one", () => {
+  const workspace = lines(
+    "catalog:",
+    "  react: ^18.2.0",
+    "  left-pad: github:u/left-pad",
+    "catalogs:",
+    "  legacy:",
+    '    "@s/x": npm:@s/real@^1',
+  );
+  const names = (...list) => list.map((name) => ({ ecosystem: "npm", name, version: null, file: "pnpm-workspace.yaml", line: null }));
+  const alone = read([["pnpm-workspace.yaml", workspace], ["package.json", '{ "dependencies": { "react": "catalog:" } }']]);
+  assert.deepEqual(alone.packages, names("react", "@s/real"));
+  assert.deepEqual(alone.namesOnly, ["package.json", "pnpm-workspace.yaml"]);
+  assert.deepEqual(alone.sourced, [pkg("pnpm-workspace.yaml")("left-pad", 3, "git", "https://github.com/u/left-pad")]);
+  const lock = "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n";
+  const locked = read([["pnpm-workspace.yaml", workspace], ["pnpm-lock.yaml", lock]]);
+  assert.deepEqual([locked.packages, locked.namesOnly], [[], []]);
+  assert.deepEqual(locked.sourced, [pkg("pnpm-workspace.yaml")("left-pad", 3, "git", "https://github.com/u/left-pad")]);
+  const npmLocked = read([["pnpm-workspace.yaml", workspace], ["package-lock.json", JSON.stringify({ lockfileVersion: 3, packages: { "": {} } })]]);
+  assert.deepEqual([npmLocked.packages, npmLocked.namesOnly], [[], []]);
+});
+
+test("pdm.toml: a named index of type find_links is a find-links page", () => {
+  const pdm = '[pypi.links]\nurl = "https://pypi.org/simple/x/"\ntype = "find_links"\n[pypi.idx]\nurl = "https://pypi.org/simple"\ntype = "index"\n';
+  assert.deepEqual(read([["pdm.toml", pdm]]).sourced, [pypiConfig("pdm.toml")(2, "host", "https://pypi.org")]);
+  assertUnreadableAt("PyPI", "pdm.toml", '[pypi.x]\nurl = "https://x.example/simple"\ntype = "other"', 2);
 });
