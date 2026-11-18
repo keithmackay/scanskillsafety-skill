@@ -12,9 +12,11 @@ const {
   linesOf,
   LONE_CR_OR_TAB,
   opensUnclosed,
+  OUTSIDE_PROJECT,
   PLAIN_NAME,
   SEMVER,
   startsWithAny,
+  staysInside,
   unnamedEntry,
   unquote,
   Unreadable,
@@ -185,16 +187,36 @@ function pnpmTopLevelName(line) {
   return field.key;
 }
 
+// A line of the importers section, read only for a dependency's `link:` version: an importer's folder at 2 spaces, a dependency's
+// name at 6 and its `version:` at 8. A linked folder that leaves the repository, read from the importer's folder, is a path outside
+// the project; one inside it, whose files are scanned, gives nothing.
+function readImporterLine(importers, indent, text, lineNumber, folder) {
+  const field = fieldOf(text);
+  if (field === null) return null;
+  if (indent === 2) importers.importer = unquote(field.key);
+  else if (indent === 6) importers.dependency = unquote(field.key);
+  else if (indent === 8 && field.key === "version" && unquote(field.value).startsWith("link:")) {
+    const path = unquote(field.value).slice("link:".length);
+    const absolute = path.startsWith("/") || path.startsWith("~") || path.includes(":") || path.includes("\\");
+    const inside = !absolute && staysInside(folder, importers.importer === "." ? path : `${importers.importer}/${path}`);
+    if (!inside) return { name: importers.dependency, version: null, line: lineNumber, classified: OUTSIDE_PROJECT };
+  }
+  return null;
+}
+
 // The file is read strictly, line by line, as pnpm writes it: comments and blank lines skipped; top-level names plain; in
 // packages, entry keys at 2 spaces, their fields at 4 and a block resolution's fields at 6. A lone carriage return or a tab
 // anywhere, a top-level line pnpm does not write, an indentation of 1, 3 or 5 spaces in packages, or any but 2 before its first
-// entry, means the file is not one it can read.
-function readPnpmLock(text) {
+// entry, means the file is not one it can read. The importers section is read for linked folders outside the repository, `folder`
+// being the lockfile's folder.
+function readPnpmLock(text, folder = "") {
   const version = /^lockfileVersion: '?([^'\s]+)'?\s*$/m.exec(text)?.[1];
   if (!PNPM_VERSIONS.includes(version)) throw unsupportedVersion(version);
   if (LONE_CR_OR_TAB.test(text)) throw new Unreadable(PNPM_LAYOUT);
   const out = [];
   let inPackages = false;
+  let inImporters = false;
+  const importers = { importer: ".", dependency: null };
   let entries = 0;
   let entry = null;
   const finish = () => {
@@ -207,7 +229,14 @@ function readPnpmLock(text) {
     if (line === "" || line[indent] === "#") return;
     if (indent === 0) {
       finish();
-      inPackages = pnpmTopLevelName(line) === "packages";
+      const name = pnpmTopLevelName(line);
+      inPackages = name === "packages";
+      inImporters = name === "importers";
+      return;
+    }
+    if (inImporters) {
+      const link = readImporterLine(importers, indent, line.slice(indent), i + 1, folder);
+      if (link) out.push(link);
       return;
     }
     if (!inPackages) return;

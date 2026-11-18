@@ -176,9 +176,10 @@ const NPM_FILE_NAME = /[.](?:tgz|tar\.gz|tar)$/i;
 // A file spec as npm reads one before any other form: a dot, `~/`, `/` or a drive letter at the start.
 const NPM_FILE_SPEC = /^(?:[.]|~[/]|[/]|[a-zA-Z]:)/;
 
-// A repository on GitHub, GitLab or Bitbucket named by an http(s) URL, as npm's hosted-git-info reads one: GitHub `/<u>/<r>` or
-// `/<u>/<r>/tree/<committish>`, GitLab `/<group>/…/<r>` with no `/-/` part, Bitbucket `/<u>/<r>` unless it is a `/get/`
-// download. Shown as the repository, with a commit from the fragment or the tree. null for any other URL, such as an archive.
+// A repository on GitHub, GitLab, Bitbucket or GitHub Gist named by an http(s) URL, as npm's hosted-git-info reads one: GitHub
+// `/<u>/<r>` or `/<u>/<r>/tree/<committish>`, GitLab `/<group>/…/<r>` with no `/-/` part, Bitbucket `/<u>/<r>` unless it is a
+// `/get/` download, a gist `/[<u>/]<id>` unless it is a `/raw/` file (shown as `https://gist.github.com/<id>`, as the `gist:`
+// shorthand is). Shown as the repository, with a commit from the fragment or the tree. null for any other URL, such as an archive.
 function hostedRepository(text) {
   if (!prefixOf(text, ["https:", "http:"])) return null;
   const url = parseUrl(text);
@@ -195,6 +196,11 @@ function hostedRepository(text) {
     repository = segments;
   } else if (host === "bitbucket.org") {
     if (segments[2] === "get") return null;
+  } else if (host === "gist.github.com") {
+    if (segments[2] === "raw" || segments.length > 3) return null;
+    const id = segments[1] || segments[0];
+    if (!NAME_SEGMENT.test(id)) return null;
+    return gitResult(text, `https://gist.github.com/${id}`);
   } else return null;
   if (repository.length < 2 || !repository.every((segment) => NAME_SEGMENT.test(segment))) return null;
   const address = `${url.protocol}//${url.host}/${repository.join("/")}`;

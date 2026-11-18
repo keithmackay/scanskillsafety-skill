@@ -3,7 +3,7 @@
 "use strict";
 
 const { isObject } = require("../util");
-const { found, jsonKeyLines, parseJson, SEMVER, unsupportedVersion } = require("./shared");
+const { found, jsonKeyLines, OUTSIDE_PROJECT, parseJson, SEMVER, staysInside, Unreadable, unsupportedVersion } = require("./shared");
 
 // An npm alias (`npm:real-name@1.2.3`) names the package that is really installed.
 function npmAlias(version) {
@@ -27,22 +27,32 @@ function npmV1Entry(name, entry) {
   return { ...named, ...(entry.resolved === undefined ? {} : { source: entry.resolved }) };
 }
 
-function readNpmLock(text) {
+const packageName = (key, entry) => (typeof entry.name === "string" ? entry.name : key.slice(key.lastIndexOf("node_modules/") + "node_modules/".length));
+
+// text: the lockfile; folder: its folder in the repository, which a linked folder's path is read from.
+function readNpmLock(text, folder = "") {
   const json = parseJson(text);
   const version = json && json.lockfileVersion;
   const lineOf = jsonKeyLines(text);
   if (version === 2 || version === 3) {
-    // Keys without node_modules/ are the project's own workspace folders.
-    const entries = Object.entries(isObject(json.packages) ? json.packages : {}).filter(([key, entry]) => key.includes("node_modules/") && !(entry && entry.link));
-    const packages = entries
-      .filter(([, entry]) => entry && typeof entry.version === "string")
-      .map(([key, entry]) => ({
-        name: typeof entry.name === "string" ? entry.name : key.slice(key.lastIndexOf("node_modules/") + "node_modules/".length),
-        version: entry.version,
-        line: lineOf(key),
-        ...npmSource(entry),
-      }));
-    return found(packages, entries.length);
+    // Keys without node_modules/ are the project's own workspace folders. A link entry stands for a folder linked in place of a
+    // package: one that leaves the repository is a path outside the project; one inside it, whose files are scanned, gives nothing.
+    const installed = Object.entries(isObject(json.packages) ? json.packages : {}).filter(([key]) => key.includes("node_modules/"));
+    const entries = installed.filter(([, entry]) => !(entry && entry.link));
+    const out = [];
+    let packages = 0;
+    for (const [key, entry] of installed) {
+      if (entry && entry.link) {
+        if (typeof entry.resolved === "string" && !staysInside(folder, entry.resolved)) {
+          out.push({ name: packageName(key, entry), version: null, line: lineOf(key), classified: OUTSIDE_PROJECT });
+        }
+      } else if (entry && typeof entry.version === "string") {
+        packages++;
+        out.push({ name: packageName(key, entry), version: entry.version, line: lineOf(key), ...npmSource(entry) });
+      }
+    }
+    if (entries.length > 0 && packages === 0) throw new Unreadable("no packages found in it");
+    return out;
   }
   if (version === 1) {
     const dependenciesOf = (entry) => Object.entries(isObject(entry.dependencies) ? entry.dependencies : {});

@@ -52,15 +52,16 @@ const NPM_NAME = /^(?:@[A-Za-z0-9-][A-Za-z0-9._~-]*\/)?[A-Za-z0-9-][A-Za-z0-9._~
 const VERSION_LIKE = /^v?\d+(?:\.(?:\d+|x|\*))*(?:[-+][0-9A-Za-z.+-]*)?$/i;
 const isPackageName = (text) => NPM_NAME.test(text) && !VERSION_LIKE.test(text);
 
-// The package an npm alias (`npm:<name>@<range>`, `npm:<name>`, in any case) installs; null for any other value, or when the text
-// after `npm:` is no package name (`npm:^4.17.21`), which leaves the key's package.
-function aliasTarget(value) {
+// The package an npm alias (`npm:<name>@<range>`, `npm:<name>`, in any case) names, and whether a range follows it; null for any
+// other value, or when the text after `npm:` is no package name (`npm:^4.17.21`), which leaves the key's package.
+function aliasParts(value) {
   if (value.slice(0, 4).toLowerCase() !== "npm:") return null;
   const spec = value.slice(4);
   const at = spec.indexOf("@", 1);
   const name = at < 0 ? spec : spec.slice(0, at);
-  return isPackageName(name) ? name : null;
+  return isPackageName(name) ? { name, ranged: at >= 0 } : null;
 }
+const aliasTarget = (value) => aliasParts(value)?.name ?? null;
 
 // The package a `patch:` value patches: the alias its inner resolution names, else the package named before it; null when it names
 // none.
@@ -78,8 +79,12 @@ function patchTarget(value) {
   return aliasTarget(body.slice(at + 1)) ?? (isPackageName(name) ? name : null);
 }
 
-// The package and version a tarball on the official npm registry is, from its path: `/<name>/-/<name>-<version>.tgz`, or
-// `/@<scope>/<name>/-/<name>-<version>.tgz` (the `/` after the scope possibly encoded); null when the path is not one.
+// The longest tarball file name read: npm caps a name at 214 characters, so a longer one is no package's.
+const MAX_TARBALL_FILE = 512;
+
+// The package and version a tarball on the official npm registry is, from its file name, `<name>-<version>.tgz`, under
+// `/<package>/-/` or `/@<scope>/<package>/-/` (the `/` after the scope possibly encoded), the scope kept; the file is what is
+// downloaded, so its name wins over the folder's. null when the path is not one.
 function registryTarball(value) {
   let segments;
   try {
@@ -87,23 +92,32 @@ function registryTarball(value) {
   } catch {
     return null;
   }
-  const scoped = segments[0].startsWith("@");
-  const name = scoped ? segments.slice(0, 2).join("/") : segments[0];
-  const [dash, file, ...more] = segments.slice(scoped ? 2 : 1);
-  const base = `${name.slice(name.indexOf("/") + 1)}-`;
-  if (dash !== "-" || more.length > 0 || file === undefined || !file.startsWith(base) || !file.endsWith(".tgz")) return null;
-  const version = file.slice(base.length, -".tgz".length);
-  return isPackageName(name) && SEMVER.test(version) ? { name, version } : null;
+  const scope = segments[0].startsWith("@") ? segments[0] : null;
+  const [dash, file, ...more] = segments.slice(scope === null ? 1 : 2);
+  if (dash !== "-" || more.length > 0 || file === undefined || file.length > MAX_TARBALL_FILE || !file.endsWith(".tgz")) return null;
+  const stem = file.slice(0, -".tgz".length);
+  for (let at = stem.indexOf("-"); at > 0; at = stem.indexOf("-", at + 1)) {
+    const version = stem.slice(at + 1);
+    if (!SEMVER.test(version)) continue;
+    const name = scope === null ? stem.slice(0, at) : `${scope}/${stem.slice(0, at)}`;
+    return isPackageName(name) ? { name, version } : null;
+  }
+  return null;
 }
 
-// What a registry value names beyond its key: the package an alias or a patch installs, or the package and version a registry
-// tarball is (`UNNAMED` when its path gives none, so no name is sent); null when it is a range or a tag for the key's package.
+// The packages a registry value names beyond its key, each with a version or null: the package an alias or a patch installs (for
+// `npm:<tag>`, which npm reads as a package and Yarn as a tag of the key's package, both), or the package and version a registry
+// tarball is; `UNNAMED` for an address on the registry that is no tarball it can read; null when it is a range or a tag for the
+// key's package.
 const UNNAMED = Object.freeze({});
-function namedPackage(value) {
-  const target = aliasTarget(value) ?? patchTarget(value);
-  if (target !== null) return { name: target, version: null };
+function namedPackages(value, keyName) {
+  const alias = aliasParts(value);
+  if (alias !== null) return [{ name: alias.name, version: null }, ...(alias.ranged ? [] : [{ name: keyName, version: null }])];
+  const patched = patchTarget(value);
+  if (patched !== null) return [{ name: patched, version: null }];
   if (!/^https?:/i.test(value)) return null;
-  return registryTarball(value) ?? UNNAMED;
+  const tarball = registryTarball(value);
+  return tarball === null ? UNNAMED : [tarball];
 }
 
 // The values of one section, each with its name and the line of its value: walked iteratively, depth first in parse order, through
@@ -135,15 +149,18 @@ function packageJsonVerdict(value, folder) {
   return verdict.kind === "local" ? localPathVerdict(value, folder, verdict) : verdict;
 }
 
-// What one package.json dependency gives: its source when that is not the registry; from the registry, in a checked section, the
-// package it names (the key's, or the one an alias, a patch or a registry tarball names); in an override section, only a package
-// an alias, a patch or a registry tarball names, which is installed in place of the key's; in any other section, nothing.
+// What one package.json dependency gives: its source when that is not the registry, or one it cannot read for a registry address
+// that is no tarball; from the registry, in a checked section, the packages it names (the key's, or those an alias, a patch or a
+// registry tarball names); in an override section, only packages an alias, a patch or a registry tarball names, which are
+// installed in place of the key's; in any other section, nothing.
 function dependencyFound(packageName, { value, line }, { checked, overrides }, folder) {
   const verdict = packageJsonVerdict(value, folder);
   if (!verdict.expected) return [{ entry: { name: packageName, version: null, line, classified: verdict }, checked }];
-  const named = namedPackage(value);
-  if (named === UNNAMED || (named === null && !checked) || (!checked && !overrides)) return [];
-  return [{ entry: { name: named?.name ?? packageName, version: named?.version ?? null, line }, checked: true }];
+  const named = namedPackages(value, packageName);
+  if (named === UNNAMED) return [{ entry: unreadableNamed(packageName, line), checked }];
+  if (named === null) return checked ? [{ entry: { name: packageName, version: null, line }, checked: true }] : [];
+  if (!checked && !overrides) return [];
+  return named.map(({ name, version }) => ({ entry: { name, version, line }, checked: true }));
 }
 
 // package.json's dependencies in every section that can name a source, and the overrides in `pnpm.overrides`. A section that is

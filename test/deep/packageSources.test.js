@@ -340,6 +340,9 @@ test("package.json: an http(s) URL naming a repository on GitHub, GitLab or Bitb
     ["https://gitlab.com/g/r/-/archive/v1/r-v1.tar.gz", offRegistry("url", "https://gitlab.com/r-v1.tar.gz")],
     ["https://bitbucket.org/u/r/get/v1.tar.gz", offRegistry("url", "https://bitbucket.org/v1.tar.gz")],
     ["https://codeload.github.com/u/r/tar.gz/main", offRegistry("url", "https://codeload.github.com/main")],
+    ["https://gist.github.com/u/abc123", offRegistry("git", "https://gist.github.com/abc123")],
+    [`https://gist.github.com/abc123#${SHA1}`, offRegistry("git", "https://gist.github.com/abc123", { commit: SHA1 })],
+    ["https://gist.github.com/u/abc123/raw/x.tgz", offRegistry("url", "https://gist.github.com/x.tgz")],
   ];
   for (const [value, expected] of cases) assert.deepEqual(classifyManifestValue("npm", value), expected, value);
 });

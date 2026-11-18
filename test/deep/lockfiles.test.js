@@ -1871,3 +1871,22 @@ test("yarn.lock, Berry: a workspace, portal or link folder that leaves the repos
     assert.deepEqual(readPackages([{ path: "yarn.lock", text: lock(resolution) }]).sourced, [], resolution);
   }
 });
+
+test("JavaScript lockfiles: a linked folder outside the repository, an npm link entry or a pnpm importer's link: version, is a path outside the project; inside it gives nothing", () => {
+  const outside = { kind: "url", address: null, text: "a path outside the project" };
+  const pick = (read) => read.sourced.map(({ name, line, kind, address, text }) => ({ name, line, kind, address, text }));
+  const lock = JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" },
+    "node_modules/in": { resolved: "packages/in", link: true },
+    "node_modules/up": { resolved: "../up", link: true },
+    "node_modules/far": { resolved: "../../far", link: true },
+    "node_modules/abs": { resolved: "/opt/abs", link: true },
+    "node_modules/ok": { version: "1.0.0" },
+  } }, null, 2);
+  assert.deepEqual(pick(readPackages([{ path: "app/package-lock.json", text: lock }])), [{ name: "far", line: 15, ...outside }, { name: "abs", line: 19, ...outside }]);
+  const pnpm = (version) => ["lockfileVersion: '9.0'", "", "importers:", "", "  .:", "    dependencies:", "      near:", "        specifier: link:packages/near", "        version: link:packages/near",
+    "      far:", "        specifier: link:../far", `        version: ${version}`, "", "  packages/a:", "    devDependencies:", "      sibling:", "        specifier: link:../b", "        version: link:../b",
+    "      gone:", "        specifier: link:../../../gone", "        version: link:../../../gone", "", "packages:", "", "  x@1.0.0:", "    resolution: {integrity: sha512-x}", ""].join("\n");
+  assert.deepEqual(pick(readPackages([{ path: "pnpm-lock.yaml", text: pnpm("link:../far") }])), [{ name: "far", line: 12, ...outside }, { name: "gone", line: 21, ...outside }]);
+  assert.deepEqual(pick(readPackages([{ path: "pnpm-lock.yaml", text: pnpm("'link:../far'") }])), [{ name: "far", line: 12, ...outside }, { name: "gone", line: 21, ...outside }]);
+  assert.deepEqual(pick(readPackages([{ path: "pnpm-lock.yaml", text: pnpm("1.0.0") }])), [{ name: "gone", line: 21, ...outside }]);
+});

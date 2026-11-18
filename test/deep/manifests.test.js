@@ -532,7 +532,7 @@ test("pyproject.toml: [build-system] requires and [tool.uv]'s dev, override and 
 
 test("package.json: an npm alias sends the package it names to OSV, in any case, scoped or with no version", () => {
   const text = JSON.stringify({ dependencies: { x: "npm:real@^1", y: "NPM:@s/scoped@~2", z: "npm:bare" } });
-  assert.deepEqual(readOne("package.json", text).packages, ["real", "@s/scoped", "bare"].map(named("npm", "package.json")));
+  assert.deepEqual(readOne("package.json", text).packages, ["real", "@s/scoped", "bare", "z"].map(named("npm", "package.json")));
 });
 
 test("package.json: an alias whose text after npm: is no package name is the key's package", () => {
@@ -548,20 +548,27 @@ test("package.json: a value starting with a dot or a drive letter is a path; out
   assert.deepEqual(read.sourced, [item("npm", file)("drive", 6, "url", null, OUTSIDE), item("npm", file)("upup", 7, "url", null, OUTSIDE)]);
 });
 
-test("package.json: a tarball on the official registry is checked by the name and version its path gives, never by the key", () => {
-  const text = JSON.stringify({
-    dependencies: {
-      x: "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
-      y: "https://registry.yarnpkg.com/@babel/core/-/core-7.0.0.tgz",
-      z: "https://registry.npmjs.org/@s%2fname/-/name-1.0.0-beta.1.tgz",
-      w: "https://registry.npmjs.org/weird/path.tgz",
-      v: "https://registry.npmjs.org/left-pad/-/other-1.0.0.tgz",
-    },
-  });
+test("package.json: a tarball on the official registry is checked by the name and version its file name gives, never by the key; any other address there is one it cannot read", () => {
+  const text = lines(
+    "{",
+    '  "dependencies": {',
+    '    "x": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",',
+    '    "y": "https://registry.yarnpkg.com/@babel/core/-/core-7.0.0.tgz",',
+    '    "z": "https://registry.npmjs.org/@s%2fname/-/name-1.0.0-beta.1.tgz",',
+    '    "v": "https://registry.npmjs.org/left-pad/-/other-1.0.0.tgz",',
+    '    "w": "https://registry.npmjs.org/weird/path.tgz",',
+    '    "b": "https://registry.npmjs.org/b"',
+    "  },",
+    '  "devDependencies": { "d": "https://registry.npmjs.org/d/-/d.tgz" },',
+    `  "overrides": { "o": "https://registry.npmjs.org/o/-/o-${"1".repeat(600)}.0.0.tgz" }`,
+    "}",
+  );
   const read = readOne("package.json", text);
   const pkg = (name, version) => ({ ecosystem: "npm", name, version, file: "package.json", line: null });
-  assert.deepEqual(read.packages, [pkg("lodash", "4.17.21"), pkg("@babel/core", "7.0.0"), pkg("@s/name", "1.0.0-beta.1")]);
-  assert.deepEqual(read.sourced, []);
+  assert.deepEqual(read.packages, [pkg("lodash", "4.17.21"), pkg("@babel/core", "7.0.0"), pkg("@s/name", "1.0.0-beta.1"), pkg("other", "1.0.0")]);
+  const bad = unreadable("npm", "package.json");
+  assert.deepEqual(read.sourced, [bad("w", 7), bad("b", 8), bad("d", 10), bad("o", 11)]);
+  assert.deepEqual(read.couldNotRead, [{ file: "package.json", ...UNREADABLE_SOURCE }]);
 });
 
 test("package.json: an alias in overrides, resolutions or pnpm.overrides, and the package a patch patches, are sent to OSV", () => {
@@ -572,7 +579,7 @@ test("package.json: an alias in overrides, resolutions or pnpm.overrides, and th
     resolutions: { bar: "npm:@s/evil2@^2" },
     pnpm: { overrides: { baz: "npm:evil3" } },
   });
-  assert.deepEqual(readOne("package.json", text).packages, ["bar", "lodash", "evil", "evil-nested", "qq", "@s/evil2", "evil3"].map(named("npm", "package.json")));
+  assert.deepEqual(readOne("package.json", text).packages, ["bar", "lodash", "evil", "evil-nested", "qq", "@s/evil2", "evil3", "baz"].map(named("npm", "package.json")));
 });
 
 test("package.json: a UTF-8 byte order mark before the JSON is read past, the lines unchanged", () => {
@@ -644,4 +651,9 @@ test("pyproject.toml: uv's build-constraint and extra build dependencies, and PD
     '[dependency-groups]\ndev = [{ requirement = "x" }]\n',
   ];
   for (const text of bad) assert.deepEqual(readOne("pyproject.toml", text).sourced, [unreadable("PyPI", "pyproject.toml")(null, 2)], text);
+});
+
+test("package.json: npm:<tag> sends both the tag read as a package name and the key's package, since npm and Yarn read it differently", () => {
+  const text = JSON.stringify({ dependencies: { react: "npm:latest", vue: "npm:next" }, overrides: { foo: "npm:beta" } });
+  assert.deepEqual(readOne("package.json", text).packages, ["latest", "react", "next", "vue", "beta", "foo"].map(named("npm", "package.json")));
 });
