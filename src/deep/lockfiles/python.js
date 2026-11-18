@@ -221,7 +221,14 @@ function tomlStatements(text, layout) {
 }
 
 // Sub-tables of a [[package]] block that never name where the package comes from.
-const OTHER_PACKAGE_TABLES = new Set(["dependencies", "extras", "optional-dependencies", "dev-dependencies", "metadata"]);
+const OTHER_PACKAGE_TABLES = new Set([
+  "dependencies",
+  "extras",
+  "optional-dependencies",
+  "dev-dependencies",
+  "metadata",
+  "group-requires-python",
+]);
 // The fields Poetry writes in [package.source].
 const POETRY_SOURCE_FIELDS = new Set(["type", "url", "reference", "resolved_reference", "subdirectory"]);
 // The kinds of uv `source`, one per source; `subdirectory` may sit beside `url`.
@@ -261,6 +268,12 @@ function poetryOrigin(block) {
   return UNREADABLE_ENTRY;
 }
 
+// A path uv records: local while it stays inside the project, otherwise a path outside it.
+const uvPathVerdict = (path) => (staysInside(path) ? LOCAL : OUTSIDE_PROJECT);
+// An address uv records: a `file:` URL is always absolute, so a path outside the project; any other is classified.
+const uvAddressVerdict = (address, direct = false) =>
+  address.slice(0, 5).toLowerCase() === "file:" ? OUTSIDE_PROJECT : classifySource("PyPI", address, { direct });
+
 // The fields of an inline table written as uv writes one, by name; null when it is not one or a name is given twice.
 function uvTable(value) {
   if (value === undefined || value.kind !== "table" || !value.exact) return null;
@@ -273,7 +286,8 @@ function uvTable(value) {
 }
 
 // A uv `source`: exactly one kind, a string: an index (a folder when it has no `:`), a git repository with its commit after `#`,
-// one archive, a file or folder (local when it stays inside the project), or the project itself (`editable`, `virtual`).
+// one archive, a file or folder, or the project itself (`editable`, `virtual`). A folder or file is local only while it stays
+// inside the project.
 function uvSourceVerdict(value) {
   const fields = uvTable(value);
   const kinds = fields ? UV_SOURCE_KINDS.filter((kind) => fields.has(kind)) : [];
@@ -283,13 +297,13 @@ function uvSourceVerdict(value) {
   const address = fields.get(kind);
   if (fields.size !== 1 + extra || address.kind !== "string") return UNREADABLE;
   if (kind === "editable" || kind === "virtual") return PROJECT;
-  if (kind === "path" || kind === "directory") return staysInside(address.text) ? LOCAL : OUTSIDE_PROJECT;
-  if (kind === "registry") return address.text.includes(":") ? classifySource("PyPI", address.text) : LOCAL;
+  if (kind === "path" || kind === "directory") return uvPathVerdict(address.text);
+  if (kind === "registry") return address.text.includes(":") ? uvAddressVerdict(address.text) : uvPathVerdict(address.text);
   if (kind === "git") return classifySource("PyPI", gitRepositorySource(address.text, "").source);
-  return classifySource("PyPI", address.text, { direct: true });
+  return uvAddressVerdict(address.text, true);
 }
 
-// A uv `sdist` or `wheels` item: the address of its `url`, local for a `path`, null when it names neither.
+// A uv `sdist` or `wheels` item: the address of its `url` or its `path`, null when it names neither.
 function uvFileVerdict(value) {
   const fields = uvTable(value);
   if (!fields || [...fields.keys()].some((name) => !UV_FILE_FIELDS.has(name)) || (fields.has("url") && fields.has("path"))) {
@@ -298,11 +312,11 @@ function uvFileVerdict(value) {
   const address = fields.get("url") ?? fields.get("path");
   if (address === undefined) return null;
   if (address.kind !== "string") return UNREADABLE;
-  return fields.has("url") ? classifySource("PyPI", address.text) : LOCAL;
+  return fields.has("url") ? uvAddressVerdict(address.text) : uvPathVerdict(address.text);
 }
 
-// Where a uv package comes from: the first address that is not the registry among its source, its sdist and its wheels, else a
-// local one, else the registry. A package with no source, or a project with files, is one it cannot read.
+// Where a uv package comes from: the first address that is neither the registry nor a path inside the project among its source,
+// its sdist and its wheels, else what its source is. A package with no source, or a project with files, is one it cannot read.
 function uvOrigin(block) {
   const source = block.fields.get("source");
   if (source === undefined) return UNREADABLE_ENTRY;
@@ -317,7 +331,7 @@ function uvOrigin(block) {
   const named = verdicts.filter((verdict) => verdict !== null);
   if (named[0] === PROJECT) return named.length === 1 ? PROJECT : UNREADABLE_ENTRY;
   const reported = named.find((verdict) => !verdict.expected && verdict.kind !== "local");
-  return { classified: reported ?? named.find((verdict) => verdict.kind === "local") ?? named[0] };
+  return { classified: reported ?? named[0] };
 }
 
 // Poetry writes a package's source as a [package.source] table; uv as `source`, `sdist` and `wheels` fields of the block.

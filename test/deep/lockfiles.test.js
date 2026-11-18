@@ -1131,7 +1131,7 @@ test("uv.lock: the first address that is not the registry among source, sdist an
 });
 
 test("uv.lock: a registry that is a folder is local; one that is neither a folder nor an address it can read is a source it could not read", () => {
-  assert.deepEqual(readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "../wheels" }') }]), EMPTY);
+  assert.deepEqual(readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "wheels" }') }]), EMPTY);
   const read = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "weird:SECRET" }') }]);
   assert.deepEqual(read, {
     ...EMPTY,
@@ -1336,4 +1336,36 @@ test("uv.lock: a path or directory source is local only while it stays inside th
       sourced: [pypiSourced("a", "1.0.0", "uv.lock", 5, "url", null, { text: "a path outside the project" })],
     }, source);
   }
+});
+
+test("uv.lock: a project block with group-requires-python and default-groups, as uv writes them, is the project", () => {
+  const text = [
+    "version = 1", 'requires-python = ">=3.10"', "",
+    "[[package]]", 'name = "t"', 'version = "0.1.0"', 'source = { virtual = "." }', 'default-groups = ["dev"]', "",
+    "[package.group-requires-python]", 'dev = ">=3.12"', 'docs = ">=3.11"', "",
+    "[package.metadata]", "requires-dist = []", "",
+  ].join("\n");
+  assert.deepEqual(readPackages([{ path: "uv.lock", text }]), EMPTY);
+});
+
+test("uv.lock: every local path, a registry folder, an sdist or wheel path or a file: URL, is local only while it stays inside the project", () => {
+  const outside = (...lines) => assert.deepEqual(readPackages([{ path: "uv.lock", text: uvLock(...lines) }]).sourced,
+    [pypiSourced("a", "1.0.0", "uv.lock", 5, "url", null, { text: "a path outside the project" })], lines.join(" "));
+  const registry = 'source = { registry = "https://pypi.org/simple" }';
+  outside('source = { registry = "../wheels" }');
+  outside('source = { registry = "/srv/wheels" }');
+  outside(registry, 'sdist = { path = "../a-1.0.0.tar.gz" }');
+  outside(registry, "wheels = [", '    { path = "/tmp/a-1.0.0-py3-none-any.whl" },', "]");
+  outside(registry, 'sdist = { url = "file:///home/someone/a-1.0.0.tar.gz" }');
+  outside(registry, "wheels = [", '    { url = "file:///tmp/a-1.0.0-py3-none-any.whl" },', "]");
+  outside('source = { url = "file:///home/someone/a-1.0.0.tar.gz" }');
+  outside('source = { registry = "wheels" }', 'sdist = { path = "../../a-1.0.0.tar.gz" }');
+});
+
+test("uv.lock: a package is judged by its first address that is not the registry; a path inside the project is no address, so the source decides", () => {
+  const registry = 'source = { registry = "https://pypi.org/simple" }';
+  const read = readPackages([{ path: "uv.lock", text: uvLock(registry, 'sdist = { path = "dist/a-1.0.0.tar.gz" }', "wheels = [", '    { path = "dist/a-1.0.0-py3-none-any.whl" },', "]") }]);
+  assert.deepEqual(read, { ...EMPTY, packages: [pypi("a", "1.0.0", "uv.lock", 5)] });
+  const mirror = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "https://mirror.example.com/simple" }', 'sdist = { path = "dist/a-1.0.0.tar.gz" }') }]);
+  assert.deepEqual(mirror.sourced, [pypiSourced("a", "1.0.0", "uv.lock", 5, "host", "https://mirror.example.com")]);
 });
