@@ -297,6 +297,15 @@ function readBerryLine(entry, line) {
   else if (opensUnclosed(field.value)) entry.unreadable = true;
 }
 
+const WORKSPACE = "workspace:";
+
+// A workspace resolution's folder as Berry writes one: relative to the project (`.`, `./…`, `../…`, `packages/a`), with no `:`
+// or `//` that could make it an address, and not absolute.
+const isWorkspaceFolder = (folder) => folder !== "" && !folder.startsWith("/") && !folder.includes(":") && !folder.includes("//");
+
+// The `version` or `resolution` field of a Berry entry, each given once and holding a scalar, or the entry's source is one it
+// cannot read. A resolution of `workspace:` and a relative folder is the project's own workspace, skipped; one naming anything
+// else is one it cannot read.
 function readBerryScalar(entry, { key, value }) {
   const given = key === "version" ? entry.version !== undefined : entry.origin !== undefined;
   if (given || !berryScalar(value)) {
@@ -308,8 +317,11 @@ function readBerryScalar(entry, { key, value }) {
     return;
   }
   const resolution = unquote(value);
+  const named = afterName(resolution) ?? "";
   entry.origin = berrySource(resolution);
-  entry.workspace = (afterName(resolution) ?? "").startsWith("workspace:");
+  if (!named.startsWith(WORKSPACE)) return;
+  if (isWorkspaceFolder(named.slice(WORKSPACE.length))) entry.workspace = true;
+  else entry.unreadable = true;
 }
 
 // A classic field: a plain name, one space and a double-quoted value with no escape or an unquoted one; or a plain name and a
@@ -319,7 +331,7 @@ const CLASSIC_BLOCK = /^ {2}[A-Za-z]+:$/;
 
 // A line of a classic entry, read only as Yarn writes one; any other shape, a backslash (Yarn decodes quoted strings as JSON) or a
 // tab anywhere in it, makes the entry's source one it cannot read. Deeper lines are passed over under a field that opens them.
-// The first `version` is read, and a later `resolved` replaces an earlier one.
+// `version` is given once, and a later `resolved` replaces an earlier one.
 function readClassicLine(entry, line) {
   if (line.trim() === "") return;
   if (line.includes("\\") || line.includes("\t")) {
@@ -335,16 +347,21 @@ function readClassicLine(entry, line) {
   if (entry.inBlock) return;
   const match = CLASSIC_FIELD.exec(line);
   if (!match) entry.unreadable = true;
-  else if (match[1] === "version") entry.version ??= unquote(match[2]);
+  else if (match[1] === "version") {
+    if (entry.version !== undefined) entry.unreadable = true;
+    else entry.version = unquote(match[2]);
+  }
   else if (match[1] === "resolved") entry.origin = addressSource(unquote(match[2]));
 }
 
 // Each entry runs from its header to the next header or the end of the file, so its source, on a line after its version, is
 // carried with it. A header that does not end in `:` is an entry it cannot name; an entry is never left out for lacking a version.
 // A file with a `__metadata:` line is Berry, read by Berry's rules whatever else it holds; any other file must carry the classic
-// marker. Berry is YAML, read only as Berry writes it: a lone carriage return or a tab makes the file one it cannot read, a header
-// in any other shape is an entry it cannot name, and only an entry whose resolution is `workspace:` is skipped. A classic entry is
-// never skipped.
+// marker. Yarn itself reads a file with its classic parser when the opening comments carry `# yarn lockfile v1`; such a file with
+// a `__metadata:` line is read here by the stricter Berry rules, under which a classic-shaped line makes its entry unreadable,
+// so a source Yarn reads is never taken for the registry. Berry is YAML, read only as Berry writes it: a lone carriage return or
+// a tab makes the file one it cannot read, a header in any other shape is an entry it cannot name, and only an entry whose
+// resolution is a `workspace:` folder is skipped. A classic entry is never skipped.
 function readYarnLock(text) {
   const lines = linesOf(text);
   const berry = lines.includes("__metadata:");

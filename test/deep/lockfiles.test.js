@@ -1053,3 +1053,20 @@ test("yarn.lock, classic: no entry is skipped for its header", () => {
   const text = classicText("a@workspace:x, a@^1.0.0:", '  version "1.0.0"', `  resolved "${EVIL}"`);
   assert.deepEqual(readPackages([{ path: "yarn.lock", text }]).sourced, [sourced("a", "1.0.0", "yarn.lock", 5, "host", "https://evil.example")]);
 });
+
+test("yarn.lock, classic: a second version in an entry is a source it could not read", () => {
+  const text = classicText("a@^1.0.0:", '  version "1.0.0"', '  version "2.0.0"', '  resolved "https://registry.yarnpkg.com/a/-/a-1.0.0.tgz"');
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text }]).sourced, [sourced("a", "1.0.0", "yarn.lock", 5, "unreadable", null)]);
+});
+
+test("yarn.lock, Berry: a workspace resolution is skipped only when it names a relative folder; any other is a source it could not read", () => {
+  const lock = (resolution) => berryText('"a@workspace:x":', "  version: 1.0.0", `  resolution: "a@workspace:${resolution}"`);
+  for (const folder of [".", "./packages/a", "../a", "packages/a"]) {
+    assert.deepEqual(readPackages([{ path: "yarn.lock", text: lock(folder) }]), EMPTY, folder);
+  }
+  for (const odd of [EVIL, "/abs/a", "x:y", "a//b", ""]) {
+    const read = readPackages([{ path: "yarn.lock", text: lock(odd) }]);
+    assert.deepEqual(read.sourced, [sourced("a", "1.0.0", "yarn.lock", 4, "unreadable", null)], odd);
+    assert.ok(!JSON.stringify(read).includes("evil"), odd);
+  }
+});
