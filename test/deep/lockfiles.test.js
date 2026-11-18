@@ -591,7 +591,7 @@ const pnpmRead = (...lines) => readPackages([{ path: "pnpm-lock.yaml", text: pnp
 test("pnpm-lock.yaml: a credential in a git key or repo is never shown, and a commit that is not a commit id is not kept", () => {
   const read = pnpmRead(
     "  x@git+https://SECRET@github.com/u/r.git#SECRETREF:",
-    "    resolution: {commit: SECRETREF, repo: 'https://SECRET@github.com/u/r.git', type: git}",
+    "    resolution: {commit: SECRETREF, repo: https://SECRET@github.com/u/r.git, type: git}",
   );
   assert.deepEqual(read, { ...EMPTY, sourced: [sourced("x", null, "pnpm-lock.yaml", 5, "git", "https://github.com/u/r.git")] });
   assert.ok(!JSON.stringify(read).includes("SECRET"));
@@ -650,15 +650,20 @@ test("pnpm-lock.yaml: a key with no name takes the entry's name line and is clas
   assert.deepEqual(read.sourced, [sourced("tiny", "1.0.0", "pnpm-lock.yaml", 5, "host", "https://registry.npmmirror.com")]);
 });
 
-test("pnpm-lock.yaml: resolution fields named like built-in object properties are plain names", () => {
-  const read = pnpmRead("  a@1.0.0:", "    resolution: {__proto__: x, constructor: y, hasOwnProperty: z, integrity: sha512-x}");
+test("pnpm-lock.yaml: resolution fields named like built-in object properties are plain names; __proto__ is no plain name", () => {
+  const read = pnpmRead("  a@1.0.0:", "    resolution: {constructor: y, hasOwnProperty: z, toString: w, integrity: sha512-x}");
   assert.deepEqual(read, { ...EMPTY, packages: [npm("a", "1.0.0", "pnpm-lock.yaml", 5)] });
+  assert.deepEqual(pnpmRead("  a@1.0.0:", "    resolution: {__proto__: x, integrity: sha512-x}").sourced, [
+    sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null),
+  ]);
 });
 
 test("a pnpm-lock.yaml with a resolution line millions of characters long is read quickly", () => {
-  const long = `    resolution: {integrity: sha512-x, ${"'a, b: c, '".repeat(200000)}${", '".repeat(200000)}}`;
+  const long = `    resolution: {integrity: sha512-${"A".repeat(4000000)}}`;
   const read = quickly(() => pnpmRead("  a@1.0.0:", long));
   assert.deepEqual(read.packages, [npm("a", "1.0.0", "pnpm-lock.yaml", 5)]);
+  const commas = quickly(() => pnpmRead("  a@1.0.0:", `    resolution: {integrity: sha512-x${", ".repeat(2000000)}}`));
+  assert.deepEqual(commas.sourced, [sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null)]);
 });
 
 const pnpmV6Read = (...lines) => readPackages([{ path: "pnpm-lock.yaml", text: ["lockfileVersion: '6.0'", "", "packages:", "", ...lines, ""].join("\n") }]);
@@ -782,9 +787,9 @@ test("pnpm-lock.yaml: an entry whose name cannot be found is a source it could n
   assert.ok(!JSON.stringify(read).includes("evil"));
 });
 
-test("pnpm-lock.yaml: an escaped quote inside a double-quoted flow value does not end it", () => {
+test("pnpm-lock.yaml: a quoted value in a resolution flow map is a source it could not read", () => {
   const read = pnpmRead("  a@1.0.0:", '    resolution: {integrity: "x\\", tarball: https://evil.example/a.tgz"}');
-  assert.deepEqual(read, { ...EMPTY, packages: [npm("a", "1.0.0", "pnpm-lock.yaml", 5)] });
+  assert.deepEqual(read.sourced, [sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null)]);
 });
 
 test("pnpm-lock.yaml: an entry or resolution in a shape pnpm does not write is a source it could not read, never the registry", () => {
@@ -816,7 +821,7 @@ test("pnpm-lock.yaml: an entry or resolution in a shape pnpm does not write is a
     couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
     sourced: [
       sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null),
-      sourced("b", "1.0.0", "pnpm-lock.yaml", 10, "host", "https://evil.example"),
+      sourced("b", "1.0.0", "pnpm-lock.yaml", 10, "unreadable", null),
       unnamed(13),
       sourced("e", "1.0.0", "pnpm-lock.yaml", 19, "unreadable", null),
       sourced("f", "1.0.0", "pnpm-lock.yaml", 23, "unreadable", null),
@@ -883,9 +888,78 @@ test("yarn.lock: an entry with no version line is never left out; its source is 
   });
 });
 
-test("pnpm-lock.yaml: a quoted packages key is the packages section", () => {
-  for (const header of ["'packages':", '"packages":']) {
-    const text = `lockfileVersion: '9.0'\n\n${header}\n\n  a@1.0.0:\n    resolution: {tarball: https://evil.example/a.tgz}\n`;
-    assert.deepEqual(readPackages([{ path: "pnpm-lock.yaml", text }]).sourced, [sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "host", "https://evil.example")], header);
+const PNPM_LAYOUT = "not laid out as pnpm writes it";
+const EVIL = "https://evil.example/a.tgz";
+const REGISTRY_B = ["  b@1.0.0:", "    resolution: {integrity: sha512-x}"];
+
+test("pnpm-lock.yaml: YAML that pnpm does not write is a file or a source it could not read, never the registry", () => {
+  const lock = (...lines) => ["lockfileVersion: '9.0'", "", "packages:", "", ...lines, ""].join("\n");
+  const shapes = [
+    ["A1 a flow map as packages", `lockfileVersion: '9.0'\n\npackages: {a@1.0.0: {resolution: {tarball: ${EVIL}}}}\n`, PNPM_LAYOUT],
+    ["A2 a comment after packages:", `lockfileVersion: '9.0'\n\npackages: # c\n  a@1.0.0:\n    resolution: {tarball: ${EVIL}}\n`, PNPM_LAYOUT],
+    ["A3 a tag after packages:", `lockfileVersion: '9.0'\n\npackages: !!map\n  a@1.0.0:\n    resolution: {tarball: ${EVIL}}\n`, PNPM_LAYOUT],
+    ["A4 a top-level anchor merged in", `lockfileVersion: '9.0'\n\nsettings: &s\n  autoInstallPeers: true\n\n<<: *s\n\npackages:\n\n  a@1.0.0:\n    resolution: {integrity: sha512-x}\n`, PNPM_LAYOUT],
+    ["C an entry merge key", lock(...REGISTRY_B, "    meta: &m", `      resolution: {tarball: ${EVIL}}`, "  a@1.0.0:", "    <<: *m"), UNREADABLE_SOURCE],
+    ["E1 a quoted field name", lock("  a@1.0.0:", `    "resol\\u0075tion": {tarball: ${EVIL}}`), UNREADABLE_SOURCE],
+    ["E2 a quoted flow key", lock("  a@1.0.0:", `    resolution: {"t\\u0061rball": ${EVIL}}`), UNREADABLE_SOURCE],
+    ["G1 a tagged field name", lock("  a@1.0.0:", `    !!str resolution: {tarball: ${EVIL}}`), UNREADABLE_SOURCE],
+    ["G2 a tagged flow key", lock("  a@1.0.0:", `    resolution: {!!str tarball: ${EVIL}}`), UNREADABLE_SOURCE],
+    ["K a lone CR between fields", lock("  a@1.0.0:", `    version: 1.0.0\r    resolution: {tarball: ${EVIL}}`), PNPM_LAYOUT],
+    ["K2 lone CRs at the top level", `lockfileVersion: '9.0'\n\nsettings: {}\rpackages:\r  a@1.0.0:\r    resolution: {tarball: ${EVIL}}\n`, PNPM_LAYOUT],
+    ["T a tab after resolution:", lock("  a@1.0.0:", `    resolution:\t{tarball: ${EVIL}}`), PNPM_LAYOUT],
+    ["V a list inside the flow map", lock("  a@1.0.0:", `    resolution: {tarball: ${EVIL}, x: [y, tarball: https://registry.npmjs.org/a/-/a-1.0.0.tgz]}`), UNREADABLE_SOURCE],
+    ["F a passed-over flow map running onto the next line", lock("  a@1.0.0:", "    engines: {node: x,", "    resolution: {integrity: sha512-x}}"), UNREADABLE_SOURCE],
+    ["Z a JSON-style flow map", lock("  a@1.0.0:", `    resolution: {"tarball":"${EVIL}"}`), UNREADABLE_SOURCE],
+    ["W a flow key given twice", lock("  a@1.0.0:", `    resolution: {tarball: ${EVIL}, tarball: https://registry.npmjs.org/a/-/a-1.0.0.tgz}`), UNREADABLE_SOURCE],
+    ["W2 a block key given twice", lock("  a@1.0.0:", "    resolution:", `      tarball: ${EVIL}`, "      tarball: https://registry.npmjs.org/a/-/a-1.0.0.tgz"), UNREADABLE_SOURCE],
+    ["R a second resolution", lock("  a@1.0.0:", `    resolution: {tarball: ${EVIL}}`, "    resolution: {integrity: sha512-x}"), UNREADABLE_SOURCE],
+    ["N an alias as a field value", lock(...REGISTRY_B, "  a@1.0.0:", "    version: *v", "    resolution: {integrity: sha512-x}"), UNREADABLE_SOURCE],
+  ];
+  for (const [shape, text, reason] of shapes) {
+    const read = readPackages([{ path: "pnpm-lock.yaml", text }]);
+    assert.deepEqual(read.couldNotRead, [{ file: "pnpm-lock.yaml", reason }], shape);
+    assert.ok(!read.packages.some((p) => p.name === "a"), shape);
+    assert.ok(!JSON.stringify(read).includes("evil"), shape);
   }
+});
+
+test("pnpm-lock.yaml: the top level is plain names, a document start and empty collections only", () => {
+  const text = "---\nlockfileVersion: '9.0'\n\nsettings:\n  autoInstallPeers: true\n\noverrides: {}\n\npackages:\n\n  a@1.0.0:\n    resolution: {integrity: sha512-x}\n";
+  assert.deepEqual(readPackages([{ path: "pnpm-lock.yaml", text }]), { ...EMPTY, packages: [npm("a", "1.0.0", "pnpm-lock.yaml", 11)] });
+  for (const header of ["'packages':", '"packages":']) {
+    const quoted = `lockfileVersion: '9.0'\n\n${header}\n\n  a@1.0.0:\n    resolution: {tarball: ${EVIL}}\n`;
+    assert.deepEqual(readPackages([{ path: "pnpm-lock.yaml", text: quoted }]).couldNotRead, [{ file: "pnpm-lock.yaml", reason: PNPM_LAYOUT }], header);
+  }
+});
+
+const YARN_LAYOUT = "not laid out as Yarn writes it";
+const berryText = (...lines) => ["__metadata:", "  version: 8", "", ...lines, ""].join("\n");
+
+test("yarn.lock, Berry: a lone CR or a tab could not be read", () => {
+  for (const text of [berryText('"a@npm:^1":', "  version: 1.0.0\r  resolution: \"a@npm:1.0.0\""), berryText('"a@npm:^1":', "  version:\t1.0.0")]) {
+    assert.deepEqual(readPackages([{ path: "yarn.lock", text }]), { ...EMPTY, couldNotRead: [{ file: "yarn.lock", reason: YARN_LAYOUT }] });
+  }
+});
+
+test("yarn.lock, Berry: an escape, tag, anchor, alias, merge key or quoted field name is a source it could not read", () => {
+  const entry = (...fields) => berryText('"a@npm:^1":', "  version: 1.0.0", ...fields);
+  const shapes = [
+    ["a tagged value", entry(`  resolution: !!str "a@${EVIL}"`)],
+    ["an anchored value", entry('  resolution: &r "a@npm:1.0.0"')],
+    ["an alias as a value", entry("  resolution: *r")],
+    ["a merge key", entry('  resolution: "a@npm:1.0.0"', "  <<: *m")],
+    ["a quoted field name", entry('  resolution: "a@npm:1.0.0"', `  "resolution": "a@${EVIL}"`)],
+    ["an escape in a value", entry('  resolution: "a@https\\u003a//evil.example/a.tgz"')],
+    ["an alias deeper down", entry('  resolution: "a@npm:1.0.0"', "  dependencies:", "    b: *x")],
+  ];
+  for (const [shape, text] of shapes) {
+    const read = readPackages([{ path: "yarn.lock", text }]);
+    assert.deepEqual(read, {
+      ...EMPTY,
+      couldNotRead: [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }],
+      sourced: [sourced("a", "1.0.0", "yarn.lock", 4, "unreadable", null)],
+    }, shape);
+  }
+  const header = readPackages([{ path: "yarn.lock", text: berryText('"a@npm:^1\\u0020":', "  version: 1.0.0", '  resolution: "a@npm:1.0.0"') }]);
+  assert.deepEqual(header.sourced, [sourced(null, null, "yarn.lock", 4, "unreadable", null)]);
 });

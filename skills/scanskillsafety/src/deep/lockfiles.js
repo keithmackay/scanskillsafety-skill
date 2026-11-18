@@ -8,6 +8,25 @@ const { classifySource, LOCAL, NAME_SEGMENT, UNREADABLE } = require("./packageSo
 const normalisePyPI = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
 const unquote = (s) => s.replace(/^["']|["']$/g, "");
 const linesOf = (text) => text.split(/\r?\n/);
+const leadingSpaces = (line) => {
+  let n = 0;
+  while (line[n] === " ") n++;
+  return n;
+};
+
+// A carriage return that does not end a line, or a tab: YAML reads either differently from a reader that goes line by line.
+const LONE_CR_OR_TAB = /\t|\r(?!\n)/;
+// A name as pnpm and Yarn write their YAML fields: no quotes, escapes, tags, anchors or merge keys.
+const PLAIN_NAME = /^[A-Za-z]+$/;
+
+// A `key: value` or `key:` line's key, as written, and its value, both trimmed; null for any other text.
+function fieldOf(text) {
+  const sep = text.indexOf(": ");
+  if (sep > 0) return { key: text.slice(0, sep).trim(), value: text.slice(sep + 2).trim() };
+  return text.length > 1 && text.endsWith(":") ? { key: text.slice(0, -1).trim(), value: "" } : null;
+}
+
+const startsWithAny = (value, chars) => value !== "" && chars.includes(value[0]);
 
 class Unreadable extends Error {}
 const unsupportedVersion = (version) => new Unreadable(`lockfileVersion ${version ?? "(none)"} is not a version it can read`);
@@ -218,12 +237,31 @@ function addressSource(address, direct = false) {
 // An entry with no source line: with a version, from whatever registry the install used; with neither, one it cannot read.
 const noOrigin = (entry) => (entry.version === undefined ? UNREADABLE_ENTRY : {});
 
+const YARN_LAYOUT = "not laid out as Yarn writes it";
+// The first character of a YAML tag, anchor or alias.
+const YAML_NODE_PROPERTY = "!&*";
+
+// A Berry line YAML would read differently from the way it is read here: one with an escape, a key or value that starts with a
+// tag, anchor or alias, a merge key, or a 2-space field whose name is not a plain name.
+function berryLineOdd(line) {
+  const indent = leadingSpaces(line);
+  const text = line.slice(indent);
+  const field = fieldOf(text);
+  const key = field ? field.key : text;
+  if (text.includes("\\") || key.startsWith("<<") || startsWithAny(key, YAML_NODE_PROPERTY)) return true;
+  if (field && startsWithAny(field.value, YAML_NODE_PROPERTY)) return true;
+  return indent === 2 && !PLAIN_NAME.test(key);
+}
+
 // Each entry runs from its header to the next header or the end of the file, so its source, on a line after its version, is
 // carried with it. A header that does not end in `:` is an entry it cannot name; an entry is never left out for lacking a version.
+// A Berry file is YAML: a lone carriage return or a tab makes it one it cannot read, a header YAML would read differently is an
+// entry it cannot name, and any other such line makes its entry's source one it cannot read.
 function readYarnLock(text) {
   const lines = linesOf(text);
   const berry = lines.includes("__metadata:");
   if (!berry && !text.includes("# yarn lockfile v1")) throw new Unreadable("not a Yarn lockfile it can read");
+  if (berry && LONE_CR_OR_TAB.test(text)) throw new Unreadable(YARN_LAYOUT);
   const versionLine = berry ? /^ {2}version: "?([^"\s]+)"?$/ : /^ {2}version "([^"]+)"$/;
   const sourceLine = berry ? "  resolution: " : "  resolved ";
   const sourceOf = berry ? berrySource : addressSource;
@@ -231,7 +269,9 @@ function readYarnLock(text) {
   let entry = null;
   let entries = 0;
   const finish = () => {
-    if (entry) out.push({ name: entry.name, line: entry.line, version: entry.version ?? null, ...(entry.origin ?? noOrigin(entry)) });
+    if (!entry) return;
+    const origin = entry.unreadable ? UNREADABLE_ENTRY : entry.origin ?? noOrigin(entry);
+    out.push({ name: entry.name, line: entry.line, version: entry.version ?? null, ...origin });
     entry = null;
   };
   lines.forEach((line, i) => {
@@ -239,12 +279,14 @@ function readYarnLock(text) {
       finish();
       const spec = unquote(line.replace(/:$/, "").split(/,\s*/)[0]);
       const skipped = spec === "__metadata" || spec.slice(spec.indexOf("@", 1)).includes("@workspace:");
+      const named = !skipped && line.endsWith(":") && !(berry && berryLineOdd(line));
       if (!skipped) entries++;
-      if (!skipped && !line.endsWith(":")) out.push(unnamedEntry(i + 1));
-      entry = skipped || !line.endsWith(":") ? null : { name: yarnSpecName(spec), line: i + 1 };
+      if (!skipped && !named) out.push(unnamedEntry(i + 1));
+      entry = named ? { name: yarnSpecName(spec), line: i + 1, unreadable: false } : null;
       return;
     }
     if (!entry) return;
+    if (berry && berryLineOdd(line)) entry.unreadable = true;
     const match = versionLine.exec(line);
     if (match && entry.version === undefined) entry.version = match[1];
     else if (line.startsWith(sourceLine)) entry.origin = sourceOf(unquote(line.slice(sourceLine.length)));
@@ -255,38 +297,23 @@ function readYarnLock(text) {
 
 const PNPM_VERSIONS = ["6.0", "6.1", "9.0"];
 
-// A `key: value` or `key:` line's key, as written, and its value, both trimmed; null for any other text.
-function fieldOf(text) {
-  const sep = text.indexOf(": ");
-  if (sep > 0) return { key: text.slice(0, sep).trim(), value: text.slice(sep + 2).trim() };
-  return text.length > 1 && text.endsWith(":") ? { key: text.slice(0, -1).trim(), value: "" } : null;
-}
+// A `name: value` field with a plain name and a value that starts like a plain scalar.
+const plainField = (field) =>
+  field !== null && PLAIN_NAME.test(field.key) && field.value !== "" && !ODD_VALUE_START.includes(field.value[0]);
 
-// One `key: value` field added to a Map, so an input name is never taken for an object property.
-function addField(fields, text) {
-  const field = fieldOf(text.trim());
-  if (field) fields.set(unquote(field.key), unquote(field.value));
-}
-
-// The fields of a one-line flow map (`{a: 1, b: 'x, y'}`), split at commas outside quotes in one pass; `\"` inside double quotes
-// does not end them.
+// The fields of a one-line flow map as pnpm writes one (`{integrity: sha512-…, tarball: https://…}`), split at every comma as
+// YAML splits plain values; null when a key is not a plain name, a value does not start like a plain scalar, a name is given
+// twice or a collection is nested inside, all of which YAML would read differently.
 function flowMapFields(text) {
-  const fields = new Map();
   const body = text.slice(1, -1);
-  let quote = null;
-  let start = 0;
-  for (let i = 0; i < body.length; i++) {
-    const c = body[i];
-    if (quote) {
-      if (quote === '"' && c === "\\") i++;
-      else if (c === quote) quote = null;
-    } else if (c === "'" || c === '"') quote = c;
-    else if (c === ",") {
-      addField(fields, body.slice(start, i));
-      start = i + 1;
-    }
+  if (/[{}[\]]/.test(body)) return null;
+  const fields = new Map();
+  if (body.trim() === "") return fields;
+  for (const part of body.split(",")) {
+    const field = fieldOf(part.trim());
+    if (!plainField(field) || fields.has(field.key)) return null;
+    fields.set(field.key, field.value);
   }
-  addField(fields, body.slice(start));
   return fields;
 }
 
@@ -294,10 +321,11 @@ const PNPM_GITHUB_KEY = "github.com/";
 // The only fields of an entry read besides its resolution.
 const PNPM_ENTRY_FIELDS = ["name", "version"];
 const PNPM_LAYOUT = "not laid out as pnpm writes it";
-// A field under a block resolution: a plain name with a plain value, which never starts like a YAML collection, anchor, alias,
-// block scalar, tag, comment or quoted string.
-const RESOLUTION_CHILD_NAME = /^[A-Za-z]+$/;
+// How a resolution value never starts: like a YAML collection, anchor, alias, block scalar, tag, comment or quoted string.
 const ODD_VALUE_START = "{[&*|>!#'\"%@`";
+// How a top-level value never starts; a quoted scalar (`lockfileVersion: '9.0'`) is allowed.
+const ODD_TOP_VALUE_START = "{[&*|>!#%@`";
+const COLLECTION_OR_QUOTE_CLOSERS = new Map([["{", "}"], ["[", "]"], ['"', '"'], ["'", "'"]]);
 // A URL scheme at the start of a key's version (`git+ssh:`, `https:`, `file:`): one class, so it cannot backtrack.
 const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 
@@ -383,25 +411,38 @@ function pnpmEntry({ key, line, fields, resolution, unreadable }) {
 function pnpmEntryStart(line, lineNumber) {
   const match = /^ {2}(\S.*):$/.exec(line);
   const key = match ? unquote(match[1]) : null;
-  return { key, line: lineNumber, field: null, inResolution: false, fields: new Map(), resolution: new Map(), unreadable: false };
+  const state = { field: null, inResolution: false, resolutionSeen: false, unreadable: false };
+  return { key, line: lineNumber, fields: new Map(), resolution: new Map(), ...state };
 }
 
-// A `resolution:` value: nothing (its fields follow on the lines below) or a one-line flow map; any other shape (a comment, an
-// anchor, a map split across lines) is one it cannot read.
+// A `resolution:` value: nothing (its fields follow on the lines below) or a one-line flow map as pnpm writes one; any other shape
+// (a comment, an anchor, a map split across lines) is one it cannot read.
 function readResolution(entry, value) {
+  const fields = value.startsWith("{") && value.endsWith("}") ? flowMapFields(value) : null;
   if (value === "") entry.inResolution = true;
-  else if (value.startsWith("{") && value.endsWith("}")) entry.resolution = flowMapFields(value);
+  else if (fields) entry.resolution = fields;
   else entry.unreadable = true;
 }
 
-// A 4-space field of an entry: `resolution` (its name unquoted, so `"resolution"` is it and `resolutions` is not), `name` and
-// `version` are read; any other field is passed over with the lines below it. A line that is no field is one it cannot read.
+// A value that opens a collection or a quoted string and does not close it on the same line, so YAML reads on into the next.
+function opensUnclosed(value) {
+  const closer = COLLECTION_OR_QUOTE_CLOSERS.get(value[0]);
+  return closer !== undefined && (value.length < 2 || !value.endsWith(closer));
+}
+
+// A 4-space field of an entry, its name a plain name, so `resolutions` is not `resolution` and a quoted, escaped, tagged or merge
+// key is one it cannot read. `resolution`, given once, `name` and `version` are read; any other field is passed over with the
+// lines below it. A value that is an anchor or an alias, or one left open at the end of the line, is one it cannot read.
 function readPnpmField(entry, text) {
   const field = fieldOf(text);
-  entry.field = field ? unquote(field.key) : null;
   entry.inResolution = false;
-  if (!field) entry.unreadable = true;
-  else if (entry.field === "resolution") readResolution(entry, field.value);
+  entry.field = field && PLAIN_NAME.test(field.key) ? field.key : null;
+  if (entry.field === null || startsWithAny(field.value, "&*")) entry.unreadable = true;
+  else if (entry.field === "resolution") {
+    if (entry.resolutionSeen) entry.unreadable = true;
+    entry.resolutionSeen = true;
+    readResolution(entry, field.value);
+  } else if (opensUnclosed(field.value)) entry.unreadable = true;
   else if (PNPM_ENTRY_FIELDS.includes(entry.field)) {
     if (field.value === "") entry.unreadable = true;
     else entry.fields.set(entry.field, unquote(field.value));
@@ -409,27 +450,36 @@ function readPnpmField(entry, text) {
 }
 
 // A line deeper than an entry's fields: passed over under a field other than `resolution`; under a block resolution, a 6-space
-// plain `name: value`; anywhere else, or in any other shape, one it cannot read.
+// plain `name: value` whose name is not given twice; anywhere else, or in any other shape, one it cannot read.
 function readPnpmDeeperLine(entry, indent, text) {
   if (entry.field !== null && entry.field !== "resolution") return;
   const field = entry.inResolution && indent === 6 ? fieldOf(text) : null;
-  const plain = field && RESOLUTION_CHILD_NAME.test(field.key) && field.value !== "" && !ODD_VALUE_START.includes(field.value[0]);
-  if (plain) entry.resolution.set(field.key, field.value);
+  if (plainField(field) && !entry.resolution.has(field.key)) entry.resolution.set(field.key, field.value);
   else entry.unreadable = true;
 }
 
-const leadingSpaces = (line) => {
-  let n = 0;
-  while (line[n] === " ") n++;
-  return n;
-};
+// A top-level line as pnpm writes one, and its name: `---`, or a plain name with no value, a scalar or an empty collection, and
+// `packages` with no value. Anything else (a flow map or a comment or tag after `packages:`, an anchor, an alias, a merge key)
+// means the file is not one it can read.
+function pnpmTopLevelName(line) {
+  if (line === "---") return null;
+  const field = fieldOf(line);
+  const value = field ? field.value : "";
+  const plainValue = value === "{}" || value === "[]" || !startsWithAny(value, ODD_TOP_VALUE_START);
+  if (!field || !PLAIN_NAME.test(field.key) || !plainValue || (field.key === "packages" && value !== "")) {
+    throw new Unreadable(PNPM_LAYOUT);
+  }
+  return field.key;
+}
 
-// The packages section is read strictly, line by line, as pnpm writes it: comments and blank lines skipped; entry keys at 2
-// spaces; their fields at 4; a resolution's fields at 6. A tab, or an odd indentation before 6 or before the first entry, means
-// the section is not one it can read.
+// The file is read strictly, line by line, as pnpm writes it: comments and blank lines skipped; top-level names plain; in
+// packages, entry keys at 2 spaces, their fields at 4 and a block resolution's fields at 6. A lone carriage return or a tab
+// anywhere, a top-level line pnpm does not write, an indentation of 1, 3 or 5 spaces in packages, or any but 2 before its first
+// entry, means the file is not one it can read.
 function readPnpmLock(text) {
   const version = /^lockfileVersion: '?([^'\s]+)'?\s*$/m.exec(text)?.[1];
   if (!PNPM_VERSIONS.includes(version)) throw unsupportedVersion(version);
+  if (LONE_CR_OR_TAB.test(text)) throw new Unreadable(PNPM_LAYOUT);
   const out = [];
   let inPackages = false;
   let entries = 0;
@@ -442,14 +492,13 @@ function readPnpmLock(text) {
     const line = rawLine.trimEnd();
     const indent = leadingSpaces(line);
     if (line === "" || line[indent] === "#") return;
-    if (indent === 0 && line[0] !== "\t") {
+    if (indent === 0) {
       finish();
-      const top = fieldOf(line);
-      inPackages = top !== null && top.value === "" && unquote(top.key) === "packages";
+      inPackages = pnpmTopLevelName(line) === "packages";
       return;
     }
     if (!inPackages) return;
-    const odd = line[indent] === "\t" || (indent < 6 && indent % 2 === 1) || (entry === null && indent !== 2);
+    const odd = (indent < 6 && indent % 2 === 1) || (entry === null && indent !== 2);
     if (odd) throw new Unreadable(PNPM_LAYOUT);
     if (indent === 2) {
       finish();
