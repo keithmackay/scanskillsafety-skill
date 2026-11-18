@@ -36,6 +36,9 @@ const MANIFESTS = new Map([
   ["pyproject.toml", { ecosystem: "PyPI", names: pyprojectNames }],
 ]);
 
+// A file read by a reader other than the requirements reader: a lockfile or a manifest.
+const isOtherFormat = (p) => (lockfileKind(p) !== null && lockfileKind(p) !== REQUIREMENTS) || MANIFESTS.has(baseName(p));
+
 // The folder a file is in, relative to the repository root ("" at the root).
 const folderOf = (filePath) => filePath.slice(0, Math.max(0, filePath.lastIndexOf("/")));
 
@@ -146,12 +149,14 @@ function readPackages(files, leftOut = []) {
     const { registry, sourced, requires, unreadable } = classifyEntries(kind.ecosystem, f.path, read.entries);
     for (const entry of registry) add(kind.ecosystem, f.path, entry);
     for (const item of sourced) result.sourced.push(item);
-    // A named file the scan did not read (missing, or left out) may hold anything, so it is a source it could not read.
-    const unread = requires.filter((r) => !byPath.has(r.requires));
+    // A named file the scan did not read (missing, or left out) may hold anything, and one another reader handles (a lockfile or a
+    // manifest) is not a requirements file, so either is a source it could not read and is not followed.
+    const followable = (r) => byPath.has(r.requires) && !isOtherFormat(r.requires);
+    const unread = requires.filter((r) => !followable(r));
     for (const { line } of unread) result.sourced.push({ ecosystem: kind.ecosystem, file: f.path, line, from: "requirements", kind: "unreadable", address: null });
     if (unreadable || unread.length > 0) result.couldNotRead.push({ file: f.path, reason: UNREADABLE_SOURCE_REASON });
     for (const r of requires) {
-      if (byPath.has(r.requires) && !visited.has(r.requires)) {
+      if (followable(r) && !visited.has(r.requires)) {
         visited.add(r.requires);
         toFollow.push(byPath.get(r.requires));
       }

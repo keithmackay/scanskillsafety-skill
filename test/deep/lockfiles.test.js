@@ -1718,3 +1718,18 @@ test("requirements*.txt: a coding line in the first two lines naming anything bu
     assert.deepEqual(read.couldNotRead, [], JSON.stringify(text));
   }
 });
+
+test("requirements*.txt: a -r or -c naming a lockfile or manifest another reader handles is a source it could not read at that line, not read as requirements", () => {
+  const read = readPackages([
+    { path: "requirements.txt", text: "-r poetry.lock\n-c pyproject.toml\n-r requirements-dev.txt\nidna==3.10\n" },
+    { path: "poetry.lock", text: fixture("poetry.empty.lock") },
+    { path: "pyproject.toml", text: '[project]\nname = "x"\n' },
+    { path: "requirements-dev.txt", text: "" },
+  ]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [pypi("idna", "3.10", "requirements.txt", 4)],
+    couldNotRead: [{ file: "requirements.txt", reason: UNREADABLE_SOURCE }],
+    sourced: [requirementsLine(1, "unreadable", null), requirementsLine(2, "unreadable", null)],
+  });
+});
