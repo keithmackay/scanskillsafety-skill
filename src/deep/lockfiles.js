@@ -215,8 +215,11 @@ function addressSource(address, direct = false) {
   return codeload ? { classified: codeload } : { source: address, direct };
 }
 
+// An entry with no source line: with a version, from whatever registry the install used; with neither, one it cannot read.
+const noOrigin = (entry) => (entry.version === undefined ? UNREADABLE_ENTRY : {});
+
 // Each entry runs from its header to the next header or the end of the file, so its source, on a line after its version, is
-// carried with it. A header that does not end in `:` is an entry it cannot name.
+// carried with it. A header that does not end in `:` is an entry it cannot name; an entry is never left out for lacking a version.
 function readYarnLock(text) {
   const lines = linesOf(text);
   const berry = lines.includes("__metadata:");
@@ -228,7 +231,7 @@ function readYarnLock(text) {
   let entry = null;
   let entries = 0;
   const finish = () => {
-    if (entry && entry.version !== undefined) out.push({ name: entry.name, line: entry.line, version: entry.version, ...entry.origin });
+    if (entry) out.push({ name: entry.name, line: entry.line, version: entry.version ?? null, ...(entry.origin ?? noOrigin(entry)) });
     entry = null;
   };
   lines.forEach((line, i) => {
@@ -441,7 +444,8 @@ function readPnpmLock(text) {
     if (line === "" || line[indent] === "#") return;
     if (indent === 0 && line[0] !== "\t") {
       finish();
-      inPackages = line === "packages:";
+      const top = fieldOf(line);
+      inPackages = top !== null && top.value === "" && unquote(top.key) === "packages";
       return;
     }
     if (!inPackages) return;

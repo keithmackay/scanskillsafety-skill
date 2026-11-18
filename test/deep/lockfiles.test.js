@@ -863,3 +863,29 @@ test("yarn.lock: an entry header that does not end in a colon is a source it cou
     assert.ok(!JSON.stringify(read).includes("SECRET"));
   }
 });
+
+test("yarn.lock: an entry with no version line is never left out; its source is classified, or with none it is unreadable", () => {
+  const classic = [
+    "# yarn lockfile v1", "",
+    "a@^1:", '  resolved "https://registry.npmmirror.com/a/-/a-1.0.0.tgz"', "",
+    "b@^1:", '  integrity "sha512-x"', "",
+  ].join("\n");
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text: classic }]), {
+    ...EMPTY,
+    couldNotRead: [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("a", null, "yarn.lock", 3, "host", "https://registry.npmmirror.com"), sourced("b", null, "yarn.lock", 6, "unreadable", null)],
+  });
+  const berry = '__metadata:\n  version: 8\n\n"a@npm:^1":\n  resolution: "a@https://files.example.com/a-1.0.0.tgz"\n\n"b@npm:^1":\n  checksum: x\n';
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text: berry }]), {
+    ...EMPTY,
+    couldNotRead: [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("a", null, "yarn.lock", 4, "url", "https://files.example.com/a-1.0.0.tgz"), sourced("b", null, "yarn.lock", 7, "unreadable", null)],
+  });
+});
+
+test("pnpm-lock.yaml: a quoted packages key is the packages section", () => {
+  for (const header of ["'packages':", '"packages":']) {
+    const text = `lockfileVersion: '9.0'\n\n${header}\n\n  a@1.0.0:\n    resolution: {tarball: https://evil.example/a.tgz}\n`;
+    assert.deepEqual(readPackages([{ path: "pnpm-lock.yaml", text }]).sourced, [sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "host", "https://evil.example")], header);
+  }
+});
