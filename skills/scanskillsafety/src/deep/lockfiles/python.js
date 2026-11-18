@@ -44,12 +44,13 @@ function staysInside(folder, path) {
 // Where an address in a Python lockfile points, `folder` being the lockfile's folder in the repository. A `file:` URL is outside
 // the project. A path (absolute, home, a drive, starting `./` or `../`, or, in a field that holds a path, any name with no `:`) is
 // local while it stays inside the repository and outside the project otherwise. Any other address is classified: as a git
-// repository when the field names one, as one archive when it pins one.
-function pythonAddress(address, folder, { pathField = false, git = false, direct = false } = {}) {
+// repository when the field names one, as one archive when it pins one, and by what the field names (`role`, an index or
+// find-links).
+function pythonAddress(address, folder, { pathField = false, git = false, direct = false, role } = {}) {
   if (/^file:/i.test(address)) return OUTSIDE_PROJECT;
   const named = PATH_STARTS.some((start) => address.startsWith(start)) || DRIVE.test(address);
   if (named || (pathField && !address.includes(":"))) return staysInside(folder, address) ? LOCAL : OUTSIDE_PROJECT;
-  return classifySource("PyPI", git ? gitRepositorySource(address, "").source : address, { direct });
+  return classifySource("PyPI", git ? gitRepositorySource(address, "").source : address, { direct, role });
 }
 
 // Where a Poetry package comes from, by its [package.source] `type`: an index (`legacy`), a git repository at
@@ -59,7 +60,7 @@ function poetryOrigin(block, folder) {
   const type = block.source.get("type");
   const url = block.source.get("url");
   if (url === undefined) return UNREADABLE_ENTRY;
-  if (type === "legacy") return { classified: pythonAddress(url, folder) };
+  if (type === "legacy") return { classified: pythonAddress(url, folder, { role: "index" }) };
   if (type === "url") return { classified: pythonAddress(url, folder, { direct: true }) };
   if (type === "file" || type === "directory") return { classified: pythonAddress(url, folder, { pathField: true }) };
   if (type !== "git") return UNREADABLE_ENTRY;
@@ -91,7 +92,7 @@ function uvSourceVerdict(value, folder) {
   if (fields.size !== 1 + extra || address.kind !== "string") return UNREADABLE;
   if (kind === "git") return pythonAddress(address.text, folder, { git: true });
   if (kind === "url") return pythonAddress(address.text, folder, { direct: true });
-  const verdict = pythonAddress(address.text, folder, { pathField: true });
+  const verdict = pythonAddress(address.text, folder, { pathField: true, role: kind === "registry" ? "index" : undefined });
   return (kind === "editable" || kind === "virtual") && verdict === LOCAL ? PROJECT : verdict;
 }
 

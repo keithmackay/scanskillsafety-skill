@@ -6,6 +6,11 @@ const { OBJECT_ID } = require("./util");
 
 // The only registries a package is expected to come from. Mirrors are not: nothing vouches for the bytes a mirror serves.
 const OFFICIAL_HOSTS = { npm: ["registry.npmjs.org", "registry.yarnpkg.com"], PyPI: ["pypi.org", "files.pythonhosted.org"] };
+// PyPI's index is pypi.org at /simple; its package files are on files.pythonhosted.org. Anything else on pypi.org (a project page
+// renders its README) is not official.
+const PYPI_INDEX_HOST = "pypi.org";
+const PYPI_INDEX_PATHS = ["/simple", "/simple/"];
+const PYPI_FILE_HOST = "files.pythonhosted.org";
 
 // npm reads `file:` and `npm:` in any case; the other protocols (`link:`, `workspace:`, `portal:`, `catalog:`, `jsr:`, `exec:`,
 // `patch:`) are matched as written.
@@ -100,13 +105,24 @@ function gitUrl(text) {
 }
 
 // An http(s) address: the official registry, a mirror (host), plain http, or one archive on another host (url).
-function webUrl(ecosystem, text, direct) {
+// Whether an https address on the default port is official for what the field holding it names (`role`): npm serves its index
+// and its files from its hosts at any path. For PyPI an index field is official only at pypi.org's /simple, any other field only
+// on the file host, and a find-links page never, since pip takes every link it finds on one.
+function isOfficial(ecosystem, url, role) {
+  if (url.port !== "") return false;
+  if (ecosystem !== "PyPI") return (OFFICIAL_HOSTS[ecosystem] ?? []).includes(url.hostname);
+  if (role === "find-links") return false;
+  if (role === "index") return url.hostname === PYPI_INDEX_HOST && PYPI_INDEX_PATHS.includes(url.pathname);
+  return url.hostname === PYPI_FILE_HOST;
+}
+
+function webUrl(ecosystem, text, direct, role) {
   if (!prefixOf(text, ["https:", "http:"])) return null;
   const url = parseUrl(text);
   if (!url || !url.host) return UNREADABLE;
   const origin = `${url.protocol}//${url.host}`;
   if (url.protocol === "http:") return { expected: false, kind: "http", address: origin };
-  if (url.port === "" && (OFFICIAL_HOSTS[ecosystem] ?? []).includes(url.hostname)) return EXPECTED;
+  if (isOfficial(ecosystem, url, role)) return EXPECTED;
   if (!direct) return { expected: false, kind: "host", address: origin };
   return { expected: false, kind: "url", address: `${origin}/${url.pathname.slice(url.pathname.lastIndexOf("/") + 1)}` };
 }
@@ -129,11 +145,12 @@ function scpForm(text) {
 // Any git form: a hosting shorthand, a git URL, or scp form.
 const gitSource = (text) => shorthand(text) ?? gitUrl(text) ?? scpForm(text);
 
-// ecosystem: "npm" or "PyPI"; text: the raw source, without the package name; direct: true when the field pins one archive.
-function classifySource(ecosystem, text, { direct = false } = {}) {
+// ecosystem: "npm" or "PyPI"; text: the raw source, without the package name; direct: true when the field pins one archive; role:
+// "index" when the field names a package index, "find-links" when it names a page or folder pip takes links from.
+function classifySource(ecosystem, text, { direct = false, role } = {}) {
   if (typeof text !== "string" || text === "") return UNREADABLE;
   if (isLocal(text)) return LOCAL;
-  return gitSource(text) ?? webUrl(ecosystem, text, direct) ?? UNREADABLE;
+  return gitSource(text) ?? webUrl(ecosystem, text, direct, role) ?? UNREADABLE;
 }
 
 // The resolution a `patch:` value patches: URL-decoded, without the patch file after `#` or the package name before `@`; null

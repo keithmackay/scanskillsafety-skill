@@ -270,11 +270,12 @@ function requirementEntries(text, line, folder) {
   return parts ? specifierEntries(parts, line) : [unreadableLine(line)];
 }
 
-// An index (`-i`, `--extra-index-url`) or a place to find archives (`-f`, which may be a folder): reported unless it is the
-// official registry or a folder inside the project. One set from an environment variable is reported as such.
-function indexEntries(value, line, folder, pathField) {
+// An index (`-i`, `--extra-index-url`, `--pypi-url`) or a place to find archives (`-f`, which may be a folder): reported unless it
+// is PyPI's index or a folder inside the project; a find-links page is reported on any host. One set from an environment variable
+// is reported as such.
+function indexEntries(value, line, folder, role) {
   if (value.includes("${")) return [lineEntry(line, ENV_INDEX)];
-  const verdict = pythonAddress(value, folder, { pathField });
+  const verdict = pythonAddress(value, folder, { pathField: role === "find-links", role });
   if (verdict.unreadable) return [unreadableLine(line)];
   return verdict.expected || verdict.kind === "local" ? [] : [lineEntry(line, verdict)];
 }
@@ -291,8 +292,8 @@ function trustedHostEntries(value, line) {
 // What an option on a line of options gives. A `-r` or `-c` file inside the repository is a file to read in turn (`requires`, its
 // path in the repository); one outside it is reported; one at a URL is one it cannot read.
 function optionEntries({ kind, value }, line, folder) {
-  if (kind === INDEX) return indexEntries(value, line, folder, false);
-  if (kind === FIND_LINKS) return indexEntries(value, line, folder, true);
+  if (kind === INDEX) return indexEntries(value, line, folder, "index");
+  if (kind === FIND_LINKS) return indexEntries(value, line, folder, "find-links");
   if (kind === TRUSTED) return trustedHostEntries(value, line);
   if (kind !== OTHER_FILE) return [];
   const verdict = pythonAddress(value, folder, { pathField: true });

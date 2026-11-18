@@ -1542,7 +1542,14 @@ test("requirements*.txt: shapes pip accepts that hold no source, or a pin, read 
     ["requests==2.0.*", [pypi("requests", null, "requirements.txt", 1)], []],
     ["requests===2.0", [pypi("requests", null, "requirements.txt", 1)], []],
     ["requests>=2.0\nrequests~=2.0\nrequests\nrequests>=1,<3\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 5)], []],
-    ["--index-url=https://pypi.org/simple\n--extra-index-url https://files.pythonhosted.org/simple\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 3)], []],
+    ["--index-url=https://pypi.org/simple\n--extra-index-url https://pypi.org/simple/\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 3)], []],
+    ["--extra-index-url https://files.pythonhosted.org/simple\n-i https://pypi.org/simple/requests/\n-f https://pypi.org/simple\n-f https://files.pythonhosted.org/packages/\nx @ https://pypi.org/packages/x-1.0.whl", [], [
+      requirementsLine(1, "host", "https://files.pythonhosted.org"),
+      requirementsLine(2, "host", "https://pypi.org"),
+      requirementsLine(3, "host", "https://pypi.org"),
+      requirementsLine(4, "host", "https://files.pythonhosted.org"),
+      pypiSourced("x", null, "requirements.txt", 5, "url", "https://pypi.org/x-1.0.whl"),
+    ]],
     ["--pre\n--no-index\n--prefer-binary\n--require-hashes\n--only-binary :all:\n--no-binary=:none:\n--use-feature=truststore\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 8)], []],
     ["-f wheels\n-e .[dev]\n-e.\n--editable=./x\n-c constraints.txt\n-rrequirements-dev.txt\n.\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 8)], []],
     ["https://files.example.com/x-1.0.whl#egg=xpkg", [], [pypiSourced("xpkg", null, "requirements.txt", 1, "url", "https://files.example.com/x-1.0.whl")]],
@@ -1736,4 +1743,15 @@ test("requirements*.txt: a -r or -c naming a lockfile or manifest another reader
     couldNotRead: [{ file: "requirements.txt", reason: UNREADABLE_SOURCE }],
     sourced: [requirementsLine(1, "unreadable", null), requirementsLine(2, "unreadable", null)],
   });
+});
+
+test("Python lockfiles: pypi.org is expected only as the index at /simple; a package file on it is not", () => {
+  const poetry = [
+    "[[package]]", 'name = "a"', 'version = "1.0.0"', "", "[package.source]", 'type = "legacy"', 'url = "https://pypi.org/pypi"', "",
+  ].join("\n");
+  assert.deepEqual(readPackages([{ path: "poetry.lock", text: poetry }]).sourced, [pypiSourced("a", "1.0.0", "poetry.lock", 2, "host", "https://pypi.org")]);
+  const uvIndex = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "https://pypi.org/simple/a/" }') }]);
+  assert.deepEqual(uvIndex.sourced, [pypiSourced("a", "1.0.0", "uv.lock", 5, "host", "https://pypi.org")]);
+  const uvFile = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "https://pypi.org/simple" }', 'sdist = { url = "https://pypi.org/packages/a-1.0.0.tar.gz" }') }]);
+  assert.deepEqual(uvFile.sourced, [pypiSourced("a", "1.0.0", "uv.lock", 5, "host", "https://pypi.org")]);
 });

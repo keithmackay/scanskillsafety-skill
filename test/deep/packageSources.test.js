@@ -31,9 +31,24 @@ test("an npm registry tarball is expected, with :443, an upper-case host or a tr
   }
 });
 
-test("PyPI's index and its file host are expected for PyPI", () => {
-  assert.deepEqual(classifySource("PyPI", "https://pypi.org/simple/"), EXPECTED);
+test("PyPI's index, pypi.org at /simple, is expected where a field names an index; its file host is expected for package files", () => {
+  assert.deepEqual(classifySource("PyPI", "https://pypi.org/simple/", { role: "index" }), EXPECTED);
+  assert.deepEqual(classifySource("PyPI", "https://PYPI.ORG:443/simple", { role: "index" }), EXPECTED);
   assert.deepEqual(classifySource("PyPI", "https://files.pythonhosted.org/packages/x.whl"), EXPECTED);
+  assert.deepEqual(classifySource("PyPI", "https://files.pythonhosted.org/packages/x.whl", { direct: true }), EXPECTED);
+});
+
+test("pypi.org is official only as the index at /simple: another path, a package file there, or a find-links page on either PyPI host is not expected", () => {
+  const pypi = offRegistry("host", "https://pypi.org");
+  const files = offRegistry("host", "https://files.pythonhosted.org");
+  assert.deepEqual(classifySource("PyPI", "https://pypi.org/simple/"), pypi);
+  assert.deepEqual(classifySource("PyPI", "https://pypi.org/simple/requests/", { role: "index" }), pypi);
+  assert.deepEqual(classifySource("PyPI", "https://pypi.org/project/requests/", { role: "index" }), pypi);
+  assert.deepEqual(classifySource("PyPI", "https://pypi.org/packages/x-1.0.whl", { direct: true }), offRegistry("url", "https://pypi.org/x-1.0.whl"));
+  assert.deepEqual(classifySource("PyPI", "https://files.pythonhosted.org/simple", { role: "index" }), files);
+  assert.deepEqual(classifySource("PyPI", "https://pypi.org/simple", { role: "find-links" }), pypi);
+  assert.deepEqual(classifySource("PyPI", "https://files.pythonhosted.org/packages/", { role: "find-links" }), files);
+  assert.deepEqual(classifySource("npm", "https://registry.npmjs.org/", { role: "index" }), EXPECTED);
 });
 
 test("another ecosystem's official host is not expected", () => {
