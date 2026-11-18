@@ -1479,7 +1479,11 @@ const OUTSIDE_TEXT = { text: "a path outside the project" };
 
 test("requirements*.txt: index options in every form, --trusted-host, VCS lines, name @ url and bare archive URLs are reported; == pins under an index option are still checked", () => {
   const file = "requirements.txt";
-  const read = one(file, "requirements.sources.txt");
+  const read = readPackages([
+    { path: file, text: fixture("requirements.sources.txt") },
+    { path: "requirements-dev.txt", text: "" },
+    { path: "constraints.txt", text: "" },
+  ]);
   assert.deepEqual(read, {
     ...EMPTY,
     packages: [pypi("requests", "2.32.3", file, 10), pypi("idna", "3.10", file, 21)],
@@ -1514,7 +1518,7 @@ test("requirements*.txt: a file with only name @ url lines and no == pin is read
 });
 
 test("requirements*.txt: a path is local inside the repository and outside the project when it leaves it, measured from the repository root", () => {
-  const read = (file, text) => readPackages([{ path: file, text: `${text}\nidna==3.10\n` }]).sourced;
+  const read = (file, text) => readPackages([{ path: file, text: `${text}\nidna==3.10\n` }, { path: "requirements-base.txt", text: "" }]).sourced;
   assert.deepEqual(read("api/requirements.txt", "-f ../wheels\n-e ../packages/x\n-r ../requirements-base.txt"), []);
   const outside = ["-f ../../wheels", "-e ../../x", "../../x", "-f file:///opt/wheels", "-e /opt/x", "-r ../../base.txt", "y @ file:./y"];
   for (const line of outside) {
@@ -1547,6 +1551,9 @@ test("requirements*.txt: shapes pip accepts that hold no source, or a pin, read 
     ["git+https://github.com/u/r@feature/x#egg=r", [], [pypiSourced("r", null, "requirements.txt", 1, "git", "https://github.com/u/r")]],
     ["svn+https://svn.example.com/repo/trunk#egg=s", [], [pypiSourced("s", null, "requirements.txt", 1, "git", "svn+https://svn.example.com/repo/trunk")]],
     ["--trusted-host host.example:8080", [], [requirementsLine(1, "http", "http://host.example:8080")]],
+    ["--no-require-hashes\n--all-releases :all:\n--only-final=:none:\nrequests==2.0 -C a=b\nidna==3.10", [pypi("requests", "2.0", "requirements.txt", 4), pypi("idna", "3.10", "requirements.txt", 5)], []],
+    ["--pypi-url https://mirror.example.com/simple", [], [requirementsLine(1, "host", "https://mirror.example.com")]],
+    ["--trusted-host 10.0.0.1", [], [requirementsLine(1, "http", "http://10.0.0.1")]],
     ["-f https://download.pytorch.org/whl/cpu", [], [requirementsLine(1, "host", "https://download.pytorch.org")]],
     ["-i http://mirror.example.com/simple", [], [requirementsLine(1, "http", "http://mirror.example.com")]],
     ["-i https://${USER}:${TOKEN}@mirror.example.com/simple", [], [requirementsLine(1, "host", null, ENV_INDEX)]],
@@ -1555,7 +1562,7 @@ test("requirements*.txt: shapes pip accepts that hold no source, or a pin, read 
   ];
   for (const [text, packages, sourced] of cases) {
     for (const lines of [text, text.replace(/\n/g, "\r\n")]) {
-      const read = readPackages([{ path: "requirements.txt", text: lines }]);
+      const read = readPackages([{ path: "requirements.txt", text: lines }, { path: "constraints.txt", text: "" }, { path: "requirements-dev.txt", text: "" }]);
       assert.deepEqual(read, { ...EMPTY, packages, sourced }, JSON.stringify(lines));
       assert.ok(!JSON.stringify(read).includes("SECRET"), lines);
     }
@@ -1589,6 +1596,15 @@ test("requirements*.txt: a line that could name a source and is not one it can r
     "requests @ https://${TOKEN}@evil.example/SECRET/x.whl",
     "--trusted-host ${HOST}",
     "--trusted-host evil.example/SECRET",
+    "--trusted-host a:99999",
+    "--trusted-host 1.2.3.4.5",
+    "--trusted-host 999",
+    "--trusted-host 1.2.3.999",
+    "requests==2.0 --hash=${HASH}",
+    "requests==2.0 -C ${SETTINGS}",
+    "--only-binary ${SECRET}",
+    "--use-feature=${SECRET}",
+    "-e ${SECRET}",
     "-r https://evil.example/SECRET/requirements.txt",
     "-c ${CONSTRAINTS}",
     "git+git@github.com:someone/SECRET.git",
@@ -1628,4 +1644,39 @@ test("a long requirements line of any shape is read quickly", () => {
   for (const line of [`-i ${"a".repeat(4000000)}`, `x${" ".repeat(4000000)}@`, `x${"[".repeat(4000000)}`, `x==1.0 ${"\\".repeat(4000000)}`, `${"#".repeat(4000000)}`]) {
     quickly(() => readPackages([{ path: "requirements.txt", text: line }]));
   }
+});
+
+test("requirements*.txt: a -r or -c file inside the repository is read as a requirements file whatever its name, from the folder of the file naming it", () => {
+  const read = readPackages([
+    { path: "requirements.txt", text: "-r base.in\n-c constraints/c.txt\n" },
+    { path: "base.in", text: "idna==3.10\n-i https://mirror.example.com/simple\n" },
+    { path: "constraints/c.txt", text: "-r ../base.in\nrequests==2.0\n-c c.txt\n" },
+    { path: "api/requirements.txt", text: "-r ../shared/reqs.in\n" },
+    { path: "shared/reqs.in", text: "-r ../api/requirements.txt\ngit+https://github.com/u/r@" + SHA1 + "#egg=r\n" },
+  ]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [pypi("idna", "3.10", "base.in", 1), pypi("requests", "2.0", "constraints/c.txt", 2)],
+    sourced: [
+      { ...requirementsLine(2, "host", "https://mirror.example.com"), file: "base.in" },
+      pypiSourced("r", null, "shared/reqs.in", 2, "git", "https://github.com/u/r", { commit: SHA1 }),
+    ],
+  });
+});
+
+test("requirements*.txt: a -r or -c file inside the repository that the scan did not read, missing or left out, is a source it could not read at the line naming it", () => {
+  const read = readPackages(
+    [
+      { path: "requirements.txt", text: "idna==3.10\n-r missing.txt\n-c big.txt\n" },
+      { path: "a/requirements.txt", text: "-r requirements.txt\nidna==3.10\n" },
+    ],
+    [{ path: "big.txt", reason: "larger than 5 MB" }],
+  );
+  const unreadableLine = (line) => ({ ...requirementsLine(line, "unreadable", null) });
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [pypi("idna", "3.10", "requirements.txt", 1)],
+    couldNotRead: [{ file: "requirements.txt", reason: UNREADABLE_SOURCE }],
+    sourced: [unreadableLine(2), unreadableLine(3)],
+  });
 });

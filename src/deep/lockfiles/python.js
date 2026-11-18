@@ -22,6 +22,16 @@ const NO_SOURCE = Object.freeze({});
 const PATH_STARTS = ["/", "~", "./", "../"];
 const DRIVE = /^[A-Za-z]:(?:[\\/]|$)/;
 
+// The path, inside the repository, of a relative path read from a folder that it never climbs above.
+function pathFrom(folder, path) {
+  const segments = [];
+  for (const segment of [...folder.split("/"), ...path.split("/")]) {
+    if (segment === "..") segments.pop();
+    else if (segment !== "." && segment !== "") segments.push(segment);
+  }
+  return segments.join("/");
+}
+
 // A relative path that, read from the lockfile's folder, never climbs above the repository root; an absolute path, a home path, a
 // drive or a scheme leaves it.
 function staysInside(folder, path) {
@@ -244,7 +254,8 @@ const REQUIREMENT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*/;
 const EGG_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const EXTRAS = /^\[[A-Za-z0-9._,\s-]*\]$/;
 const VERSION_CLAUSE = /^(===|==|!=|<=|>=|~=|<|>)\s*([A-Za-z0-9._*+!-]+)$/;
-const TRUSTED_HOST = /^[A-Za-z0-9.-]+(?::\d+)?$/;
+const TRUSTED_HOST = /^([A-Za-z0-9.-]+)(?::\d+)?$/;
+const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 const ARCHIVE = /\.(?:whl|zip|tar|tgz|tar\.gz|tar\.bz2|tbz|tar\.xz|txz)$/i;
 const VCS_PREFIXES = ["git+", "hg+", "svn+", "bzr+"];
 const ENV_INDEX = Object.freeze({ expected: false, kind: "host", address: null, text: "an index set from an environment variable" });
@@ -262,6 +273,7 @@ const FLAG = "flag";
 const SETTING = "setting";
 const LONG_OPTIONS = new Map([
   ["--index-url", INDEX],
+  ["--pypi-url", INDEX],
   ["--extra-index-url", INDEX],
   ["--find-links", FIND_LINKS],
   ["--trusted-host", TRUSTED],
@@ -272,14 +284,17 @@ const LONG_OPTIONS = new Map([
   ["--config-settings", REQUIREMENT_OPTION],
   ["--global-option", REQUIREMENT_OPTION],
   ["--no-index", FLAG],
+  ["--no-require-hashes", FLAG],
   ["--pre", FLAG],
   ["--prefer-binary", FLAG],
   ["--require-hashes", FLAG],
   ["--no-binary", SETTING],
   ["--only-binary", SETTING],
   ["--use-feature", SETTING],
+  ["--all-releases", SETTING],
+  ["--only-final", SETTING],
 ]);
-const SHORT_OPTIONS = new Map([["-i", "--index-url"], ["-f", "--find-links"], ["-r", "--requirement"], ["-c", "--constraint"], ["-e", "--editable"]]);
+const SHORT_OPTIONS = new Map([["-i", "--index-url"], ["-f", "--find-links"], ["-r", "--requirement"], ["-c", "--constraint"], ["-e", "--editable"], ["-C", "--config-settings"]]);
 
 const lineEntry = (line, verdict) => ({ line, from: "requirements", classified: verdict });
 const unreadableRequirement = (name, line) => ({ name, version: null, line, ...UNREADABLE_ENTRY });
@@ -449,30 +464,39 @@ function indexEntries(value, line, folder, pathField) {
   return verdict.expected || verdict.kind === "local" ? [] : [lineEntry(line, verdict)];
 }
 
-// What an option on a line of options gives. `-r` and `-c` files are not followed: one inside the project is read in its own
-// right when its name is requirements*.txt; one outside it is reported; one at a URL is one it cannot read.
+// A `--trusted-host` value: a host name with a letter in it, or an IPv4 address of four parts, with an optional port; any other is
+// one it cannot read, so a number is never shown as the address a URL parser makes of it.
+function trustedHostEntries(value, line) {
+  const host = TRUSTED_HOST.exec(value)?.[1];
+  const known = host !== undefined && (/[A-Za-z]/.test(host) || IPV4.test(host));
+  const verdict = known ? classifySource("PyPI", `http://${value}`) : UNREADABLE;
+  return verdict.unreadable ? [unreadableRequirement(null, line)] : [lineEntry(line, verdict)];
+}
+
+// What an option on a line of options gives. A `-r` or `-c` file inside the repository is a file to read in turn (`requires`, its
+// path in the repository); one outside it is reported; one at a URL is one it cannot read.
 function optionEntries({ kind, value }, line, folder) {
   if (kind === INDEX) return indexEntries(value, line, folder, false);
   if (kind === FIND_LINKS) return indexEntries(value, line, folder, true);
-  if (kind === TRUSTED) {
-    return TRUSTED_HOST.test(value) ? [lineEntry(line, classifySource("PyPI", `http://${value}`))] : [unreadableRequirement(null, line)];
-  }
+  if (kind === TRUSTED) return trustedHostEntries(value, line);
   if (kind !== OTHER_FILE) return [];
-  const verdict = value.includes("${") ? UNREADABLE : pythonAddress(value, folder, { pathField: true });
-  if (verdict.kind === "local") return [];
+  const verdict = pythonAddress(value, folder, { pathField: true });
+  if (verdict.kind === "local") return [{ line, requires: pathFrom(folder, value) }];
   return verdict === OUTSIDE_PROJECT ? [lineEntry(line, verdict)] : [unreadableRequirement(null, line)];
 }
 
 // One line of a requirements file, without its comment. Its words up to the first that starts with `-` are a requirement, which
 // may be followed only by the options pip applies to one requirement; a line of options alone gives what each option names, and
-// one with `-e` installs that one address. null for a requirement with no pinned version.
+// one with `-e` installs that one address. pip expands environment variables before it reads options, so one in any option value
+// but an index's is one it cannot read. null for a requirement with no pinned version.
 function requirementsLineEntries(text, line, folder) {
   if (OTHER_WHITESPACE.test(text)) return [unreadableRequirement(null, line)];
   const words = text.split(" ");
   const first = words.findIndex((word) => word.startsWith("-"));
   const requirement = (first < 0 ? words : words.slice(0, first)).join(" ").trim();
   const options = parseOptions(first < 0 ? [] : words.slice(first).filter((word) => word !== ""));
-  if (options === null) return [unreadableRequirement(null, line)];
+  const expanded = (option) => option.kind !== INDEX && option.kind !== FIND_LINKS && option.value?.includes("${");
+  if (options === null || options.some(expanded)) return [unreadableRequirement(null, line)];
   if (requirement !== "") {
     const others = options.some((option) => option.kind !== REQUIREMENT_OPTION);
     return others ? [unreadableRequirement(null, line)] : requirementEntries(requirement, line, folder);
@@ -484,7 +508,7 @@ function requirementsLineEntries(text, line, folder) {
 }
 
 // text: a requirements file; folder: its folder in the repository, which a relative path in it is read from. Pinned requirements,
-// sources (version control, URLs, paths outside the project) and index options, line by line. A file whose only requirements are
+// sources (version control, URLs, paths outside the project), index options and the -r and -c files it names, line by line. A file whose only requirements are
 // unpinned has no pinned versions in it.
 function readRequirements(text, folder = "") {
   const out = [];
