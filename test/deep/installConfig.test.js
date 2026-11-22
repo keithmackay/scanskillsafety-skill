@@ -1,6 +1,6 @@
 "use strict";
-// ABOUTME: Tests reading the config files that redirect installs (.npmrc, .yarnrc, .yarnrc.yml, uv.toml, pyproject.toml, and
-// ABOUTME: pnpm-workspace.yaml folders), failing closed, and the note for a lockfile that records no registry.
+// ABOUTME: Tests reading the config files that say where installs fetch from or how they check it (.npmrc and the files it loads,
+// ABOUTME: .yarnrc, .yarnrc.yml, pnpm-workspace.yaml, uv.toml, pdm.toml, pyproject.toml), failing closed, and the not-recorded note.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { readPackages } = require("../../src/deep/lockfiles");

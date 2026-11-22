@@ -1,5 +1,5 @@
-// ABOUTME: Reads TOML statement by statement: table headers and key/value pairs with their lines, either strictly as Poetry and
-// ABOUTME: uv write their lockfiles (anything else is unreadable) or in any layout TOML allows, for hand-written files.
+// ABOUTME: Reads TOML statement by statement, strictly as Poetry and uv write their lockfiles or in any layout TOML allows, and
+// ABOUTME: gives every value of a hand-written file with its whole key path, arrays of tables numbered, for the readers to place.
 "use strict";
 
 const { Unreadable } = require("./shared");
