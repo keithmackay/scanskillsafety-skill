@@ -909,7 +909,7 @@ test(".npmrc: userconfig, globalconfig and prefix name a file that is read as an
   assert.deepEqual(chain.sourced, [npmConfig("a/two")(1, "host", "https://m.example")]);
   assert.deepEqual(chain.notRecorded, []);
   const loop = read([pj, lock, [".npmrc", "userconfig=a/one"], ["a/one", "userconfig=../.npmrc\nregistry=https://m.example/"]]);
-  assert.deepEqual(loop.sourced, [npmConfig("a/one")(2, "host", "https://m.example")]);
+  assert.deepEqual(loop.sourced, [npmConfig("a/one")(2, "host", "https://m.example"), npmConfig("a/one")(1, "unreadable", null)]);
   assert.deepEqual(loop.notRecorded, []);
   const scoped = read([pj, lock, [".npmrc", "userconfig=a/one"], ["a/one", "@other:registry=https://m.example/"]]);
   assert.deepEqual(scoped.notRecorded, [NOTE("package-lock.json")]);
@@ -1173,4 +1173,34 @@ test("uv: build-constraint-dependencies is read like the other install-wide list
   assert.deepEqual(read([["pyproject.toml", pyproject], ["uv.lock", uvLock]]).sourced, [item("pyproject.toml")("bc", 2, "url", "https://e.example/bc-1.0.zip")]);
   assert.deepEqual(read([["pyproject.toml", pyproject]]).sourced, [item("pyproject.toml")("bc", 2, "url", "https://e.example/bc-1.0.zip")]);
   assert.deepEqual(read([["uv.toml", "allow-insecure-host = []\n[pip]\nallow-insecure-host = []\n"]]), EMPTY);
+});
+
+test("a big lockfile of scoped packages beside many projects that load one file naming every scope's registry stays within a small heap", () => {
+  const scoped = inSmallHeap(`
+    const small = JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/x": { version: "1.0.0" } } });
+    const packages = { "": {} };
+    for (let i = 0; i < 20000; i++) packages["node_modules/@s" + i + "/x"] = { version: "1.0.0" };
+    const files = [{ path: "package-lock.json", text: JSON.stringify({ lockfileVersion: 3, packages }) }, { path: "package.json", text: "{}" }];
+    files.push({ path: "hub", text: Array.from({ length: 20000 }, (_, i) => "@s" + i + ":registry=https://e.example/").join("\\n") });
+    for (let i = 0; i < 600; i++) {
+      files.push({ path: "p" + i + "/.npmrc", text: "userconfig=../hub\\n" }, { path: "p" + i + "/package-lock.json", text: small }, { path: "p" + i + "/package.json", text: "{}" });
+    }
+    const result = readPackages(files);
+    console.log(JSON.stringify({ notes: result.notRecorded.length, sourced: result.sourced.length }));
+  `);
+  assert.deepEqual(scoped, { notes: 601, sourced: 20000 });
+});
+
+test(".npmrc: files are followed only as far as npm loads them (project, its userconfig, then globalconfig or prefix); a pointer past that is unreadable and covers", () => {
+  const pj = ["package.json", '{ "name": "t" }'];
+  const lock = ["package-lock.json", NO_RESOLVED];
+  const userPastDepth = read([pj, lock, [".npmrc", "userconfig=u"], ["u", "userconfig=v"], ["v", "registry=https://far.example/"]]);
+  assert.deepEqual(userPastDepth.sourced, [npmConfig("u")(1, "unreadable", null)]);
+  assert.deepEqual(userPastDepth.couldNotRead, [{ file: "u", reason: UNREADABLE_SOURCE }]);
+  assert.deepEqual(userPastDepth.notRecorded, []);
+  const globalPastDepth = read([pj, lock, [".npmrc", "globalconfig=g"], ["g", "prefix=x"], ["x/etc/npmrc", "registry=https://far.example/"]]);
+  assert.deepEqual(globalPastDepth.sourced, [npmConfig("g")(1, "unreadable", null)]);
+  const userThenGlobal = read([pj, lock, [".npmrc", "userconfig=u"], ["u", "prefix=p"], ["p/etc/npmrc", "@s:registry=https://g.example/"]]);
+  assert.deepEqual(userThenGlobal.sourced, [npmConfig("p/etc/npmrc")(1, "host", "https://g.example", { scope: "@s" })]);
+  assert.deepEqual(userThenGlobal.notRecorded, [NOTE("package-lock.json")]);
 });

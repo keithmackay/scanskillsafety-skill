@@ -185,11 +185,33 @@ const inFolder = (folder, name) => (folder === "" ? name : `${folder}/${name}`);
 // A lockfile no config covers, as one with no config naming a registry would be.
 const UNCOVERED = Object.freeze({ configs: [], projectOnly: false });
 
+// What npm loads after each part of its config: the project .npmrc names its user config and its global config (globalconfig, or
+// prefix); the user config names its global config; the global config names nothing more.
+const NEXT_ROLES = new Map([["project", ["user", "global"]], ["user", ["global"]], ["global", []]]);
+
+// The files npm reads as its config, from a project .npmrc, as far as npm loads them (`npmrcTargets`: each .npmrc read with the
+// files it loads and the part each is loaded as): each file in each part once, a pointer past that depth not followed.
+function* npmConfigChain(project, npmrcTargets) {
+  const seen = new Set([`project\0${project}`]);
+  const queue = [{ path: project, role: "project" }];
+  for (let i = 0; i < queue.length; i++) {
+    yield queue[i].path;
+    for (const { target, role } of npmrcTargets.get(queue[i].path) ?? []) {
+      const key = `${role}\0${target}`;
+      if (NEXT_ROLES.get(queue[i].role).includes(role) && !seen.has(key)) {
+        seen.add(key);
+        queue.push({ path: target, role });
+      }
+    }
+  }
+}
+
 // The lockfiles that record no host for some packages, none of which a config that applies to them names a registry for: a
 // config covers a package when it names the unscoped registry or that package's scope's. `configCovers` holds each config file's
-// covers, `npmrcTargets` the config files each .npmrc loads (which only npm follows); `files` are every file the target has, read
-// or left out, for the folders holding a package.json. What a config covers is kept only for the scopes these lockfiles' packages
-// use, worked out once per file, so memory stays bounded by the files however they load each other.
+// covers, `npmrcTargets` the config files each .npmrc loads (which only npm follows, and only as far as it loads them); `files`
+// are every file the target has, read or left out, for the folders holding a package.json. Each config file's covers are kept
+// once, as a set of the scopes these lockfiles' packages use, and each lockfile's packages are checked against the files that
+// apply to it in turn, until every one is covered, so memory and time stay bounded by the files however they load each other.
 function notRecordedNotes(unrecordedFiles, configCovers, npmrcTargets, files) {
   const projects = new Set(files.filter((f) => baseName(f.path) === "package.json").map((f) => folderOf(f.path)));
   const used = new Set([null]);
@@ -199,67 +221,62 @@ function notRecordedNotes(unrecordedFiles, configCovers, npmrcTargets, files) {
     if (!own.has(path)) own.set(path, new Set((configCovers.get(path) ?? []).filter((scope) => used.has(scope))));
     return own.get(path);
   };
-  const loaded = new Map();
-  // An .npmrc's covers with those of every config file it loads, each file once.
-  const withLoaded = (path) => {
-    if (!loaded.has(path)) {
-      const covers = new Set();
-      const visited = new Set([path]);
-      const queue = [path];
-      for (let i = 0; i < queue.length; i++) {
-        for (const scope of ownCovers(queue[i])) covers.add(scope);
-        for (const target of npmrcTargets.get(queue[i]) ?? []) {
-          if (!visited.has(target)) {
-            visited.add(target);
-            queue.push(target);
-          }
-        }
-      }
-      loaded.set(path, covers);
-    }
-    return loaded.get(path);
-  };
-  const notes = [];
-  for (const { file, ecosystem, names } of unrecordedFiles) {
+  // The config files that apply to a lockfile, in the order they are checked.
+  function* applying(file) {
     const { configs, projectOnly } = COVERING_CONFIG.get(baseName(file)) ?? UNCOVERED;
-    const covering = [];
     if (projectOnly) {
       const project = projectFolder(folderOf(file), projects);
-      for (const config of configs) covering.push(withLoaded(inFolder(project, config)));
-    } else {
-      for (let at = folderOf(file); ; at = folderOf(at)) {
-        for (const config of configs) covering.push(ownCovers(inFolder(at, config)));
-        if (at === "") break;
-      }
+      for (const config of configs) yield* npmConfigChain(inFolder(project, config), npmrcTargets);
+      return;
     }
-    const covered = (name) => covering.some((covers) => covers.has(null) || covers.has(scopeOf(name)));
-    if (!names.every(covered)) notes.push({ file, ecosystem });
+    for (let at = folderOf(file); ; at = folderOf(at)) {
+      for (const config of configs) yield inFolder(at, config);
+      if (at === "") return;
+    }
+  }
+  const notes = [];
+  for (const { file, ecosystem, names } of unrecordedFiles) {
+    let uncovered = names;
+    for (const config of applying(file)) {
+      const covers = ownCovers(config);
+      uncovered = covers.has(null) ? [] : uncovered.filter((name) => !covers.has(scopeOf(name)));
+      if (uncovered.length === 0) break;
+    }
+    if (uncovered.length > 0) notes.push({ file, ecosystem });
   }
   return notes;
 }
 
 // Where the config files an .npmrc loads are, each read from the .npmrc's folder: `targets`, those inside the repository that the
-// scan read; `unread`, the lines of the others (outside, missing, left out).
+// scan read, each with its line and the part npm loads it as; `unread`, the lines of the others (outside, missing, left out).
 function followTargets(file, follows, byPath) {
   const targets = [];
   const unread = [];
-  for (const { line, follows: path } of follows) {
+  for (const { line, follows: path, role } of follows) {
     const target = staysInside(folderOf(file), path) ? pathFrom(folderOf(file), path) : null;
-    if (target !== null && byPath.has(target)) targets.push(target);
+    if (target !== null && byPath.has(target)) targets.push({ target, role, line });
     else unread.push(line);
   }
   return { targets, unread };
 }
 
-// Reads, as an .npmrc, each config file an .npmrc loads that has not been read as one, and those they load in turn, each once
-// (`npmrcTargets`: each file read as an .npmrc with the files it loads; `readAsNpmrc` reads one into it).
-function loadNpmrcTargets(npmrcTargets, byPath, readAsNpmrc) {
-  const toLoad = [];
-  for (const targets of npmrcTargets.values()) append(toLoad, targets);
-  for (let i = 0; i < toLoad.length; i++) {
-    if (npmrcTargets.has(toLoad[i])) continue;
-    readAsNpmrc(byPath.get(toLoad[i]));
-    append(toLoad, npmrcTargets.get(toLoad[i]) ?? []);
+// Reads, as an .npmrc, each config file npm loads from the project .npmrc files already read (`npmrcTargets`, to which
+// `readAsNpmrc` adds each file it reads), as far as npm loads them: each file in each part once. A pointer past that depth, which
+// npm does not follow, is one it cannot read (`pastDepth(file, line)`).
+function loadNpmrcTargets(npmrcTargets, byPath, { readAsNpmrc, pastDepth }) {
+  const queue = [...npmrcTargets.keys()].map((path) => ({ path, role: "project" }));
+  const seen = new Set(queue.map(({ path }) => `project\0${path}`));
+  for (let i = 0; i < queue.length; i++) {
+    const { path, role } = queue[i];
+    if (!npmrcTargets.has(path)) readAsNpmrc(byPath.get(path));
+    for (const pointer of npmrcTargets.get(path) ?? []) {
+      const key = `${pointer.role}\0${pointer.target}`;
+      if (!NEXT_ROLES.get(role).includes(pointer.role)) pastDepth(path, pointer.line);
+      else if (!seen.has(key)) {
+        seen.add(key);
+        queue.push({ path: pointer.target, role: pointer.role });
+      }
+    }
   }
 }
 
@@ -298,6 +315,8 @@ function readPackages(files, leftOut = []) {
   const unrecordedFiles = [];
   const configCovers = new Map();
   const npmrcTargets = new Map();
+  // Files given the reason "a package source it could not read", each once.
+  const unreadableFiles = new Set();
   const pnpmLocked = new Set([...ownFiles, ...ownLeftOut].filter((f) => baseName(f.path) === "pnpm-lock.yaml").map((f) => folderOf(f.path)));
   // Ecosystems with a lockfile proper, whose manifests are not read; and those with a requirements file, whose manifests are read
   // only for where they fetch from, since the requirements file's pins are what is checked.
@@ -334,6 +353,7 @@ function readPackages(files, leftOut = []) {
     for (const { line } of unread) result.sourced.push({ ecosystem: kind.ecosystem, file: f.path, line, from: "requirements", kind: "unreadable", address: null });
     if (unreadable || unread.length > 0 || unloaded.length > 0) {
       result.couldNotRead.push({ file: f.path, reason: UNREADABLE_SOURCE_REASON });
+      unreadableFiles.add(f.path);
     }
     for (const r of requires) {
       if (followable(r) && !visited.has(r.requires)) {
@@ -369,7 +389,19 @@ function readPackages(files, leftOut = []) {
     const sourcesOnly = pinned.has(manifest.ecosystem);
     if (readEntries(f, manifest, { sourcesOnly }) && !sourcesOnly) result.namesOnly.push(f.path);
   }
-  loadNpmrcTargets(npmrcTargets, byPath, (f) => readEntries(f, CONFIGS.get(".npmrc")));
+  // A pointer past npm's depth is reported once, as a line it cannot read that covers a lockfile.
+  const pastDepthLines = new Set();
+  const pastDepth = (file, line) => {
+    if (pastDepthLines.has(`${file}\0${line}`)) return;
+    pastDepthLines.add(`${file}\0${line}`);
+    result.sourced.push({ ecosystem: "npm", file, line, from: "config", kind: "unreadable", address: null });
+    if (!unreadableFiles.has(file)) {
+      unreadableFiles.add(file);
+      result.couldNotRead.push({ file, reason: UNREADABLE_SOURCE_REASON });
+    }
+    configCovers.set(file, [...(configCovers.get(file) ?? []), null]);
+  };
+  loadNpmrcTargets(npmrcTargets, byPath, { readAsNpmrc: (f) => readEntries(f, CONFIGS.get(".npmrc")), pastDepth });
   readPnpmWorkspaces(ownFiles, { pnpmLocked, npmLocked: locked.has("npm"), readEntries, namesOnly: result.namesOnly });
   append(result.notRecorded, notRecordedNotes(unrecordedFiles, configCovers, npmrcTargets, [...ownFiles, ...ownLeftOut]));
   return result;

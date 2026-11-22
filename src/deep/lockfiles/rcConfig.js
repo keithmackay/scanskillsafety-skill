@@ -90,11 +90,13 @@ function caSetting(key) {
 const OTHER_NPM_SETTINGS = ["replace-registry-host", "omit-lockfile-registry-resolved", "strict-ssl"];
 
 // What one .npmrc registry setting gives, by its key as written, whether it sits in a section, and its value (null when not in a
-// form modelled): a pointer to another config file gives the path it names (`follows`), read from the .npmrc's folder. Any other
+// form modelled): a pointer to another config file gives the path it names (`follows`), read from the .npmrc's folder, and the
+// part npm loads it as (`role`: its user config, or its global config). Any other
 // spelling, or a key in a section, is one it cannot read.
 function npmSettingEntry(key, inSection, value, line) {
   if (!inSection && CONFIG_POINTERS.has(key)) {
-    return value === null || value === "" ? coveringUnreadable(line) : { line, follows: `${value}${CONFIG_POINTERS.get(key)}` };
+    if (value === null || value === "") return coveringUnreadable(line);
+    return { line, follows: `${value}${CONFIG_POINTERS.get(key)}`, role: key === "userconfig" ? "user" : "global" };
   }
   if (!inSection && key === "registry") return registryEntry(line, registryVerdict(value));
   if (!inSection && SCOPED_REGISTRY.test(key)) return registryEntry(line, registryVerdict(value), scopeOfKey(key));
