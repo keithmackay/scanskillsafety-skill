@@ -56,6 +56,27 @@ test("does not follow a link swapped in for a file after the folder was listed",
   assert.match(leftOut[0].reason, /^unreadable \((ELOOP|EMLINK)\)$/);
 });
 
+test("an error without a plain code is listed as unreadable alone: its message, which can name a local path, is never kept", (t) => {
+  const root = makeTree({ "a.txt": "a", "b.txt": "b", "c.txt": "c" });
+  const openSync = fs.openSync;
+  t.after(() => (fs.openSync = openSync));
+  const errors = new Map([
+    ["a.txt", new Error(`open failed at ${path.join(root, "a.txt")}`)],
+    ["b.txt", Object.assign(new Error(`failed at ${root}`), { code: `E${root}` })],
+    ["c.txt", Object.assign(new Error(`failed at ${root}`), { code: "EACCES" })],
+  ]);
+  fs.openSync = (full) => {
+    throw errors.get(path.basename(full));
+  };
+  const { leftOut } = listEveryFile(root);
+  assert.deepEqual(leftOut, [
+    { path: "a.txt", reason: "unreadable" },
+    { path: "b.txt", reason: "unreadable" },
+    { path: "c.txt", reason: "unreadable (EACCES)" },
+  ]);
+  assert.ok(!JSON.stringify(leftOut).includes(root));
+});
+
 const canMakeFifo = spawnSync("mkfifo", ["--help"]).error === undefined;
 
 test("lists a FIFO swapped in for a file after the folder was listed as not a regular file, without waiting on it", { skip: canMakeFifo ? false : "no mkfifo here", timeout: 5000 }, (t) => {
