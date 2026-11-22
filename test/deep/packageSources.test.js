@@ -1,10 +1,12 @@
 "use strict";
 // ABOUTME: Tests deciding whether a package source is its ecosystem's official registry and how to show it when it is not:
-// ABOUTME: hosts, plain http, git forms, direct archives, local paths, package.json values, and credentials never shown.
+// ABOUTME: hosts, plain http, git forms, direct archives, local paths, package.json values, credentials never shown, and grouping.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { performance } = require("node:perf_hooks");
-const { classifySource, classifyManifestValue, commitFrom, OFFICIAL_HOSTS } = require("../../src/deep/packageSources");
+const { spawnSync } = require("child_process");
+const path = require("path");
+const { classifySource, classifyManifestValue, commitFrom, groupSources, MAX_SOURCE_ENTRIES, OFFICIAL_HOSTS } = require("../../src/deep/packageSources");
 
 const SHA1 = "0123456789abcdef0123456789abcdef01234567";
 const EXPECTED = { expected: true };
@@ -363,4 +365,124 @@ test("package.json: a value npm would read as a path only because of a leading s
     assert.deepEqual(classifyManifestValue("npm", value), UNREAD_SOURCE, JSON.stringify(value));
   }
   for (const value of ["=1.2.3", " ^1", "npm:y@^1", "npm:@s/y@1.x"]) assert.deepEqual(classifyManifestValue("npm", value), EXPECTED, JSON.stringify(value));
+});
+
+// Grouping
+
+const MIRROR = "https://registry.npmmirror.com";
+const hosted = (file, line, name, extra = {}) => ({ ecosystem: "npm", file, line, name, version: "1.0.0", kind: "host", address: MIRROR, ...extra });
+const gitItem = (file, line, name, address, extra = {}) => ({ ecosystem: "npm", file, line, name, version: null, kind: "git", address, ...extra });
+
+test("at most 100 entries are kept", () => {
+  assert.equal(MAX_SOURCE_ENTRIES, 100);
+});
+
+test("packages from one host in one file are one entry: its first line, the first five packages and the total", () => {
+  const sourced = Array.from({ length: 1000 }, (_, k) => hosted("package-lock.json", 10 + k, `p${k}`));
+  assert.deepEqual(groupSources(sourced), {
+    entries: [{
+      ecosystem: "npm", kind: "host", address: MIRROR, file: "package-lock.json", line: 10,
+      packages: [0, 1, 2, 3, 4].map((k) => ({ name: `p${k}`, version: "1.0.0", line: 10 + k })),
+      total: 1000,
+    }],
+    more: 0,
+  });
+});
+
+test("groups are per file, kind and address; unreadable sources are one group per file; git, url and bundled addresses each their own", () => {
+  const sourced = [
+    hosted("a/package-lock.json", 3, "x"),
+    hosted("package-lock.json", 5, "x"),
+    hosted("package-lock.json", 6, "y", { kind: "http", address: "http://registry.npmmirror.com" }),
+    hosted("package-lock.json", 7, "z"),
+    { ecosystem: "npm", file: "package-lock.json", line: 8, name: null, version: null, kind: "unreadable", address: null },
+    { ecosystem: "npm", file: "package-lock.json", line: 9, name: "u", version: "1.0.0", kind: "unreadable", address: null },
+    gitItem("package-lock.json", 10, "g1", "https://github.com/u/one", { commit: SHA1 }),
+    gitItem("package-lock.json", 11, "g2", "https://github.com/u/two"),
+    { ecosystem: "npm", file: "package-lock.json", line: 12, name: "o", version: null, kind: "url", address: null, text: "a path outside the project" },
+    { ecosystem: "npm", file: "package-lock.json", line: 13, name: "b", version: null, kind: "bundled", address: "vendor/b.tgz", text: "a bundled package file the scan cannot read" },
+  ];
+  const { entries, more } = groupSources(sourced);
+  assert.equal(more, 0);
+  assert.deepEqual(entries, [
+    { ecosystem: "npm", kind: "host", address: MIRROR, file: "a/package-lock.json", line: 3, packages: [{ name: "x", version: "1.0.0", line: 3 }], total: 1 },
+    { ecosystem: "npm", kind: "host", address: MIRROR, file: "package-lock.json", line: 5, packages: [{ name: "x", version: "1.0.0", line: 5 }, { name: "z", version: "1.0.0", line: 7 }], total: 2 },
+    { ecosystem: "npm", kind: "http", address: "http://registry.npmmirror.com", file: "package-lock.json", line: 6, packages: [{ name: "y", version: "1.0.0", line: 6 }], total: 1 },
+    { ecosystem: "npm", kind: "unreadable", address: null, file: "package-lock.json", line: 8, packages: [{ name: null, version: null, line: 8 }, { name: "u", version: "1.0.0", line: 9 }], total: 2 },
+    { ecosystem: "npm", kind: "git", address: "https://github.com/u/one", file: "package-lock.json", line: 10, commit: SHA1, packages: [{ name: "g1", version: null, line: 10 }], total: 1 },
+    { ecosystem: "npm", kind: "git", address: "https://github.com/u/two", file: "package-lock.json", line: 11, packages: [{ name: "g2", version: null, line: 11 }], total: 1 },
+    { ecosystem: "npm", kind: "url", address: null, file: "package-lock.json", line: 12, text: "a path outside the project", packages: [{ name: "o", version: null, line: 12 }], total: 1 },
+    { ecosystem: "npm", kind: "bundled", address: "vendor/b.tgz", file: "package-lock.json", line: 13, text: "a bundled package file the scan cannot read", packages: [{ name: "b", version: null, line: 13 }], total: 1 },
+  ]);
+});
+
+test("one git address at two commits, or a url with no address for two reasons, is two entries", () => {
+  const other = "f".repeat(40);
+  const { entries } = groupSources([
+    gitItem("package.json", 2, "a", "https://github.com/u/r", { commit: SHA1 }),
+    gitItem("package.json", 3, "b", "https://github.com/u/r", { commit: other }),
+    { ecosystem: "npm", file: "package.json", line: 4, name: "c", version: null, kind: "url", address: null, text: "a script that produces the package" },
+    { ecosystem: "npm", file: "package.json", line: 5, name: "d", version: null, kind: "url", address: null, text: "a path outside the project" },
+  ]);
+  assert.deepEqual(entries.map((e) => [e.line, e.commit, e.text]), [[2, SHA1, undefined], [3, other, undefined], [4, undefined, "a script that produces the package"], [5, undefined, "a path outside the project"]]);
+});
+
+test("each config or requirements line is its own entry with no packages, keeping where it came from, its scope and its text", () => {
+  const sourced = [
+    { ecosystem: "npm", file: ".npmrc", line: 1, from: "config", kind: "host", address: "https://npm.example.com" },
+    { ecosystem: "npm", file: ".npmrc", line: 2, from: "config", kind: "host", address: "https://npm.example.com", scope: "@myco" },
+    { ecosystem: "PyPI", file: "requirements.txt", line: 1, from: "requirements", kind: "host", address: null, text: "an index set from an environment variable" },
+  ];
+  assert.deepEqual(groupSources(sourced).entries, [
+    { ecosystem: "npm", kind: "host", address: "https://npm.example.com", file: ".npmrc", line: 1, from: "config", packages: [], total: 0 },
+    { ecosystem: "npm", kind: "host", address: "https://npm.example.com", file: ".npmrc", line: 2, from: "config", scope: "@myco", packages: [], total: 0 },
+    { ecosystem: "PyPI", kind: "host", address: null, file: "requirements.txt", line: 1, from: "requirements", text: "an index set from an environment variable", packages: [], total: 0 },
+  ]);
+});
+
+test("entries are in file and line order whatever order the items come in, each at its first line", () => {
+  const sourced = [
+    hosted("requirements.txt", 9, "late"),
+    hosted("b/package-lock.json", 4, "x"),
+    hosted("a/package-lock.json", 30, "y"),
+    hosted("a/package-lock.json", 7, "z"),
+    { ecosystem: "PyPI", file: "requirements.txt", line: 2, from: "requirements", kind: "unreadable", address: null },
+  ];
+  const { entries } = groupSources(sourced);
+  assert.deepEqual(entries.map((e) => [e.file, e.line]), [["a/package-lock.json", 7], ["b/package-lock.json", 4], ["requirements.txt", 2], ["requirements.txt", 9]]);
+  assert.deepEqual(entries[0].packages, [{ name: "z", version: "1.0.0", line: 7 }, { name: "y", version: "1.0.0", line: 30 }]);
+});
+
+test("past 100 entries, the packages of the entries left out are counted, the first 100 in file and line order kept", () => {
+  const sourced = Array.from({ length: 150 }, (_, k) => gitItem("package.json", 150 - k, `g${150 - k}`, `https://github.com/u/r${150 - k}`)).concat([
+    gitItem("package.json", 200, "again", "https://github.com/u/r150"),
+    { ecosystem: "npm", file: "package.json", line: 300, from: "config", kind: "host", address: "https://npm.example.com" },
+  ]);
+  const { entries, more } = groupSources(sourced);
+  assert.equal(entries.length, 100);
+  assert.deepEqual(entries.map((e) => e.line), Array.from({ length: 100 }, (_, k) => k + 1));
+  assert.equal(more, 51);
+});
+
+test("grouping keeps memory bounded by the entries kept, however many addresses the items hold", () => {
+  const script = `
+    const { groupSources } = require(${JSON.stringify(path.join(__dirname, "../../src/deep/packageSources"))});
+    const addresses = Array.from({ length: 200000 }, (_, a) => "https://m" + a + ".example");
+    const sourced = [];
+    for (let k = 0; k < 1000000; k++) {
+      sourced.push({ ecosystem: "npm", file: "package-lock.json", line: k + 1, name: "p", version: "1.0.0", kind: "host", address: addresses[k % 200000] });
+    }
+    global.gc();
+    const before = process.memoryUsage().heapUsed;
+    const grouped = groupSources(sourced);
+    global.gc();
+    const after = process.memoryUsage().heapUsed;
+    process.stdout.write(JSON.stringify({ entries: grouped.entries.length, more: grouped.more, grownMb: (after - before) / 1048576 }));
+  `;
+  const run = spawnSync(process.execPath, ["--max-old-space-size=256", "--expose-gc", "-e", script], { encoding: "utf-8" });
+  assert.equal(run.status, 0, run.stderr);
+  const { entries, more, grownMb } = JSON.parse(run.stdout);
+  assert.equal(entries, 100);
+  assert.equal(more, 1000000 - 100 * 5);
+  assert.ok(grownMb < 8, `grew by ${grownMb} MB`);
 });

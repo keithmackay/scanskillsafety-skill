@@ -16,6 +16,7 @@ const { scanEveryFile } = require("./scanEveryFile");
 const { installTimeEntries } = require("./installTime");
 const { readPackages } = require("./lockfiles");
 const { checkPackages, osvUrl } = require("./osv");
+const { groupSources } = require("./packageSources");
 const { compareWithSite, siteUrl } = require("./siteCompare");
 const { findClaude } = require("./runClaude");
 const { chooseForReading, planReading, readEveryFile, quoteLine } = require("./reading");
@@ -194,15 +195,61 @@ async function claudeStage({ plan, calls }, files, options, claudePath, deps) {
   };
 }
 
-// The packages the files pull in, checked against OSV unless the person turned that off.
+const n = (x) => x.toLocaleString("en-US");
+
+// What a source entry's packages come from, after "comes from" or "come from".
+function packageSourceText({ kind, address, commit, text }) {
+  if (address === null) return text;
+  if (kind === "git") return `git ${address}${commit ? ` (commit ${commit})` : ""}`;
+  if (kind === "bundled") return `${address}, ${text}`;
+  return address;
+}
+
+// What a setting or index line names.
+function lineSourceText({ kind, address, text, from, ecosystem, scope }) {
+  if (kind === "unreadable") return "names a source it could not read";
+  if (address === null) return text;
+  if (kind === "http") return `allows plain http from ${address}`;
+  if (kind === "bundled") return `names ${address}, ${text}`;
+  if (from === "requirements") return `names the package index ${address}`;
+  return `names the ${ecosystem} registry ${address}${scope ? ` for ${scope}` : ""}`;
+}
+
+// The warning an entry of packages or settings from outside the registry adds, its text built only from the classified fields
+// (addresses cut to what is safe to show, fixed texts, parsed names), never from the file's own text.
+function sourceFinding(entry) {
+  const one = entry.total === 1;
+  const who = one ? entry.packages[0].name ?? "a package" : `${n(entry.total)} packages`;
+  let detail;
+  if (entry.from) detail = lineSourceText(entry);
+  else if (entry.kind === "unreadable") detail = `${who} ${one ? "has" : "have"} a source it could not read`;
+  else detail = `${who} ${one ? "comes" : "come"} from ${packageSourceText(entry)}`;
+  return { severity: "warning", category: "package-source", source: "deep", file: entry.file, line: entry.line, detail };
+}
+
+// A file that can install packages but could not be read may name any source, so it is a warning too.
+const unreadFinding = ({ file, reason }) =>
+  ({ severity: "warning", category: "package-source", source: "deep", file, line: null, detail: `${file} could not be read: ${reason}` });
+
+// The packages the files pull in and where each comes from, read whether or not OSV is asked; those from the official registry
+// are checked against OSV unless the person turned that off. Packages from elsewhere are never sent to OSV, since their name may not
+// mean what OSV's record means.
 async function packageCheck(files, leftOut, options, fetchImpl) {
-  if (!options.osv) return { findings: [], packages: { status: "off" } };
-  const { packages, namesOnly, couldNotRead, notChecked } = readPackages(files, leftOut);
+  const { packages, namesOnly, couldNotRead, notChecked, sourced, notRecorded } = readPackages(files, leftOut);
+  const { entries, more } = groupSources(sourced);
+  const sources = {
+    offRegistry: entries,
+    offRegistryMore: more,
+    notRecorded,
+    notSentToOsv: sourced.filter((item) => item.from === undefined).length,
+  };
+  const sourceFindings = [...entries.map(sourceFinding), ...couldNotRead.map(unreadFinding)];
+  if (!options.osv) return { findings: sourceFindings, packages: { status: "off", ...sources, couldNotRead } };
   const checked = await checkPackages(packages, fetchImpl);
   const { findings = [], vulnerabilities = [], detailsLeft = 0, reason = null } = checked;
   return {
-    findings,
-    packages: { status: checked.status, checked: packages.length, namesOnly, couldNotRead, notChecked, vulnerabilities, detailsLeft, reason },
+    findings: [...findings, ...sourceFindings],
+    packages: { status: checked.status, checked: packages.length, namesOnly, couldNotRead, notChecked, vulnerabilities, detailsLeft, reason, ...sources },
   };
 }
 

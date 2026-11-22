@@ -204,7 +204,10 @@ test("--deep --json puts the deep results and the services under deep, and print
   assert.equal(out.stderr, "");
   assert.equal(parsed.rating, "green");
   assert.deepEqual(parsed.deep.services, [{ service: "api.osv.dev", receives: OSV_RECEIVES }]);
-  assert.deepEqual(parsed.deep.packages, { status: "done", checked: 0, namesOnly: [], couldNotRead: [], notChecked: [], vulnerabilities: [], detailsLeft: 0, reason: null });
+  assert.deepEqual(parsed.deep.packages, {
+    status: "done", checked: 0, namesOnly: [], couldNotRead: [], notChecked: [], vulnerabilities: [], detailsLeft: 0, reason: null,
+    offRegistry: [], offRegistryMore: 0, notRecorded: [], notSentToOsv: 0,
+  });
   assert.equal(out.status, 0);
 });
 

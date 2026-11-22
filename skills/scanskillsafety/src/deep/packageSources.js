@@ -1,5 +1,6 @@
 // ABOUTME: Decides whether a package's source is its ecosystem's official registry and, if not, its kind and address: host and http
-// ABOUTME: keep scheme and host, url the host and file name, git the whole path without user info, query or fragment.
+// ABOUTME: keep scheme and host, url the host and file name, git the whole path without user info, query or fragment; and groups
+// ABOUTME: the packages and settings from elsewhere into the entries shown, at most 100.
 "use strict";
 
 const { OBJECT_ID } = require("./util");
@@ -267,4 +268,45 @@ function classifyManifestValue(ecosystem, value) {
   return EXPECTED;
 }
 
-module.exports = { classifySource, classifyManifestValue, commitFrom, EXPECTED, LOCAL, OFFICIAL_HOSTS, NAME_SEGMENT, UNREADABLE };
+// How many entries of packages and settings from outside the registry are kept, and how many packages each lists by name.
+const MAX_SOURCE_ENTRIES = 100;
+const PACKAGES_SHOWN = 5;
+
+const byFileThenLine = (a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.line - b.line);
+
+// An entry as its first item gives it: where it comes from, and the fields that say more about that source.
+function startEntry(item) {
+  const entry = { ecosystem: item.ecosystem, kind: item.kind, address: item.address, file: item.file, line: item.line };
+  for (const field of ["commit", "from", "text", "scope"]) if (item[field] !== undefined) entry[field] = item[field];
+  return Object.assign(entry, { packages: [], total: 0 });
+}
+
+// sourced: the packages and settings readPackages found coming from outside the registry, in any order. The packages of one file
+// from one source (kind, address, and a git commit or a fixed text when there is one) are one entry, at its first line, naming its
+// first five packages; each setting or index line is its own entry. Entries are in file and line order, the first 100 kept; once
+// that many exist, a package of any other source is only counted in `more`, so memory stays bounded however many sources there are.
+function groupSources(sourced) {
+  const groups = new Map();
+  let more = 0;
+  let lineItems = 0;
+  for (const item of [...sourced].sort(byFileThenLine)) {
+    const key = item.from ? `line ${lineItems++}` : JSON.stringify([item.file, item.kind, item.address, item.commit ?? null, item.text ?? null]);
+    let entry = groups.get(key);
+    if (entry === undefined) {
+      if (groups.size === MAX_SOURCE_ENTRIES) {
+        if (!item.from) more++;
+        continue;
+      }
+      entry = startEntry(item);
+      groups.set(key, entry);
+    }
+    if (item.from) continue;
+    entry.total++;
+    if (entry.packages.length < PACKAGES_SHOWN) entry.packages.push({ name: item.name, version: item.version, line: item.line });
+  }
+  return { entries: [...groups.values()], more };
+}
+
+module.exports = {
+  classifySource, classifyManifestValue, commitFrom, groupSources, EXPECTED, LOCAL, MAX_SOURCE_ENTRIES, OFFICIAL_HOSTS, NAME_SEGMENT, UNREADABLE,
+};
