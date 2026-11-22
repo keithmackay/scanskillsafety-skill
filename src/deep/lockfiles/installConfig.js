@@ -59,13 +59,16 @@ const mayNameSetting = (loose, settings) => loose.includes("${") || settings.inc
 // A scoped registry key as npm and Yarn write one.
 const SCOPED_REGISTRY = /^@[A-Za-z0-9._~-]+:registry$/;
 
-// A value as npm's ini reader gives it, in the forms modelled here: unquoted with no comment, escape or quote, or quoted with no
-// quote or escape inside; null for any other form, or one holding a variable, which npm expands.
+// A value as npm's ini reader gives it, in the forms modelled here: unquoted with no escape or quote, up to an ini comment, or
+// quoted with no quote or escape inside; null for any other form, or one holding a variable, which npm expands.
 function iniValue(raw) {
   const value = raw.trim();
   if (value.includes("${") || value.includes("\\")) return null;
   const quote = value[0];
-  if (quote !== '"' && quote !== "'") return /["';#]/.test(value) ? null : value;
+  if (quote !== '"' && quote !== "'") {
+    const uncommented = value.split(/[;#]/, 1)[0].trim();
+    return /["']/.test(uncommented) ? null : uncommented;
+  }
   if (value.length < 2 || !value.endsWith(quote)) return null;
   const inner = value.slice(1, -1);
   return /["']/.test(inner) ? null : inner;
@@ -99,24 +102,31 @@ function npmSettingEntry(key, inSection, value, line) {
   return OTHER_NPM_SETTINGS.includes(looseKey(key)) ? unreadableConfig(line) : coveringUnreadable(line);
 }
 
-// .npmrc, read as npm's ini reader reads it: `key=value` lines, `;` and `#` comment lines, `[section]` headers. Only the registry
-// settings are read; one written in any form not modelled here (another spelling of the key, a value with a comment, escape or
-// variable, an array, no value, inside a section) is one it cannot read.
+// A key or value holding a quote or backslash, which npm's ini reader decodes (JSON-parsing a quoted key) and Yarn's rc reader
+// too, so it may read as any key.
+const DECODED = /["'\\]/;
+
+// .npmrc, read as npm's ini reader reads it: `key=value` lines, `;` and `#` comment lines, `[section]` headers, a key ending at its
+// first `;` or `#`. A key holding a quote or backslash is one it cannot read, whatever it names, before auth lines are told apart.
+// Only the registry settings are read; one written in any form not modelled here (another spelling of the key, a value with an
+// escape or variable, an array, no value, inside a section) is one it cannot read.
 function readNpmrc(text) {
   const out = [];
   let inSection = false;
   rcLines(text).forEach((raw, i) => {
     const trimmed = raw.trim();
     const eq = raw.indexOf("=");
-    const rawKey = eq < 0 ? raw : raw.slice(0, eq);
-    if (trimmed === "" || trimmed.startsWith(";") || trimmed.startsWith("#") || isAuthLine(rawKey)) return;
+    const key = (eq < 0 ? raw : raw.slice(0, eq)).split(/[;#]/, 1)[0].trim();
+    if (trimmed === "" || trimmed.startsWith(";") || trimmed.startsWith("#")) return;
     if (/^\[[^\]]*\]\s*$/.test(raw)) {
       inSection = true;
       return;
     }
-    if (!mayNameSetting(looseKey(rawKey), NPM_SETTINGS)) return;
-    const value = eq < 0 || inSection ? null : iniValue(raw.slice(eq + 1));
-    out.push(npmSettingEntry(rawKey.trim(), inSection, value, i + 1));
+    if (DECODED.test(key)) out.push(coveringUnreadable(i + 1));
+    else if (!isAuthLine(key) && mayNameSetting(looseKey(key), NPM_SETTINGS)) {
+      const value = eq < 0 || inSection ? null : iniValue(raw.slice(eq + 1));
+      out.push(npmSettingEntry(key, inSection, value, i + 1));
+    }
   });
   return out;
 }
@@ -144,15 +154,22 @@ function yarnrcEntry(text, line) {
 }
 
 // .yarnrc (Yarn 1), read line by line: only the registry and a scope's registry, each `key "address"` on its own line; another
-// spelling of such a key, an unquoted address, or lines indented under one is one it cannot read. Other settings and the lines
-// indented under them are passed over.
+// spelling of such a key, an unquoted address, or lines indented under one is one it cannot read, as is a key holding a
+// backslash, which Yarn decodes. Other settings and the lines indented under them are passed over.
 function readYarnrc(text) {
   const out = [];
   let root = null;
   rcLines(text).forEach((raw, i) => {
     const line = i + 1;
     const trimmed = raw.trim();
-    if (trimmed === "" || trimmed.startsWith("#") || isAuthLine(yarnrcKey(trimmed))) return;
+    const key = yarnrcKey(trimmed);
+    if (trimmed === "" || trimmed.startsWith("#")) return;
+    if (!/^\s/.test(raw) && key.includes("\\")) {
+      out.push(coveringUnreadable(line));
+      root = { unreadable: true };
+      return;
+    }
+    if (isAuthLine(key)) return;
     if (/^\s/.test(raw)) {
       if (root !== null && !root.unreadable) {
         out.push(coveringUnreadable(line));
@@ -161,7 +178,7 @@ function readYarnrc(text) {
       return;
     }
     root = null;
-    if (!mayNameSetting(looseKey(yarnrcKey(trimmed)), ["registry"])) return;
+    if (!mayNameSetting(looseKey(key), ["registry"])) return;
     const entry = yarnrcEntry(raw.trimEnd(), line);
     out.push(entry);
     root = { unreadable: entry.classified.unreadable === true };

@@ -85,14 +85,11 @@ test(".npmrc: a line that sets a registry setting in a form it does not model is
   const cases = [
     ["registry=${NPM_REGISTRY}", 1],
     ["@s:registry=https://${HOST}/", 1],
-    ["registry=https://x.example ;comment", 1],
-    ["registry=https://x.example #comment", 1],
     ['registry="https://x.example', 1],
     ["registry=https://x\\.example", 1],
     ["registry[]=https://x.example", 1],
     ["REGISTRY=https://x.example", 1],
     ["replace_registry_host=x.example", 1],
-    ['"registry"=https://x.example', 1],
     ["registry", 1],
     ["registry=", 1],
     ["[section]\nregistry=https://x.example", 2],
@@ -106,8 +103,6 @@ test(".npmrc: a line that sets a registry setting in a form it does not model is
     ["registry=file:./mirror", 1],
     ["registry=not a url", 1],
     ["save=true\rregistry=${X}", 2],
-    ["registry#note=https://x.example", 1],
-    ["registry;note=https://x.example", 1],
   ];
   for (const [text, line] of cases) assertUnreadableAt("npm", ".npmrc", text, line);
 });
@@ -861,4 +856,35 @@ test("pdm.toml: a named index of type find_links is a find-links page", () => {
   const pdm = '[pypi.links]\nurl = "https://pypi.org/simple/x/"\ntype = "find_links"\n[pypi.idx]\nurl = "https://pypi.org/simple"\ntype = "index"\n';
   assert.deepEqual(read([["pdm.toml", pdm]]).sourced, [pypiConfig("pdm.toml")(2, "host", "https://pypi.org")]);
   assertUnreadableAt("PyPI", "pdm.toml", '[pypi.x]\nurl = "https://x.example/simple"\ntype = "other"', 2);
+});
+
+// Keys and values as npm's ini reader cuts and decodes them
+
+test(".npmrc: a key and an unquoted value end at an ini comment, as npm's ini reader cuts them, before auth lines are told apart", () => {
+  const at = npmConfig(".npmrc");
+  for (const text of ["registry=https://x.example ;comment", "registry=https://x.example #comment", "registry#note=https://x.example", "registry ;note=https://x.example"]) {
+    assert.deepEqual(read([[".npmrc", text]]).sourced, [at(1, "host", "https://x.example")], text);
+  }
+  assert.deepEqual(read([[".npmrc", "@myco:registry ;:_authToken=https://evil.example/"]]).sourced, [at(1, "host", "https://evil.example", { scope: "@myco" })]);
+  assert.deepEqual(read([[".npmrc", "registry #:_auth=https://evil.example/"]]).sourced, [at(1, "host", "https://evil.example")]);
+});
+
+test(".npmrc and .yarnrc: a key holding a quote or backslash, which npm or Yarn decodes, is one it cannot read and covers a lockfile", () => {
+  const cases = [
+    [".npmrc", '"\\u0072egistry"=https://evil.example/'],
+    [".npmrc", '"registry"=https://evil.example/'],
+    [".npmrc", "'registry'=https://evil.example/"],
+    [".npmrc", "regis\\try=https://evil.example/"],
+    [".npmrc", "registry\\;x=https://evil.example/"],
+    [".npmrc", '"//npm.example.com/:_authToken"=SECRET'],
+    [".yarnrc", '"\\u0072egistry" "https://evil.example/"'],
+    [".yarnrc", '"@x:registry\\u0020" "https://evil.example/"'],
+  ];
+  for (const [file, text] of cases) {
+    assertUnreadableAt("npm", file, text, 1);
+    const result = read([[file, text], ["package-lock.json", NO_RESOLVED]]);
+    if (file === ".npmrc") assert.deepEqual(result.notRecorded, [], text);
+    hidden(result, "SECRET", "evil");
+  }
+  assert.deepEqual(read([[".yarnrc", '"registry" "https://evil.example/"']]).sourced, [npmConfig(".yarnrc")(1, "host", "https://evil.example")]);
 });
