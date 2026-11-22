@@ -4,7 +4,7 @@
 
 const { OBJECT_ID } = require("../util");
 const { EXPECTED, LOCAL, UNREADABLE } = require("../packageSources");
-const { configEntry, manifestEntries, normalisePyPI, unnamedEntry, unreadableNamed, workspaceEntries } = require("./shared");
+const { certificateChecksOff, configEntry, manifestEntries, normalisePyPI, unnamedEntry, unreadableNamed, workspaceEntries } = require("./shared");
 const { tomlStatements } = require("./toml");
 const { pythonAddress } = require("./python");
 const { addressEntries, ENV_INDEX, specifierEntries, splitName } = require("./requirements");
@@ -281,6 +281,17 @@ function configAddressEntries(address, line, folder, role) {
   return verdict.expected ? [] : [configEntry(line, verdict)];
 }
 
+// uv's allow-insecure-host, whatever hosts it names.
+const INSECURE_HOSTS = certificateChecksOff("allow-insecure-host");
+const SSL_UNVERIFIED = certificateChecksOff("verify_ssl = false");
+
+// A source's verify_ssl: false is reported, true gives nothing, and any other value is one it cannot read.
+function verifySslEntries(value) {
+  const flag = value.kind === "scalar" ? value.text : null;
+  if (flag === "false") return [configEntry(value.line, SSL_UNVERIFIED)];
+  return flag === "true" ? [] : [configEntry(value.line, UNREADABLE)];
+}
+
 // uv's settings that name an index or a find-links page: one address, or a list of them.
 const UV_ADDRESS_SETTINGS = new Map([
   ["index-url", { role: "index", list: false }],
@@ -294,6 +305,7 @@ function uvSettingEntries(values, prefix, folder) {
   const out = [];
   for (const { path, value } of values) {
     const rest = after(path, prefix);
+    if (rest !== null && rest[0] === "allow-insecure-host") out.push(configEntry(value.line, INSECURE_HOSTS));
     if (rest === null || !UV_ADDRESS_SETTINGS.has(rest[0])) continue;
     const { role, list } = UV_ADDRESS_SETTINGS.get(rest[0]);
     const items = list && value.kind === "array" ? value.items : [value];
@@ -305,10 +317,11 @@ function uvSettingEntries(values, prefix, folder) {
   return out;
 }
 
-// The url of each table at `prefix` (uv's indexes, Poetry's and PDM's sources), read as what the table says it is (`roleOf`: an
-// index or a find-links page, or null for a kind the tool does not take). A table with no url is one it cannot read unless the
-// tool needs none for it (`urlOptional`); a malformed section is one it cannot read, once.
-function sourceTableEntries(values, prefix, folder, { roleOf, urlOptional = () => false }) {
+// The url of each table at `prefix` (uv's indexes, Poetry's, PDM's and Rye's sources), read as what the table says it is (`roleOf`:
+// an index or a find-links page, or null for a kind the tool does not take), and its verify_ssl where the tool has one
+// (`verifiesSsl`). A table with no url is one it cannot read unless the tool needs none for it (`urlOptional`); a malformed section
+// is one it cannot read, once.
+function sourceTableEntries(values, prefix, folder, { roleOf, urlOptional = () => false, verifiesSsl = false }) {
   const { tables, badLine } = arrayTables(values, prefix);
   const out = badLine === null ? [] : [configEntry(badLine, UNREADABLE)];
   for (const { fields, line, nested } of tables) {
@@ -323,6 +336,7 @@ function sourceTableEntries(values, prefix, folder, { roleOf, urlOptional = () =
       if (role === null || address === null) out.push(configEntry(urlLine, UNREADABLE));
       else out.push(...configAddressEntries(address, urlLine, folder, role));
     }
+    if (verifiesSsl && fields?.has("verify_ssl")) out.push(...verifySslEntries(fields.get("verify_ssl")));
   }
   return out;
 }
@@ -374,8 +388,8 @@ const uvRequirementEntries = (values, prefix, folder) =>
   manifestEntries(uvRequirementFound(values, prefix, folder), (name) => (name === null ? null : normalisePyPI(name)));
 
 // pdm.toml's indexes: [pypi] url, PyPI's replacement, an index; and [pypi.<name>] url, an index or, with `type = "find_links"`, a
-// find-links page. A url in any other place under [pypi], one that is not a string, or a type PDM does not take is one it cannot
-// read.
+// find-links page; and each one's verify_ssl. A url in any other place under [pypi], one that is not a string, or a type PDM does
+// not take is one it cannot read.
 function pdmTomlEntries(values, folder) {
   const types = new Map();
   for (const { path, value } of values) {
@@ -386,6 +400,11 @@ function pdmTomlEntries(values, folder) {
   for (const { path, value } of values) {
     if (path[0] !== "pypi") continue;
     const rest = path.slice(1);
+    const ownSetting = rest.length === 1 || (rest.length === 2 && typeof rest[0] === "string");
+    if (ownSetting && rest[rest.length - 1] === "verify_ssl") {
+      out.push(...verifySslEntries(value));
+      continue;
+    }
     const named = rest.length === 2 && typeof rest[0] === "string" && rest[1] === "url";
     const atUrl = (rest.length === 1 && rest[0] === "url") || named;
     const address = atUrl ? stringOf(value) : null;
@@ -404,8 +423,9 @@ const pyprojectConfigEntries = (values, folder) => [
   ...sourceTableEntries(values, ["tool", "poetry", "source"], folder, {
     roleOf: () => "index",
     urlOptional: (fields) => fields.has("name") && stringOf(fields.get("name"))?.toLowerCase() === "pypi",
+    verifiesSsl: true,
   }),
-  ...sourceTableEntries(values, ["tool", "pdm", "source"], folder, { roleOf: PDM_SOURCE_ROLE }),
+  ...sourceTableEntries(values, ["tool", "pdm", "source"], folder, { roleOf: PDM_SOURCE_ROLE, verifiesSsl: true }),
   ...sourceTableEntries(values, ["tool", "rye", "sources"], folder, { roleOf: RYE_SOURCE_ROLE }),
 ];
 

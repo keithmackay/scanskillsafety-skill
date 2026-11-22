@@ -982,3 +982,80 @@ test("uv: those lists in a shape uv does not take are ones it cannot read", () =
     assert.deepEqual(result.couldNotRead, [{ file: "uv.toml", reason: UNREADABLE_SOURCE }], text);
   }
 });
+
+// Settings that turn off certificate checks
+
+const certificateOff = (ecosystem, file, line, setting) => config(ecosystem, file, line, "http", null, { text: `${setting} turns off certificate checks` });
+
+test("settings that turn off certificate checks are reported as allowing plain http; a proxy alone is not", () => {
+  assert.deepEqual(read([[".npmrc", "strict-ssl=false\nproxy=http://p.example\nhttps-proxy=http://p.example\nstrict-ssl=true\n"]]).sourced, [
+    certificateOff("npm", ".npmrc", 1, "strict-ssl=false"),
+  ]);
+  const yml = lines(
+    "enableStrictSsl: false",
+    "httpProxy: http://p.example",
+    "npmRegistries:",
+    '  "https://r.example":',
+    "    enableStrictSsl: false",
+    '  "https://s.example":',
+    "    enableStrictSsl: true",
+  );
+  assert.deepEqual(read([[".yarnrc.yml", yml]]).sourced, [
+    certificateOff("npm", ".yarnrc.yml", 1, "enableStrictSsl: false"),
+    npmConfig(".yarnrc.yml")(4, "host", "https://r.example"),
+    certificateOff("npm", ".yarnrc.yml", 5, "enableStrictSsl: false"),
+    npmConfig(".yarnrc.yml")(6, "host", "https://s.example"),
+  ]);
+  assert.deepEqual(read([["uv.toml", 'allow-insecure-host = ["x.example"]\n[pip]\nallow-insecure-host = ["y.example:8080"]\n']]).sourced, [
+    certificateOff("PyPI", "uv.toml", 1, "allow-insecure-host"),
+    certificateOff("PyPI", "uv.toml", 3, "allow-insecure-host"),
+  ]);
+  const pyproject = lines(
+    "[tool.uv]",
+    'allow-insecure-host = ["x.example"]',
+    "[[tool.poetry.source]]",
+    'name = "corp"',
+    'url = "https://pypi.org/simple"',
+    "verify_ssl = false",
+    "[[tool.pdm.source]]",
+    'name = "pdm"',
+    'url = "https://pypi.org/simple"',
+    "verify_ssl = false",
+    "[[tool.pdm.source]]",
+    'name = "ok"',
+    'url = "https://pypi.org/simple"',
+    "verify_ssl = true",
+  );
+  assert.deepEqual(read([["pyproject.toml", pyproject]]).sourced, [
+    certificateOff("PyPI", "pyproject.toml", 2, "allow-insecure-host"),
+    certificateOff("PyPI", "pyproject.toml", 6, "verify_ssl = false"),
+    certificateOff("PyPI", "pyproject.toml", 10, "verify_ssl = false"),
+  ]);
+  assert.deepEqual(read([["pdm.toml", "[pypi]\nverify_ssl = false\n[pypi.x]\nurl = \"https://pypi.org/simple\"\nverify_ssl = false\n"]]).sourced, [
+    certificateOff("PyPI", "pdm.toml", 2, "verify_ssl = false"),
+    certificateOff("PyPI", "pdm.toml", 5, "verify_ssl = false"),
+  ]);
+});
+
+test("a certificate setting it cannot read is one it cannot read, and does not cover a lockfile", () => {
+  for (const [file, text, line] of [
+    [".npmrc", "strict-ssl=maybe", 1],
+    [".npmrc", "strict_ssl=false", 1],
+    [".yarnrc.yml", "enableStrictSsl: maybe", 1],
+    [".yarnrc.yml", "enableStrictSsl: *x", 1],
+    [".yarnrc.yml", 'npmRegistries:\n  "https://pypi.example":\n    enableStrictSsl: maybe', 3],
+  ]) {
+    assertUnreadableAt("npm", file, text, line);
+    const notes = read([[file, text], ["package-lock.json", NO_RESOLVED]]).notRecorded;
+    if (file === ".npmrc") assert.deepEqual(notes, [NOTE("package-lock.json")], text);
+  }
+  for (const [file, text, line] of [
+    ["pdm.toml", '[pypi]\nverify_ssl = "no"', 2],
+    ["pyproject.toml", '[[tool.pdm.source]]\nname = "x"\nurl = "https://pypi.org/simple"\nverify_ssl = 0', 4],
+  ]) {
+    assertUnreadableAt("PyPI", file, text, line);
+  }
+  for (const [text, expected] of [["enableStrictSsl: no", 1], ["enableStrictSsl: 'FALSE'", 1], ["enableStrictSsl: yes", 0]]) {
+    assert.equal(read([[".yarnrc.yml", text]]).sourced.length, expected, text);
+  }
+});

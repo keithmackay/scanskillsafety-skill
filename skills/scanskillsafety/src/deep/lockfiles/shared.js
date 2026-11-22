@@ -255,6 +255,11 @@ function localPathVerdict(source, folder, local) {
 // scope a scoped setting names, shown with it.
 const configEntry = (line, classified, extra = {}) => ({ line, from: "config", classified, ...extra });
 
+// A setting that turns off certificate checks, so what is downloaded can be changed on the way: reported as plain http is, with
+// the setting named.
+const certificateChecksOff = (setting) =>
+  Object.freeze({ expected: false, kind: "http", address: null, text: `${setting} turns off certificate checks` });
+
 // An entry whose source a reader could not make out, whatever the classifier would say.
 const UNREADABLE_ENTRY = Object.freeze({ classified: UNREADABLE });
 // An entry it cannot even name: reported as a source it could not read, with nothing from it kept, so it is never left out.
@@ -317,6 +322,7 @@ function workspaceEntries(patterns, line, folder) {
 }
 
 module.exports = {
+  certificateChecksOff,
   configEntry,
   OUTSIDE_PROJECT,
   pathFrom,

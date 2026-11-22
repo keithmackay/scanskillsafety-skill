@@ -3,7 +3,7 @@
 "use strict";
 
 const { classifySource, EXPECTED, UNREADABLE } = require("../packageSources");
-const { configEntry, fieldOf, leadingSpaces, linesOf, manifestEntries, startsWithAny, unnamedEntry, workspaceEntries } = require("./shared");
+const { certificateChecksOff, configEntry, fieldOf, leadingSpaces, linesOf, manifestEntries, startsWithAny, unnamedEntry, workspaceEntries } = require("./shared");
 const { pdmTomlEntries, tomlValues, uvConfigEntries, uvRequirementEntries } = require("./pyproject");
 const { dependencyFound, overrideTarget } = require("./packageJson");
 
@@ -55,7 +55,8 @@ function looseKey(key) {
 // The settings that make npm load another config file, each with the path of that file under the value (`prefix` loads
 // `<prefix>/etc/npmrc`).
 const CONFIG_POINTERS = new Map([["userconfig", ""], ["globalconfig", ""], ["prefix", "/etc/npmrc"]]);
-const NPM_SETTINGS = ["registry", "replace-registry-host", "omit-lockfile-registry-resolved", ...CONFIG_POINTERS.keys()];
+const NPM_SETTINGS = ["registry", "replace-registry-host", "omit-lockfile-registry-resolved", "strict-ssl", ...CONFIG_POINTERS.keys()];
+const NPM_STRICT_SSL_OFF = certificateChecksOff("strict-ssl=false");
 // A key that may name a registry setting, however written; one holding a variable may become any key.
 const mayNameSetting = (loose, settings) => loose.includes("${") || settings.includes(loose) || loose.endsWith(":registry");
 
@@ -93,7 +94,7 @@ function replacedHostVerdict(value) {
 const omitResolvedVerdict = (value) => (value === "true" ? OMITS_RESOLVED : value === "false" ? EXPECTED : UNREADABLE);
 
 // The settings read that name no registry for installs.
-const OTHER_NPM_SETTINGS = ["replace-registry-host", "omit-lockfile-registry-resolved"];
+const OTHER_NPM_SETTINGS = ["replace-registry-host", "omit-lockfile-registry-resolved", "strict-ssl"];
 
 // What one .npmrc registry setting gives, by its key as written, whether it sits in a section, and its value (null when not in a
 // form modelled): a pointer to another config file gives the path it names (`follows`), read from the .npmrc's folder. Any other
@@ -106,6 +107,9 @@ function npmSettingEntry(key, inSection, value, line) {
   if (!inSection && SCOPED_REGISTRY.test(key)) return registryEntry(line, registryVerdict(value), scopeOfKey(key));
   if (!inSection && key === "replace-registry-host") return configEntry(line, replacedHostVerdict(value));
   if (!inSection && key === "omit-lockfile-registry-resolved") return configEntry(line, omitResolvedVerdict(value));
+  if (!inSection && key === "strict-ssl") {
+    return configEntry(line, value === "false" ? NPM_STRICT_SSL_OFF : value === "true" ? EXPECTED : UNREADABLE);
+  }
   return OTHER_NPM_SETTINGS.includes(looseKey(key)) ? unreadableConfig(line) : coveringUnreadable(line);
 }
 
@@ -115,8 +119,8 @@ const DECODED = /["'\\]/;
 
 // .npmrc, read as npm's ini reader reads it: `key=value` lines, `;` and `#` comment lines, `[section]` headers, a key ending at its
 // first `;` or `#`. A key holding a quote or backslash is one it cannot read, whatever it names, before auth lines are told apart.
-// Only the registry settings are read; one written in any form not modelled here (another spelling of the key, a value with an
-// escape or variable, an array, no value, inside a section) is one it cannot read.
+// Only the registry settings, the pointers to other config files and strict-ssl are read; one written in any form not modelled here
+// (another spelling of the key, a value with an escape or variable, an array, no value, inside a section) is one it cannot read.
 function readNpmrc(text) {
   const out = [];
   let inSection = false;
@@ -311,12 +315,28 @@ function npmScopesEntries(root) {
   });
 }
 
-// .yarnrc.yml's npmRegistries: each key names a registry (`//host` read as https), its settings below it.
+// How Yarn reads a boolean setting's text, in any case; any other text is one it does not model.
+const YAML_FALSE = new Set(["false", "no", "off", "0"]);
+const YAML_TRUE = new Set(["true", "yes", "on", "1"]);
+const YARN_STRICT_SSL_OFF = certificateChecksOff("enableStrictSsl: false");
+
+// An enableStrictSsl setting: false is reported, true gives nothing.
+function strictSslEntries(node) {
+  const flag = scalarText(node).toLowerCase();
+  if (YAML_FALSE.has(flag)) return [configEntry(node.line, YARN_STRICT_SSL_OFF)];
+  if (YAML_TRUE.has(flag)) return [];
+  throw new Unmodelled(node.line);
+}
+
+// .yarnrc.yml's npmRegistries: each key names a registry (`//host` read as https), its settings below it, an enableStrictSsl
+// among them read as the top-level one is.
 function npmRegistriesEntries(root) {
-  return collectionChildren(root, "key").map((registry) => {
-    scalarFields(registry);
+  return collectionChildren(root, "key").flatMap((registry) => {
+    const fields = scalarFields(registry);
     const verdict = registryVerdict(registry.key.startsWith("//") ? `https:${registry.key}` : registry.key);
-    return verdict.unreadable ? coveringUnreadable(registry.line) : configEntry(registry.line, verdict);
+    const entry = verdict.unreadable ? coveringUnreadable(registry.line) : configEntry(registry.line, verdict);
+    const strictSsl = fields.filter(({ field }) => field.key === "enableStrictSsl").flatMap(({ field }) => strictSslEntries(field));
+    return [entry, ...strictSsl];
   });
 }
 
@@ -343,6 +363,7 @@ const YARNRC_YML_SECTIONS = new Map([
   ["npmScopes", section(npmScopesEntries)],
   ["npmRegistries", section(npmRegistriesEntries)],
   ["unsafeHttpWhitelist", section(unsafeHttpEntries, unreadableConfig)],
+  ["enableStrictSsl", section(strictSslEntries, unreadableConfig)],
   ["packageExtensions", section(packageExtensionsEntries, unnamedEntry)],
 ]);
 
