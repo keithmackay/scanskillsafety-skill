@@ -147,7 +147,9 @@ function dependencyFound(packageName, { value, line }, { checked, overrides }, f
   if (!verdict.expected) return [{ entry: { name: packageName, version: null, line, classified: verdict }, checked }];
   const named = namedPackages(value, packageName);
   if (named?.unreadable) return [{ entry: unreadableNamed(packageName, line), checked }];
-  if (named === null) return checked ? [{ entry: { name: packageName, version: null, line }, checked: true }] : [];
+  // An exact version pins one release, which is checked as such; a range or a tag only names the package.
+  const version = SEMVER.test(value) ? value : null;
+  if (named === null) return checked ? [{ entry: { name: packageName, version, line }, checked: true }] : [];
   if (!checked && !overrides) return [];
   return named.map(({ name, version }) => ({ entry: { name, version, line }, checked: true }));
 }

@@ -3,7 +3,7 @@
 "use strict";
 
 const { LOCAL } = require("../packageSources");
-const { unnamedEntry, unreadableNamed } = require("./shared");
+const { isPep440, unnamedEntry, unreadableNamed } = require("./shared");
 const { stringOf, tableFields } = require("./toml");
 const { addressEntries, specifierEntries, splitName } = require("./requirements");
 
@@ -43,9 +43,11 @@ function requirementEntries(text, line, folder) {
     if (marker !== "" && !marker.startsWith(";")) return [unreadableNamed(parts.name, line)];
     return requirementAddressEntries(end < 0 ? address : address.slice(0, end), parts.name, line, folder);
   }
+  // An `==` pin with no wildcard is one release, checked as such; any other specifier only names the package.
   const specified = specifierEntries({ name: parts.name, rest: parts.rest.split(";", 1)[0] }, line);
   if (specified !== null && specified[0].classified !== undefined) return specified;
-  return [{ name: parts.name, version: null, line }];
+  const pinned = specified?.[0].version ?? null;
+  return [{ name: parts.name, version: pinned !== null && isPep440(pinned) ? pinned : null, line }];
 }
 
 // How a list's items may be written besides PEP 508 strings: a dependency group's `{ include-group = "name" }`, which names no

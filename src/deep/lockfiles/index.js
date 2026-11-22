@@ -331,11 +331,12 @@ function readPackages(files, leftOut = []) {
   // Files given the reason "a package source it could not read", each once.
   const unreadableFiles = new Set();
   const pnpmLocked = new Set([...ownFiles, ...ownLeftOut].filter((f) => baseName(f.path) === "pnpm-lock.yaml").map((f) => folderOf(f.path)));
-  // The names a lockfile proper or a requirements file sent to OSV with a version, for each folder it covers, by ecosystem: its own
-  // folder and, for a lockfile, each workspace folder it lists below its own. A manifest in such a folder is still read for its
-  // sources, and its names go to OSV but for those already sent so: a lockfile elsewhere, or one that does not list a name
-  // (out of sync, or claiming a folder that is no workspace of it), keeps nothing from OSV. Each file's names are kept once, as
-  // one set shared by the folders it covers.
+  // The packages a lockfile proper or a requirements file holds, by name and by name@version (those it sent to OSV with a version,
+  // and those it fetches from elsewhere, already reported), for each folder it covers, by ecosystem: its own folder and, for a
+  // lockfile, each workspace folder it lists below its own. A manifest in such a folder is still read for its sources, and its
+  // packages go to OSV but for those already held: a range by name, an exact pin only at that same version. A lockfile elsewhere,
+  // or one that does not hold a package (out of sync, or claiming a folder that is no workspace of it), keeps nothing from OSV.
+  // Each file's keys are kept once, as one set shared by the folders it covers.
   const covered = new Map();
   const cover = (ecosystem, folder, names) => {
     const key = `${ecosystem}\0${folder}`;
@@ -356,13 +357,20 @@ function readPackages(files, leftOut = []) {
       return null;
     }
     const { registry, sourced, requires, unreadable, unrecorded, covers, follows, workspaces } = classifyEntries(kind.ecosystem, f.path, read.entries);
-    const coveredName = (entry) => coveredHere(kind.ecosystem, f.path, packageName(kind.ecosystem, entry.name));
-    const sent = manifest ? registry.filter((entry) => !coveredName(entry)) : registry;
+    const keyOf = (name, version) => (version === null ? name : `${name}@${version}`);
+    const coveredEntry = (entry) => coveredHere(kind.ecosystem, f.path, keyOf(packageName(kind.ecosystem, entry.name), entry.version));
+    const sent = manifest ? registry.filter((entry) => !coveredEntry(entry)) : registry;
     for (const entry of sent) add(kind.ecosystem, f.path, entry);
     if (COVERING_KINDS.has(kind)) {
-      const names = new Set(registry.filter((entry) => entry.version !== null).map((entry) => packageName(kind.ecosystem, entry.name)));
+      const keys = new Set();
+      const keep = (name, version) => {
+        keys.add(name);
+        if (version !== null) keys.add(keyOf(name, version));
+      };
+      for (const entry of registry) if (entry.version !== null) keep(packageName(kind.ecosystem, entry.name), entry.version);
+      for (const item of sourced) if (item.from === undefined && item.name !== null) keep(item.name, item.version);
       const below = workspaces.filter((folder) => isBelow(folderOf(f.path), folder));
-      for (const folder of [folderOf(f.path), ...below]) cover(kind.ecosystem, folder, names);
+      for (const folder of [folderOf(f.path), ...below]) cover(kind.ecosystem, folder, keys);
     }
     for (const item of sourced) result.sourced.push(item);
     if (unrecorded.length > 0) unrecordedFiles.push({ file: f.path, ecosystem: kind.ecosystem, names: unrecorded });

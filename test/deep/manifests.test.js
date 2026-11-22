@@ -293,23 +293,23 @@ const sentNames = (read) => read.packages.map((p) => `${p.file} ${p.name}@${p.ve
 const FLATMAP = JSON.stringify({ name: "t", dependencies: { "flatmap-stream": "0.1.1", chalk: "^5.0.0" } });
 const flatmapLock = (extra = {}) => JSON.stringify({ lockfileVersion: 3, packages: { "": {}, ...extra } }, null, 2);
 
-test("package.json: a name is kept from OSV only when a covering lockfile sent it with a version; an out-of-sync or claiming lockfile keeps nothing else", () => {
+test("package.json: a name is kept from OSV only when a covering lockfile holds it; an out-of-sync or claiming lockfile keeps nothing else", () => {
   const cases = [
-    ["no lockfile", [["package.json", FLATMAP]], ["package.json flatmap-stream@*", "package.json chalk@*"], ["package.json"]],
-    ["a lockfile beside it that omits them", [["package.json", FLATMAP], ["package-lock.json", flatmapLock()]], ["package.json flatmap-stream@*", "package.json chalk@*"], ["package.json"]],
+    ["no lockfile", [["package.json", FLATMAP]], ["package.json flatmap-stream@0.1.1", "package.json chalk@*"], ["package.json"]],
+    ["a lockfile beside it that omits them", [["package.json", FLATMAP], ["package-lock.json", flatmapLock()]], ["package.json flatmap-stream@0.1.1", "package.json chalk@*"], ["package.json"]],
     ["a lockfile beside it with one of them", [["package.json", FLATMAP], ["package-lock.json", flatmapLock({ "node_modules/flatmap-stream": { version: "0.1.1" } })]],
       ["package-lock.json flatmap-stream@0.1.1", "package.json chalk@*"], ["package.json"]],
     ["a lockfile beside it with both", [["package.json", FLATMAP], ["package-lock.json", flatmapLock({ "node_modules/flatmap-stream": { version: "0.1.1" }, "node_modules/chalk": { version: "5.0.0" } })]],
       ["package-lock.json flatmap-stream@0.1.1", "package-lock.json chalk@5.0.0"], []],
-    ["a plugin with no lockfile", [["plugins/x/package.json", FLATMAP]], ["plugins/x/package.json flatmap-stream@*", "plugins/x/package.json chalk@*"], ["plugins/x/package.json"]],
+    ["a plugin with no lockfile", [["plugins/x/package.json", FLATMAP]], ["plugins/x/package.json flatmap-stream@0.1.1", "plugins/x/package.json chalk@*"], ["plugins/x/package.json"]],
     ["an npm lockfile claiming the plugin as a workspace", [["package.json", "{}"], ["package-lock.json", flatmapLock({ "plugins/x": { name: "x" } })], ["plugins/x/package.json", FLATMAP]],
-      ["plugins/x/package.json flatmap-stream@*", "plugins/x/package.json chalk@*"], ["plugins/x/package.json"]],
+      ["plugins/x/package.json flatmap-stream@0.1.1", "plugins/x/package.json chalk@*"], ["plugins/x/package.json"]],
     ["a pnpm lockfile claiming it", [["pnpm-lock.yaml", "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n\n  plugins/x: {}\n"], ["plugins/x/package.json", FLATMAP]],
-      ["plugins/x/package.json flatmap-stream@*", "plugins/x/package.json chalk@*"], ["plugins/x/package.json"]],
+      ["plugins/x/package.json flatmap-stream@0.1.1", "plugins/x/package.json chalk@*"], ["plugins/x/package.json"]],
     ["a Berry lockfile claiming it", [["yarn.lock", berryLockListing("plugins/x")], ["plugins/x/package.json", FLATMAP]],
-      ["plugins/x/package.json flatmap-stream@*", "plugins/x/package.json chalk@*"], ["plugins/x/package.json"]],
+      ["plugins/x/package.json flatmap-stream@0.1.1", "plugins/x/package.json chalk@*"], ["plugins/x/package.json"]],
     ["a lockfile listing the workspace with one of its packages", [["package-lock.json", flatmapLock({ "plugins/x": { name: "x" }, "node_modules/chalk": { version: "5.0.0" } })], ["plugins/x/package.json", FLATMAP]],
-      ["package-lock.json chalk@5.0.0", "plugins/x/package.json flatmap-stream@*"], ["plugins/x/package.json"]],
+      ["package-lock.json chalk@5.0.0", "plugins/x/package.json flatmap-stream@0.1.1"], ["plugins/x/package.json"]],
   ];
   for (const [label, files, sent, namesOnly] of cases) {
     const read = readPackages(files.map(([path, text]) => ({ path, text })));
@@ -320,7 +320,7 @@ test("package.json: a name is kept from OSV only when a covering lockfile sent i
 test("pyproject.toml: a name is kept from OSV only when a requirements file in its folder pins it, or a covering lockfile sent it; one elsewhere, unpinned or left out keeps nothing", () => {
   const py = '[project]\nname = "t"\ndependencies = ["requests==2.0.0", "idna"]\n';
   const uvMember = 'version = 1\nrequires-python = ">=3.8"\n\n[[package]]\nname = "w"\nversion = "0.1.0"\nsource = { editable = "plugins/x" }\n';
-  const both = ["pyproject.toml requests@*", "pyproject.toml idna@*"];
+  const both = ["pyproject.toml requests@2.0.0", "pyproject.toml idna@*"];
   const cases = [
     ["pyproject.toml alone", [["pyproject.toml", py]], [], both, ["pyproject.toml"]],
     ["a pinned requirements file elsewhere", [["pyproject.toml", py], ["docs/requirements.txt", "six==1.0.0\n"]], [], ["docs/requirements.txt six@1.0.0", ...both], ["pyproject.toml"]],
@@ -329,10 +329,41 @@ test("pyproject.toml: a name is kept from OSV only when a requirements file in i
     ["a requirements file beside it pinning one", [["pyproject.toml", py], ["requirements.txt", "requests==2.0.0\n"]], [], ["requirements.txt requests@2.0.0", "pyproject.toml idna@*"], ["pyproject.toml"]],
     ["a requirements file beside it pinning both", [["pyproject.toml", py], ["requirements.txt", "requests==2.0.0\nidna==3.10\n"]], [], ["requirements.txt requests@2.0.0", "requirements.txt idna@3.10"], []],
     ["a requirements file beside it with ranges only", [["pyproject.toml", py], ["requirements.txt", "requests>=2\n"]], [], both, ["pyproject.toml"]],
-    ["a uv.lock claiming a plugin as an editable member", [["uv.lock", uvMember], ["plugins/x/pyproject.toml", py]], [], ["plugins/x/pyproject.toml requests@*", "plugins/x/pyproject.toml idna@*"], ["plugins/x/pyproject.toml"]],
+    ["a uv.lock claiming a plugin as an editable member", [["uv.lock", uvMember], ["plugins/x/pyproject.toml", py]], [], ["plugins/x/pyproject.toml requests@2.0.0", "plugins/x/pyproject.toml idna@*"], ["plugins/x/pyproject.toml"]],
   ];
   for (const [label, files, leftOut, sent, namesOnly] of cases) {
     const read = readPackages(files.map(([path, text]) => ({ path, text })), leftOut);
+    assert.deepEqual([sentNames(read), read.namesOnly], [sent, namesOnly], label);
+  }
+});
+
+test("an exact pin in a manifest is sent with its version unless a covering file sent that same version; a range is covered by name", () => {
+  const exact = JSON.stringify({ name: "t", dependencies: { "flatmap-stream": "0.1.1" } });
+  const ranged = JSON.stringify({ name: "t", dependencies: { "flatmap-stream": "^0.1.0" } });
+  const npmLockWith = (version, host = "registry.npmjs.org", extra = {}) => flatmapLock({
+    "node_modules/flatmap-stream": { version, resolved: `https://${host}/flatmap-stream/-/flatmap-stream-${version}.tgz` }, ...extra,
+  });
+  const pyproject = (requirement) => `[project]\nname = "t"\ndependencies = ["${requirement}"]\n`;
+  const cases = [
+    ["no lockfile: the exact pin with its version", [["package.json", exact]], ["package.json flatmap-stream@0.1.1"], ["package.json"]],
+    ["a lockfile beside it with that version", [["package.json", exact], ["package-lock.json", npmLockWith("0.1.1")]], ["package-lock.json flatmap-stream@0.1.1"], []],
+    ["a lockfile beside it with another version", [["package.json", exact], ["package-lock.json", npmLockWith("1.0.0")]],
+      ["package-lock.json flatmap-stream@1.0.0", "package.json flatmap-stream@0.1.1"], ["package.json"]],
+    ["a root lockfile claiming the folder, with another version", [["package-lock.json", npmLockWith("1.0.0", undefined, { "plugins/x": { name: "x" } })], ["plugins/x/package.json", exact]],
+      ["package-lock.json flatmap-stream@1.0.0", "plugins/x/package.json flatmap-stream@0.1.1"], ["plugins/x/package.json"]],
+    ["a range, the lockfile holding another version", [["package.json", ranged], ["package-lock.json", npmLockWith("1.0.0")]], ["package-lock.json flatmap-stream@1.0.0"], []],
+    ["a range the lockfile resolves from a mirror", [["package.json", ranged], ["package-lock.json", npmLockWith("0.1.1", "registry.npmmirror.com")]], [], []],
+    ["an exact pin the lockfile resolves from a mirror", [["package.json", exact], ["package-lock.json", npmLockWith("0.1.1", "registry.npmmirror.com")]], [], []],
+    ["pyproject.toml ==, a requirements file -r'd into its folder pinning another version",
+      [["requirements.txt", "-r docs/c.txt\n"], ["docs/c.txt", "flatmap-stream==1.0.0\n"], ["docs/pyproject.toml", pyproject("flatmap-stream==0.1.1")]],
+      ["docs/c.txt flatmap-stream@1.0.0", "docs/pyproject.toml flatmap-stream@0.1.1"], ["docs/pyproject.toml"]],
+    ["pyproject.toml ==, the requirements file beside it pinning the same version", [["pyproject.toml", pyproject("Flatmap_Stream==0.1.1")], ["requirements.txt", "flatmap-stream==0.1.1\n"]],
+      ["requirements.txt flatmap-stream@0.1.1"], []],
+    ["pyproject.toml == with a wildcard is a range", [["pyproject.toml", pyproject("flatmap-stream==0.*")], ["requirements.txt", "flatmap-stream==1.0.0\n"]],
+      ["requirements.txt flatmap-stream@1.0.0"], []],
+  ];
+  for (const [label, files, sent, namesOnly] of cases) {
+    const read = readPackages(files.map(([path, text]) => ({ path, text })));
     assert.deepEqual([sentNames(read), read.namesOnly], [sent, namesOnly], label);
   }
 });
