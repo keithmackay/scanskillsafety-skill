@@ -104,7 +104,7 @@ function readNpmLock(text, folder = "") {
     }
     return found(out, dependenciesOf(json).length);
   }
-  throw unsupportedVersion(version);
+  throw unsupportedVersion();
 }
 
 module.exports = { readNpmLock };

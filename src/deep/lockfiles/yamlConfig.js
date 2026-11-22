@@ -16,9 +16,13 @@ const {
 const { Unmodelled, collectionChildren, flowScalars, readYamlConfig, scalarFields, scalarText, section } = require("./yamlTree");
 const { dependencyFound, EXTENSION_META, EXTENSION_SECTIONS, overrideTarget } = require("./packageJson");
 
-// .yarnrc.yml's npmScopes: each scope's npmRegistryServer, for that scope.
+// A scope as Yarn names one under npmScopes, with or without its `@`: the characters an npm scope may hold, as .npmrc's are read.
+const YARN_SCOPE = /^@?[A-Za-z0-9._~-]+$/;
+
+// .yarnrc.yml's npmScopes: each scope's npmRegistryServer, for that scope; a scope named otherwise is one it does not model.
 function npmScopesEntries(root) {
   return collectionChildren(root, "key").flatMap((scope) => {
+    if (!YARN_SCOPE.test(scope.key)) throw new Unmodelled(scope.line);
     const scopeName = `@${scope.key.replace(/^@/, "")}`;
     return scalarFields(scope)
       .filter(({ field }) => field.key === "npmRegistryServer")

@@ -605,6 +605,21 @@ test("a lockfile it could not read makes the rating yellow on its own, with OSV 
   }
 });
 
+test("a requirements file with ranges only installs from PyPI, so it is listed as holding no pins but adds no warning", async () => {
+  const root = makeTree({ "SKILL.md": "Formats tables.", "requirements.txt": "requests>=2\n" });
+  const result = await runDeep(root, ALL_OFF, { fetchImpl: fakeFetch({}) });
+  assert.deepEqual(result.deep.packages.couldNotRead, [{ file: "requirements.txt", reason: "no pinned versions in it" }]);
+  assert.deepEqual(sourceFindings(result), []);
+  assert.equal(result.rating, "green");
+});
+
+test("a secret in a lockfileVersion never reaches the findings or the result", async () => {
+  const root = makeTree({ "SKILL.md": "Formats tables.", "package-lock.json": JSON.stringify({ lockfileVersion: "SECRET\u001b[2J", packages: {} }) });
+  const result = await runDeep(root, ALL_OFF, { fetchImpl: fakeFetch({}) });
+  assert.deepEqual(sourceFindings(result), [sourceFinding("package-lock.json", null, "package-lock.json could not be read: a lockfileVersion it cannot read")]);
+  assert.doesNotMatch(JSON.stringify(result), /SECRET/);
+});
+
 test("a manifest or install config left out of the file list is a file it could not read", async () => {
   const result = await runDeep(makeTree({ "SKILL.md": "Formats tables.", ".npmrc": `#${"x".repeat(5 * 1024 * 1024)}` }), ALL_OFF, { fetchImpl: fakeFetch({}) });
   assert.equal(result.rating, "yellow");
@@ -722,7 +737,7 @@ test("the text output's Packages section: how many were checked, the malicious o
     status: "done",
     checked: 3,
     namesOnly: ["tools/package.json"],
-    couldNotRead: [{ file: "pnpm-lock.yaml", reason: "lockfileVersion 5.4 is not a version it can read" }],
+    couldNotRead: [{ file: "pnpm-lock.yaml", reason: "a lockfileVersion it cannot read" }],
     notChecked: ["Cargo.lock", "go.sum"],
     vulnerabilities: [
       { ecosystem: "npm", name: "minimist", version: "1.2.0", ids: ["GHSA-a", "GHSA-b"], highest: "HIGH" },
@@ -742,7 +757,7 @@ test("the text output's Packages section: how many were checked, the malicious o
     "    PyPI requests@2\\.0\\.0: 1, severity not known: PYSEC-1",
     "  4 more advisory id\\(s\\) are listed without severity: OSV's details were fetched for the first 200 only\\.",
     "  Names only \\(no lockfile, so any version may be installed\\): tools/package\\.json",
-    "  Could not read: pnpm-lock\\.yaml: lockfileVersion 5\\.4 is not a version it can read",
+    "  Could not read: pnpm-lock\\.yaml: a lockfileVersion it cannot read",
     "  Not checked \\(no support for these lockfiles\\): Cargo\\.lock, go\\.sum",
   ].join("\n")));
   const none = { ...packages, checked: 0, namesOnly: [], couldNotRead: [], notChecked: [], vulnerabilities: [], detailsLeft: 0 };

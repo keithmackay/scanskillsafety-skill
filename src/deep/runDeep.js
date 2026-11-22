@@ -14,7 +14,7 @@ const { localCommit } = require("./localCommit");
 const { listEveryFile } = require("./everyFile");
 const { scanEveryFile } = require("./scanEveryFile");
 const { installTimeEntries } = require("./installTime");
-const { readPackages, UNREADABLE_SOURCE_REASON } = require("./lockfiles");
+const { readPackages, NO_PINS_REASON, UNREADABLE_SOURCE_REASON } = require("./lockfiles");
 const { checkPackages, osvUrl } = require("./osv");
 const { groupSources } = require("./packageSources");
 const { compareWithSite, siteUrl } = require("./siteCompare");
@@ -228,7 +228,9 @@ function sourceFinding(entry) {
 }
 
 // A file that can install packages but could not be read may name any source, so it is a warning too. A file read but for a source
-// it could not read is not: that source is already a warning of its own.
+// it could not read is not: that source is already a warning of its own. Nor is a requirements file with no pins: it installs from
+// PyPI, so nothing about its sources is unknown.
+const NOT_UNKNOWN_SOURCES = new Set([UNREADABLE_SOURCE_REASON, NO_PINS_REASON]);
 const unreadFinding = ({ file, reason }) =>
   ({ severity: "warning", category: "package-source", source: "deep", file, line: null, detail: `${file} could not be read: ${reason}` });
 
@@ -244,7 +246,7 @@ async function packageCheck(files, leftOut, options, fetchImpl) {
     notRecorded,
     notSentToOsv: sourced.filter((item) => item.from === undefined).length,
   };
-  const unreadFiles = couldNotRead.filter((c) => c.reason !== UNREADABLE_SOURCE_REASON);
+  const unreadFiles = couldNotRead.filter((c) => !NOT_UNKNOWN_SOURCES.has(c.reason));
   const sourceFindings = [...entries.map(sourceFinding), ...unreadFiles.map(unreadFinding)];
   if (!options.osv) return { findings: sourceFindings, packages: { status: "off", ...sources, couldNotRead } };
   const checked = await checkPackages(packages, fetchImpl);

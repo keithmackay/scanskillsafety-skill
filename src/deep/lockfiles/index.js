@@ -9,7 +9,7 @@ const { readNpmLock } = require("./npm");
 const { readYarnLock } = require("./yarn");
 const { readPnpmLock } = require("./pnpm");
 const { readPoetryLock, readUvLock } = require("./python");
-const { readNamedRequirements, readRequirements } = require("./requirements");
+const { NO_PINS_REASON, readNamedRequirements, readRequirements } = require("./requirements");
 const { readPackageJson } = require("./packageJson");
 const { readPyproject, readPyprojectConfig } = require("./pyproject");
 const { readNpmrc, readYarnrc } = require("./rcConfig");
@@ -417,4 +417,4 @@ function readPackages(files, leftOut = []) {
   return result;
 }
 
-module.exports = { readPackages, isLockfile, UNREADABLE_SOURCE_REASON };
+module.exports = { readPackages, isLockfile, NO_PINS_REASON, UNREADABLE_SOURCE_REASON };

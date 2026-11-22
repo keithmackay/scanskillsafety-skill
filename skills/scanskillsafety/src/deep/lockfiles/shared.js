@@ -41,7 +41,8 @@ function opensUnclosed(value) {
 }
 
 class Unreadable extends Error {}
-const unsupportedVersion = (version) => new Unreadable(`lockfileVersion ${version ?? "(none)"} is not a version it can read`);
+// The version is never shown: it is the file's own text.
+const unsupportedVersion = () => new Unreadable("a lockfileVersion it cannot read");
 
 // A lockfile with entries but no package read from them is one it could not make out, not one that holds nothing.
 function found(packages, entries, reason = "no packages found in it") {

@@ -50,7 +50,7 @@ test("a package-lock.json of another version, or not JSON, could not be read", (
   assert.deepEqual(read, {
     ...EMPTY,
     couldNotRead: [
-      { file: "package-lock.json", reason: "lockfileVersion 4 is not a version it can read" },
+      { file: "package-lock.json", reason: "a lockfileVersion it cannot read" },
       { file: "sub/package-lock.json", reason: "not valid JSON" },
     ],
   });
@@ -92,9 +92,27 @@ test("pnpm-lock.yaml version 9: quoted scoped keys under packages, not the snaps
   ]);
 });
 
+test("a lockfileVersion holding a secret or terminal escapes never reaches the result: the reason is fixed", () => {
+  const odd = "SECRET\u001b[2J\u0007";
+  const read = readPackages([
+    { path: "package-lock.json", text: JSON.stringify({ lockfileVersion: odd, packages: {} }) },
+    { path: "a/package-lock.json", text: JSON.stringify({ lockfileVersion: 99, packages: {} }) },
+    { path: "pnpm-lock.yaml", text: `lockfileVersion: '${odd}${"x".repeat(100000)}'\n` },
+    { path: "b/pnpm-lock.yaml", text: `lockfileVersion: ${odd}\n` },
+    { path: "yarn.lock", text: `__metadata:\n  version: ${odd}\n` },
+  ]);
+  assert.deepEqual(read.couldNotRead.slice(0, 4), [
+    { file: "package-lock.json", reason: "a lockfileVersion it cannot read" },
+    { file: "a/package-lock.json", reason: "a lockfileVersion it cannot read" },
+    { file: "pnpm-lock.yaml", reason: "a lockfileVersion it cannot read" },
+    { file: "b/pnpm-lock.yaml", reason: "a lockfileVersion it cannot read" },
+  ]);
+  assert.doesNotMatch(JSON.stringify(read), /SECRET|\\u001b|\\u0007/);
+});
+
 test("a pnpm-lock.yaml of another version could not be read", () => {
   assert.deepEqual(readPackages([{ path: "pnpm-lock.yaml", text: "lockfileVersion: 5.4\n\npackages:\n\n  /chalk/2.4.2:\n" }]).couldNotRead, [
-    { file: "pnpm-lock.yaml", reason: "lockfileVersion 5.4 is not a version it can read" },
+    { file: "pnpm-lock.yaml", reason: "a lockfileVersion it cannot read" },
   ]);
 });
 

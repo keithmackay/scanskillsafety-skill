@@ -337,14 +337,18 @@ function requirementsFile(text, folder) {
   return { entries, unpinned };
 }
 
+// Why a requirements file with only unpinned requirements is listed: it installs from PyPI, so nothing about its sources is
+// unknown, only its versions.
+const NO_PINS_REASON = "no pinned versions in it";
+
 // A requirements file read in its own right: one whose only requirements are unpinned has no pinned versions in it.
 function readRequirements(text, folder = "") {
   const { entries, unpinned } = requirementsFile(text, folder);
-  return found(entries, unpinned, "no pinned versions in it");
+  return found(entries, unpinned, NO_PINS_REASON);
 }
 
 // A file a requirements file names with -r or -c: read whatever it holds, so one with only unpinned requirements (a constraints
 // file of ranges) gives nothing to check rather than a file it could not read.
 const readNamedRequirements = (text, folder = "") => requirementsFile(text, folder).entries;
 
-module.exports = { readRequirements, readNamedRequirements, addressEntries, ENV_INDEX, specifierEntries, splitName };
+module.exports = { readRequirements, readNamedRequirements, addressEntries, ENV_INDEX, NO_PINS_REASON, specifierEntries, splitName };

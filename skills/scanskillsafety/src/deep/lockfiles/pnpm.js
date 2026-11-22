@@ -241,7 +241,7 @@ function readImporterLine(importers, indent, text, lineNumber, folder) {
 // being the lockfile's folder.
 function readPnpmLock(text, folder = "") {
   const version = /^lockfileVersion: '?([^'\s]+)'?\s*$/m.exec(text)?.[1];
-  if (!PNPM_VERSIONS.includes(version)) throw unsupportedVersion(version);
+  if (!PNPM_VERSIONS.includes(version)) throw unsupportedVersion();
   if (LONE_CR_OR_TAB.test(text)) throw new Unreadable(PNPM_LAYOUT);
   const out = [];
   let inPackages = false;

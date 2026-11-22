@@ -241,6 +241,10 @@ test(".yarnrc.yml: YAML it does not model where a registry can be named is one i
     ["- npmRegistryServer", 1],
     ["nodeLinker: pnp\n---\nnpmRegistryServer: https://x.example", 2],
     ["npmRegistryServer:x", 1],
+    ["npmScopes:\n  my\u0007co:\n    npmRegistryServer: https://x.example", 2],
+    ["npmScopes:\n  my\u001b[2Jco:\n    npmRegistryServer: https://x.example", 2],
+    ["npmScopes:\n  my/co:\n    npmRegistryServer: https://x.example", 2],
+    ["npmScopes:\n  '@':\n    npmRegistryServer: https://x.example", 2],
   ];
   for (const [text, line] of cases) assertUnreadableAt("npm", ".yarnrc.yml", text, line);
 });
