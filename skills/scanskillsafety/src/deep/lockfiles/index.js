@@ -324,6 +324,8 @@ function readPackages(files, leftOut = []) {
   // only for where they fetch from, since the requirements file's pins are what is checked.
   const locked = new Set();
   const pinned = new Set();
+  // Ecosystems with a lockfile proper that was read: a manifest of theirs that would be read for nothing is not listed when left out.
+  const lockRead = new Set();
   const lockedBy = (path) => (lockfileKind(path) === REQUIREMENTS ? pinned : locked);
   // Requirements files read in their own right, and those named by -r or -c still to read; each is read once.
   const visited = new Set(ownFiles.filter((f) => lockfileKind(f.path) === REQUIREMENTS).map((f) => f.path));
@@ -372,14 +374,19 @@ function readPackages(files, leftOut = []) {
     const kind = lockfileKind(f.path);
     if (!kind) continue;
     lockedBy(f.path).add(kind.ecosystem);
-    readEntries(f, kind);
+    if (readEntries(f, kind) !== null && kind !== REQUIREMENTS) lockRead.add(kind.ecosystem);
   }
   for (let i = 0; i < toFollow.length; i++) readEntries(toFollow[i], NAMED_REQUIREMENTS);
   result.notChecked.push(...ownLeftOut.filter((l) => NOT_CHECKED.has(baseName(l.path))).map((l) => l.path));
+  // A manifest read only when its ecosystem has no lockfile (package.json) would not have been read beside one that was.
+  const readForNothing = (path) => {
+    const manifest = MANIFESTS.get(baseName(path));
+    return manifest !== undefined && !manifest.config && lockRead.has(manifest.ecosystem);
+  };
   for (const f of ownLeftOut) {
     const kind = lockfileKind(f.path);
     if (kind) lockedBy(f.path).add(kind.ecosystem);
-    if (kind || REPORTED_WHEN_LEFT_OUT.has(baseName(f.path))) result.couldNotRead.push({ file: f.path, reason: `${f.reason}, not checked` });
+    if (kind || (REPORTED_WHEN_LEFT_OUT.has(baseName(f.path)) && !readForNothing(f.path))) result.couldNotRead.push({ file: f.path, reason: `${f.reason}, not checked` });
   }
   for (const f of ownFiles) {
     const manifest = MANIFESTS.get(baseName(f.path));
@@ -410,4 +417,4 @@ function readPackages(files, leftOut = []) {
   return result;
 }
 
-module.exports = { readPackages, isLockfile };
+module.exports = { readPackages, isLockfile, UNREADABLE_SOURCE_REASON };

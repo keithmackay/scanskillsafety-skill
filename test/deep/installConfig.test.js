@@ -3,6 +3,8 @@
 // ABOUTME: .yarnrc, .yarnrc.yml, pnpm-workspace.yaml, uv.toml, pdm.toml, pyproject.toml), failing closed, and the not-recorded note.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("fs");
+const path = require("path");
 const { readPackages } = require("../../src/deep/lockfiles");
 
 const EMPTY = { packages: [], namesOnly: [], couldNotRead: [], notChecked: [], sourced: [], notRecorded: [] };
@@ -451,6 +453,25 @@ test("a config file or manifest left out of the file list is reported as not che
     { file: "uv.toml", reason: "larger than 5 MB, not checked" },
     { file: "pnpm-workspace.yaml", reason: "larger than 5 MB, not checked" },
   ]);
+});
+
+const NO_PACKAGES_LOCK = JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" } } });
+
+test("a left-out package.json beside an npm lockfile that was read is not listed, since it would not have been read", () => {
+  const leftOut = [{ path: "package.json", reason: "larger than 5 MB" }, { path: "a/package.json", reason: "larger than 5 MB" }];
+  assert.deepEqual(read([["package-lock.json", NO_PACKAGES_LOCK]], leftOut).couldNotRead, []);
+  assert.deepEqual(read([["package-lock.json", "{"]], leftOut).couldNotRead.map((c) => c.file), ["package-lock.json", "package.json", "a/package.json"]);
+  assert.deepEqual(read([["requirements.txt", "x==1.0\n"]], leftOut).couldNotRead.map((c) => c.file), ["package.json", "a/package.json"]);
+});
+
+test("a left-out pyproject.toml is listed even beside a lockfile that was read, since its install settings are read then too", () => {
+  const leftOut = [{ path: "pyproject.toml", reason: "larger than 5 MB" }];
+  assert.deepEqual(read([["uv.lock", fs.readFileSync(path.join(__dirname, "fixtures", "lockfiles", "uv.lock"), "utf-8")]], leftOut).couldNotRead, [{ file: "pyproject.toml", reason: "larger than 5 MB, not checked" }]);
+});
+
+test("a left-out lockfile or install config is listed whatever else was read", () => {
+  const leftOut = [{ path: "a/package-lock.json", reason: "larger than 5 MB" }, { path: ".npmrc", reason: "larger than 5 MB" }];
+  assert.deepEqual(read([["package-lock.json", NO_PACKAGES_LOCK]], leftOut).couldNotRead.map((c) => c.file), ["a/package-lock.json", ".npmrc"]);
 });
 
 test("config files in vendored folders are not read", () => {

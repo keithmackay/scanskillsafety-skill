@@ -284,17 +284,19 @@ function startEntry(item) {
 // sourced: the packages and settings readPackages found coming from outside the registry, in any order. The packages of one file
 // from one source (kind, address, and a git commit or a fixed text when there is one) are one entry, at its first line, naming its
 // first five packages; each setting or index line is its own entry. Entries are in file and line order, the first 100 kept; once
-// that many exist, a package of any other source is only counted in `more`, so memory stays bounded however many sources there are.
+// that many exist, a package or line of any other source is only counted in `more`, so memory stays bounded however many sources
+// there are.
 function groupSources(sourced) {
   const groups = new Map();
-  let more = 0;
+  const more = { packages: 0, lines: 0 };
   let lineItems = 0;
   for (const item of [...sourced].sort(byFileThenLine)) {
     const key = item.from ? `line ${lineItems++}` : JSON.stringify([item.file, item.kind, item.address, item.commit ?? null, item.text ?? null]);
     let entry = groups.get(key);
     if (entry === undefined) {
       if (groups.size === MAX_SOURCE_ENTRIES) {
-        if (!item.from) more++;
+        if (item.from) more.lines++;
+        else more.packages++;
         continue;
       }
       entry = startEntry(item);

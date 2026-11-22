@@ -385,7 +385,7 @@ test("packages from one host in one file are one entry: its first line, the firs
       packages: [0, 1, 2, 3, 4].map((k) => ({ name: `p${k}`, version: "1.0.0", line: 10 + k })),
       total: 1000,
     }],
-    more: 0,
+    more: { packages: 0, lines: 0 },
   });
 });
 
@@ -403,7 +403,7 @@ test("groups are per file, kind and address; unreadable sources are one group pe
     { ecosystem: "npm", file: "package-lock.json", line: 13, name: "b", version: null, kind: "bundled", address: "vendor/b.tgz", text: "a bundled package file the scan cannot read" },
   ];
   const { entries, more } = groupSources(sourced);
-  assert.equal(more, 0);
+  assert.deepEqual(more, { packages: 0, lines: 0 });
   assert.deepEqual(entries, [
     { ecosystem: "npm", kind: "host", address: MIRROR, file: "a/package-lock.json", line: 3, packages: [{ name: "x", version: "1.0.0", line: 3 }], total: 1 },
     { ecosystem: "npm", kind: "host", address: MIRROR, file: "package-lock.json", line: 5, packages: [{ name: "x", version: "1.0.0", line: 5 }, { name: "z", version: "1.0.0", line: 7 }], total: 2 },
@@ -453,15 +453,16 @@ test("entries are in file and line order whatever order the items come in, each 
   assert.deepEqual(entries[0].packages, [{ name: "z", version: "1.0.0", line: 7 }, { name: "y", version: "1.0.0", line: 30 }]);
 });
 
-test("past 100 entries, the packages of the entries left out are counted, the first 100 in file and line order kept", () => {
+test("past 100 entries, the packages and the setting lines of the entries left out are counted, the first 100 in file and line order kept", () => {
   const sourced = Array.from({ length: 150 }, (_, k) => gitItem("package.json", 150 - k, `g${150 - k}`, `https://github.com/u/r${150 - k}`)).concat([
     gitItem("package.json", 200, "again", "https://github.com/u/r150"),
     { ecosystem: "npm", file: "package.json", line: 300, from: "config", kind: "host", address: "https://npm.example.com" },
+    { ecosystem: "PyPI", file: "requirements.txt", line: 1, from: "requirements", kind: "unreadable", address: null },
   ]);
   const { entries, more } = groupSources(sourced);
   assert.equal(entries.length, 100);
   assert.deepEqual(entries.map((e) => e.line), Array.from({ length: 100 }, (_, k) => k + 1));
-  assert.equal(more, 51);
+  assert.deepEqual(more, { packages: 51, lines: 2 });
 });
 
 test("grouping keeps memory bounded by the entries kept, however many addresses the items hold", () => {
@@ -483,6 +484,6 @@ test("grouping keeps memory bounded by the entries kept, however many addresses 
   assert.equal(run.status, 0, run.stderr);
   const { entries, more, grownMb } = JSON.parse(run.stdout);
   assert.equal(entries, 100);
-  assert.equal(more, 1000000 - 100 * 5);
+  assert.deepEqual(more, { packages: 1000000 - 100 * 5, lines: 0 });
   assert.ok(grownMb < 8, `grew by ${grownMb} MB`);
 });

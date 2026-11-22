@@ -75,7 +75,7 @@ test("a local folder: every file scanned, the rating from counted findings only,
   assert.ok(result.deep.testFindings.every((f) => f.file === "tests/fixtures/bad.sh"));
   assert.deepEqual(result.deep.launchedTests, ["tests/run.sh"]);
   assert.deepEqual([result.deep.site, result.deep.claude], [{ status: "off" }, { status: "off" }]);
-  assert.deepEqual(result.deep.packages, { status: "off", offRegistry: [], offRegistryMore: 0, notRecorded: [], notSentToOsv: 0, couldNotRead: [] });
+  assert.deepEqual(result.deep.packages, { status: "off", offRegistry: [], offRegistryMore: { packages: 0, lines: 0 }, notRecorded: [], notSentToOsv: 0, couldNotRead: [] });
 });
 
 test("a local checkout names its commit", { skip: spawnSync("git", ["--version"]).status === 0 ? false : "no git here" }, async () => {
@@ -485,7 +485,7 @@ test("a malicious package in package-lock.json is a critical finding and makes t
     detailsLeft: 0,
     reason: null,
     offRegistry: [],
-    offRegistryMore: 0,
+    offRegistryMore: { packages: 0, lines: 0 },
     notRecorded: [{ file: "package-lock.json", ecosystem: "npm" }],
     notSentToOsv: 0,
   });
@@ -496,7 +496,7 @@ test("--no-osv: the packages are not checked and nothing is sent to OSV", async 
   const fetchImpl = fakeFetch({});
   const result = await runDeep(root, ALL_OFF, { fetchImpl });
   assert.deepEqual(result.deep.packages, {
-    status: "off", offRegistry: [], offRegistryMore: 0, notRecorded: [{ file: "package-lock.json", ecosystem: "npm" }], notSentToOsv: 0, couldNotRead: [],
+    status: "off", offRegistry: [], offRegistryMore: { packages: 0, lines: 0 }, notRecorded: [{ file: "package-lock.json", ecosystem: "npm" }], notSentToOsv: 0, couldNotRead: [],
   });
   assert.deepEqual(fetchImpl.calls, []);
   assert.equal(result.rating, "green");
@@ -537,7 +537,7 @@ test("packages from outside the registry are listed, each source a warning, with
     { ecosystem: "npm", kind: "bundled", address: "vendor/local-thing-1.0.0.tgz", file: "package-lock.json", line: 35, text: "a bundled package file the scan cannot read", packages: [{ name: "local-thing", version: "1.0.0", line: 35 }], total: 1 },
     { ecosystem: "npm", kind: "host", address: "https://registry.npmmirror.com", file: "package-lock.json", line: 40, packages: [{ name: "lodash", version: "4.17.21", line: 40 }], total: 1 },
   ];
-  const sources = { offRegistry, offRegistryMore: 0, notRecorded: [{ file: "package-lock.json", ecosystem: "npm" }], notSentToOsv: 3 };
+  const sources = { offRegistry, offRegistryMore: { packages: 0, lines: 0 }, notRecorded: [{ file: "package-lock.json", ecosystem: "npm" }], notSentToOsv: 3 };
   for (const result of [off, on, failing]) {
     assert.equal(result.rating, "yellow");
     assert.deepEqual(sourceFindings(result), findings);
@@ -578,7 +578,7 @@ test("packages that record no host under a mirror .npmrc are still sent to OSV; 
   assert.equal(result.deep.packages.checked, 2);
 });
 
-test("a package source it could not read is a warning and a file it could not read, and the source never reaches the result", async () => {
+test("a package source it could not read is one warning, not a second for its file, and the source never reaches the result", async () => {
   const lock = JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/x": { version: "1.0.0", resolved: "https://SECRET@[bad/x.tgz" } } }, null, 2);
   const root = makeTree({ "SKILL.md": "Formats tables.", "package-lock.json": lock });
   for (const options of [ALL_OFF, { ...ALL_OFF, osv: true }]) {
@@ -587,8 +587,8 @@ test("a package source it could not read is a warning and a file it could not re
     assert.equal(result.rating, "yellow");
     assert.deepEqual(sourceFindings(result), [
       sourceFinding("package-lock.json", 5, "x has a source it could not read"),
-      sourceFinding("package-lock.json", null, "package-lock.json could not be read: a package source it could not read"),
     ]);
+    assert.deepEqual(result.deep.packages.couldNotRead, [{ file: "package-lock.json", reason: "a package source it could not read" }]);
     assert.deepEqual(sentToOsv(fetchImpl), []);
     assert.equal(result.deep.packages.notSentToOsv, 1);
     assert.doesNotMatch(JSON.stringify(result), /SECRET/);
@@ -617,7 +617,7 @@ test("past 100 sources, each kept one is a warning and the packages of the rest 
   const root = makeTree({ "SKILL.md": "Formats tables.", "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages }, null, 2) });
   const result = await runDeep(root, ALL_OFF, { fetchImpl: fakeFetch({}) });
   assert.equal(result.deep.packages.offRegistry.length, 100);
-  assert.equal(result.deep.packages.offRegistryMore, 50);
+  assert.deepEqual(result.deep.packages.offRegistryMore, { packages: 50, lines: 0 });
   assert.equal(result.deep.packages.notSentToOsv, 150);
   assert.equal(sourceFindings(result).length, 100);
   assert.deepEqual(sourceFindings(result)[0], sourceFinding("package-lock.json", 7, `g0 comes from git https://github.com/u/g0.git (commit ${SHA})`));
@@ -659,7 +659,7 @@ test("OSV out of reach: the check did not run, said with the reason, and the rat
     detailsLeft: 0,
     reason: "https://api.osv.dev/v1/querybatch answered 503",
     offRegistry: [],
-    offRegistryMore: 0,
+    offRegistryMore: { packages: 0, lines: 0 },
     notRecorded: [{ file: "package-lock.json", ecosystem: "npm" }],
     notSentToOsv: 0,
   });

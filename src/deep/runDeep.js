@@ -14,7 +14,7 @@ const { localCommit } = require("./localCommit");
 const { listEveryFile } = require("./everyFile");
 const { scanEveryFile } = require("./scanEveryFile");
 const { installTimeEntries } = require("./installTime");
-const { readPackages } = require("./lockfiles");
+const { readPackages, UNREADABLE_SOURCE_REASON } = require("./lockfiles");
 const { checkPackages, osvUrl } = require("./osv");
 const { groupSources } = require("./packageSources");
 const { compareWithSite, siteUrl } = require("./siteCompare");
@@ -227,7 +227,8 @@ function sourceFinding(entry) {
   return { severity: "warning", category: "package-source", source: "deep", file: entry.file, line: entry.line, detail };
 }
 
-// A file that can install packages but could not be read may name any source, so it is a warning too.
+// A file that can install packages but could not be read may name any source, so it is a warning too. A file read but for a source
+// it could not read is not: that source is already a warning of its own.
 const unreadFinding = ({ file, reason }) =>
   ({ severity: "warning", category: "package-source", source: "deep", file, line: null, detail: `${file} could not be read: ${reason}` });
 
@@ -243,7 +244,8 @@ async function packageCheck(files, leftOut, options, fetchImpl) {
     notRecorded,
     notSentToOsv: sourced.filter((item) => item.from === undefined).length,
   };
-  const sourceFindings = [...entries.map(sourceFinding), ...couldNotRead.map(unreadFinding)];
+  const unreadFiles = couldNotRead.filter((c) => c.reason !== UNREADABLE_SOURCE_REASON);
+  const sourceFindings = [...entries.map(sourceFinding), ...unreadFiles.map(unreadFinding)];
   if (!options.osv) return { findings: sourceFindings, packages: { status: "off", ...sources, couldNotRead } };
   const checked = await checkPackages(packages, fetchImpl);
   const { findings = [], vulnerabilities = [], detailsLeft = 0, reason = null } = checked;
