@@ -1162,3 +1162,15 @@ test("a certificate authority the repository supplies is reported, whatever its 
   hidden(pnpm, "SECRET");
   assert.deepEqual(read([[".npmrc", "https-proxy=http://p.example\n"], ["pnpm-workspace.yaml", "httpsProxy: http://evil.example:8080\n"]]).sourced, []);
 });
+
+test("uv: build-constraint-dependencies is read like the other install-wide lists; an empty allow-insecure-host gives nothing", () => {
+  const item = (file) => (name, line, kind, address) => ({ ecosystem: "PyPI", file, line, name, version: null, kind, address });
+  assert.deepEqual(read([["uv.toml", 'build-constraint-dependencies = ["setuptools<70", "bc @ https://e.example/bc-1.0.zip"]\n']]).sourced, [
+    item("uv.toml")("bc", 1, "url", "https://e.example/bc-1.0.zip"),
+  ]);
+  const uvLock = 'version = 1\n\n[[package]]\nname = "t"\nversion = "0.1.0"\nsource = { editable = "." }\n';
+  const pyproject = '[tool.uv]\nbuild-constraint-dependencies = ["bc @ https://e.example/bc-1.0.zip"]\n';
+  assert.deepEqual(read([["pyproject.toml", pyproject], ["uv.lock", uvLock]]).sourced, [item("pyproject.toml")("bc", 2, "url", "https://e.example/bc-1.0.zip")]);
+  assert.deepEqual(read([["pyproject.toml", pyproject]]).sourced, [item("pyproject.toml")("bc", 2, "url", "https://e.example/bc-1.0.zip")]);
+  assert.deepEqual(read([["uv.toml", "allow-insecure-host = []\n[pip]\nallow-insecure-host = []\n"]]), EMPTY);
+});

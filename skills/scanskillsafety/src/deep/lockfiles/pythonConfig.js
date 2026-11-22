@@ -39,13 +39,14 @@ const UV_ADDRESS_SETTINGS = new Map([
 ]);
 
 // uv's index-url, extra-index-url and find-links at `prefix` (the top of uv.toml or its [pip], [tool.uv] in pyproject.toml or its
-// [tool.uv.pip]), and allow-insecure-host there, whatever it names; an address setting that is not a string, or a list of strings
+// [tool.uv.pip]), and allow-insecure-host there, whatever hosts it names (none gives nothing); an address setting that is not a string, or a list of strings
 // where uv takes one, is one it cannot read.
 function uvSettingEntries(values, prefix, folder) {
   const out = [];
   for (const { path, value } of values) {
     const rest = after(path, prefix);
-    if (rest !== null && rest[0] === "allow-insecure-host") out.push(configEntry(value.line, INSECURE_HOSTS));
+    const noHosts = value.kind === "array" && value.items.length === 0;
+    if (rest !== null && rest[0] === "allow-insecure-host" && !noHosts) out.push(configEntry(value.line, INSECURE_HOSTS));
     if (rest === null || !UV_ADDRESS_SETTINGS.has(rest[0])) continue;
     const { role, list } = UV_ADDRESS_SETTINGS.get(rest[0]);
     const items = list && value.kind === "array" ? value.items : [value];
@@ -100,16 +101,16 @@ const uvConfigEntries = (values, prefix, folder) => [
 ];
 
 // uv's lists of PEP 508 strings that apply to every install, read whether or not a lockfile is present.
-const UV_REQUIREMENT_LISTS = ["override-dependencies", "constraint-dependencies"];
+const UV_REQUIREMENT_LISTS = ["override-dependencies", "constraint-dependencies", "build-constraint-dependencies"];
 
-// uv's override and constraint lists and each `dependency-metadata` table's `requires-dist` at `prefix` (the top of uv.toml, or
-// [tool.uv] in pyproject.toml), as a manifest's found entries whose names are never sent to OSV; a list or table in any other
-// shape is one it cannot read.
-function uvRequirementFound(values, prefix, folder) {
+// uv's install-wide lists at `prefix` (the top of uv.toml, or [tool.uv] in pyproject.toml): those in `lists` (by default its
+// override, constraint and build constraint lists) and each `dependency-metadata` table's `requires-dist`, as a manifest's found
+// entries whose names are never sent to OSV; a list or table in any other shape is one it cannot read.
+function uvRequirementFound(values, prefix, folder, lists = UV_REQUIREMENT_LISTS) {
   const entries = [];
   for (const { path, value } of values) {
     const rest = after(path, prefix);
-    if (rest === null || !UV_REQUIREMENT_LISTS.includes(rest[0])) continue;
+    if (rest === null || !lists.includes(rest[0])) continue;
     if (rest.length === 1) for (const entry of requirementListEntries(value, folder)) entries.push(entry);
     else entries.push(unnamedEntry(value.line));
   }
@@ -184,4 +185,4 @@ function readUvToml(text, folder = "") {
 // pdm.toml: PDM's index settings.
 const readPdmToml = (text, folder = "") => pdmTomlEntries(tomlValues(withoutBom(text)), folder);
 
-module.exports = { pyprojectConfigEntries, readPdmToml, readUvToml, uvRequirementEntries, uvRequirementFound };
+module.exports = { pyprojectConfigEntries, readPdmToml, readUvToml, UV_REQUIREMENT_LISTS, uvRequirementEntries, uvRequirementFound };

@@ -8,7 +8,7 @@ const { manifestEntries, normalisePyPI, unnamedEntry, withoutBom, workspaceEntri
 const { after, arrayTables, stringOf, tableFields, tomlValues } = require("./toml");
 const { pythonAddress } = require("./python");
 const { BUILD, EDITABLE, GROUPS, requirementListEntries } = require("./requirementLists");
-const { pyprojectConfigEntries, uvRequirementEntries, uvRequirementFound } = require("./pythonConfig");
+const { pyprojectConfigEntries, UV_REQUIREMENT_LISTS, uvRequirementEntries, uvRequirementFound } = require("./pythonConfig");
 
 const NAMED_INDEX = Object.freeze({ expected: false, kind: "host", address: null, text: "a named index" });
 
@@ -106,7 +106,7 @@ const DEPENDENCY_GROUPS = ["dependency-groups"];
 const OTHER_REQUIREMENT_LISTS = [
   ["build-system", "requires"],
   ["tool", "uv", "dev-dependencies"],
-  ["tool", "uv", "build-constraint-dependencies"],
+  ...UV_REQUIREMENT_LISTS.map((list) => ["tool", "uv", list]),
 ];
 // Tables of named lists that are build or development inputs, each with the form its items may take.
 const OTHER_REQUIREMENT_TABLES = [
@@ -259,7 +259,8 @@ function readPyproject(text, folder = "") {
     if (unit.list) return requirementListEntries(unit.list, folder, unit.form).map((entry) => ({ entry, checked: unit.checked }));
     return dependencyEntries(unit.dependency, folder, indexes);
   });
-  for (const uvFound of uvRequirementFound(values, ["tool", "uv"], folder)) found.push(uvFound);
+  // uv's install-wide lists are placed with the other lists above; only its dependency-metadata tables are read here.
+  for (const uvFound of uvRequirementFound(values, ["tool", "uv"], folder, [])) found.push(uvFound);
   const entries = manifestEntries(found, (name) => (name === null ? null : normalisePyPI(name)));
   return [...entries, ...pyprojectConfigEntries(values, folder)];
 }
