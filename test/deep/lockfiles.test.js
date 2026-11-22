@@ -170,13 +170,13 @@ test("with no npm lockfile, the names in each package.json's dependencies, optio
   });
 });
 
-test("with an npm lockfile anywhere, package.json names are not read", () => {
+test("beside an npm lockfile, the package.json names it holds are not sent again; the others are, by name", () => {
   const read = readPackages([
-    { path: "package.json", text: JSON.stringify({ dependencies: { chalk: "^5.0.0" } }) },
+    { path: "package.json", text: JSON.stringify({ dependencies: { semver: "^7.0.0", chalk: "^5.0.0" } }) },
     { path: "pnpm-lock.yaml", text: fixture("pnpm-lock.v9.yaml") },
   ]);
-  assert.deepEqual(read.namesOnly, []);
-  assert.ok(read.packages.every((p) => p.version !== null));
+  assert.deepEqual(read.namesOnly, ["package.json"]);
+  assert.deepEqual(read.packages.map((p) => `${p.name}@${p.version ?? "*"}`), ["@pnpm/exe@9.15.0", "semver@7.6.3", "chalk@*"]);
 });
 
 test("with no Python lockfile, pyproject.toml's project dependencies and Poetry's dependencies give names", () => {
@@ -282,6 +282,8 @@ test("a lockfile with entries it cannot make out could not be read, rather than 
       { file: "poetry.lock", reason: "a package source it could not read" },
       { file: "requirements.txt", reason: "no pinned versions in it" },
     ],
+    packages: [{ ecosystem: "npm", name: "chalk", version: null, file: "package.json", line: null }],
+    namesOnly: ["package.json"],
     sourced: [
       { ecosystem: "npm", file: "yarn.lock", line: 3, name: null, version: null, kind: "unreadable", address: null },
       { ecosystem: "npm", file: "a/pnpm-lock.yaml", line: 5, name: null, version: null, kind: "unreadable", address: null },

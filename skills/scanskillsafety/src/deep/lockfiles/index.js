@@ -1,5 +1,5 @@
-// ABOUTME: Reads the packages a target pulls in, and where each comes from, from its lockfiles (npm, Yarn, pnpm, Poetry, uv,
-// ABOUTME: pinned requirements) or its manifests when it has none, and its config files; what it cannot read is listed.
+// ABOUTME: Reads where each package a target pulls in comes from (lockfiles, requirements, manifests, config files), and which go
+// ABOUTME: to OSV: registry packages, and a manifest's names but those a covering lockfile sent; what it cannot read is listed.
 "use strict";
 
 const { baseName, isVendored } = require("../util");
@@ -27,6 +27,8 @@ const LOCKFILES = new Map([
 const REQUIREMENTS = { ecosystem: "PyPI", read: readRequirements };
 const NAMED_REQUIREMENTS = { ecosystem: "PyPI", read: readNamedRequirements };
 const NOT_CHECKED = new Set(["Cargo.lock", "go.sum", "Gemfile.lock"]);
+// The files whose packages sent to OSV with a version cover a manifest's names: lockfiles proper and requirements files.
+const COVERING_KINDS = new Set([...LOCKFILES.values(), REQUIREMENTS, NAMED_REQUIREMENTS]);
 
 const lockfileKind = (p) => LOCKFILES.get(baseName(p)) ?? (/^requirements.*\.txt$/.test(baseName(p)) ? REQUIREMENTS : null);
 // A lockfile proper, read here for OSV or one it has no support for. A requirements file is not one: besides its pins it can name
@@ -293,14 +295,13 @@ function loadNpmrcTargets(npmrcTargets, byPath, { readAsNpmrc, pastDepth }) {
 }
 
 // Reads each pnpm-workspace.yaml once the lockfiles are known: its catalogs' registry names are sent to OSV (and the file listed
-// in `namesOnly`) only for a pnpm project with no lockfile, as package.json's are; beside a pnpm lockfile, its folders are not
-// read.
-function readPnpmWorkspaces(ownFiles, { pnpmLocked, lockedHere, readEntries, namesOnly }) {
+// in `namesOnly`) as package.json's are, but for those a lockfile covering its folder already sent; beside a pnpm lockfile, its
+// folders are not read.
+function readPnpmWorkspaces(ownFiles, { pnpmLocked, readEntries, namesOnly }) {
   for (const f of ownFiles.filter((file) => baseName(file.path) === PNPM_WORKSPACE)) {
     const pnpmLock = pnpmLocked.has(folderOf(f.path));
-    const sourcesOnly = pnpmLock || lockedHere("npm", f.path);
-    const registry = readEntries(f, pnpmLock ? PNPM_WORKSPACE_SETTINGS_KIND : PNPM_WORKSPACE_KIND, { sourcesOnly });
-    if (registry?.length > 0 && !sourcesOnly) namesOnly.push(f.path);
+    const sent = readEntries(f, pnpmLock ? PNPM_WORKSPACE_SETTINGS_KIND : PNPM_WORKSPACE_KIND, { manifest: true });
+    if (sent?.length > 0) namesOnly.push(f.path);
   }
 }
 
@@ -330,28 +331,39 @@ function readPackages(files, leftOut = []) {
   // Files given the reason "a package source it could not read", each once.
   const unreadableFiles = new Set();
   const pnpmLocked = new Set([...ownFiles, ...ownLeftOut].filter((f) => baseName(f.path) === "pnpm-lock.yaml").map((f) => folderOf(f.path)));
-  // Each folder with a lockfile proper that was read, or listed by one as a workspace folder below its own, by ecosystem: a
-  // manifest of that ecosystem in such a folder is still read for its sources, but its registry packages are not sent to OSV,
-  // since the lockfile's are. A lockfile elsewhere is another project's, and says nothing of this one. Ecosystems with a
-  // requirements file likewise have their manifests read only for where they fetch from, since the requirements file's pins are
-  // what is checked.
-  const lockRead = new Set();
-  const lockedHere = (ecosystem, path) => lockRead.has(`${ecosystem}\0${folderOf(path)}`);
-  const pinned = new Set();
+  // The names a lockfile proper or a requirements file sent to OSV with a version, for each folder it covers, by ecosystem: its own
+  // folder and, for a lockfile, each workspace folder it lists below its own. A manifest in such a folder is still read for its
+  // sources, and its names go to OSV but for those already sent so: a lockfile elsewhere, or one that does not list a name
+  // (out of sync, or claiming a folder that is no workspace of it), keeps nothing from OSV. Each file's names are kept once, as
+  // one set shared by the folders it covers.
+  const covered = new Map();
+  const cover = (ecosystem, folder, names) => {
+    const key = `${ecosystem}\0${folder}`;
+    if (!covered.has(key)) covered.set(key, []);
+    covered.get(key).push(names);
+  };
+  const coveredHere = (ecosystem, path, name) => (covered.get(`${ecosystem}\0${folderOf(path)}`) ?? []).some((names) => names.has(name));
   // Requirements files read in their own right, and those named by -r or -c still to read; each is read once.
   const visited = new Set(ownFiles.filter((f) => lockfileKind(f.path) === REQUIREMENTS).map((f) => f.path));
   const toFollow = [];
-  // Reads a lockfile, a requirements file, a manifest or a config file, its registry packages sent to OSV unless `sourcesOnly`:
-  // those registry packages, or null when the file could not be read at all.
-  const readEntries = (f, kind, { sourcesOnly = false } = {}) => {
+  // Reads a lockfile, a requirements file, a manifest or a config file, its registry packages sent to OSV (for a `manifest`, but
+  // for those a lockfile or requirements file covering its folder sent): those sent, or null when the file could not be read at
+  // all.
+  const readEntries = (f, kind, { manifest = false } = {}) => {
     const read = readSafely(kind.read, f);
     if (read.reason) {
       result.couldNotRead.push({ file: f.path, reason: read.reason });
       return null;
     }
     const { registry, sourced, requires, unreadable, unrecorded, covers, follows, workspaces } = classifyEntries(kind.ecosystem, f.path, read.entries);
-    for (const folder of workspaces) if (isBelow(folderOf(f.path), folder)) lockRead.add(`${kind.ecosystem}\0${folder}`);
-    if (!sourcesOnly) for (const entry of registry) add(kind.ecosystem, f.path, entry);
+    const coveredName = (entry) => coveredHere(kind.ecosystem, f.path, packageName(kind.ecosystem, entry.name));
+    const sent = manifest ? registry.filter((entry) => !coveredName(entry)) : registry;
+    for (const entry of sent) add(kind.ecosystem, f.path, entry);
+    if (COVERING_KINDS.has(kind)) {
+      const names = new Set(registry.filter((entry) => entry.version !== null).map((entry) => packageName(kind.ecosystem, entry.name)));
+      const below = workspaces.filter((folder) => isBelow(folderOf(f.path), folder));
+      for (const folder of [folderOf(f.path), ...below]) cover(kind.ecosystem, folder, names);
+    }
     for (const item of sourced) result.sourced.push(item);
     if (unrecorded.length > 0) unrecordedFiles.push({ file: f.path, ecosystem: kind.ecosystem, names: unrecorded });
     // A config file it cannot load is one it cannot read, covering a lockfile.
@@ -377,7 +389,7 @@ function readPackages(files, leftOut = []) {
         toFollow.push(byPath.get(r.requires));
       }
     }
-    return registry;
+    return sent;
   };
   for (const f of ownFiles) {
     if (NOT_CHECKED.has(baseName(f.path))) result.notChecked.push(f.path);
@@ -385,21 +397,18 @@ function readPackages(files, leftOut = []) {
     if (config) readEntries(f, config);
     const kind = lockfileKind(f.path);
     if (!kind) continue;
-    if (kind === REQUIREMENTS) pinned.add(kind.ecosystem);
-    if (readEntries(f, kind) !== null && kind !== REQUIREMENTS) lockRead.add(`${kind.ecosystem}\0${folderOf(f.path)}`);
+    readEntries(f, kind);
   }
   for (let i = 0; i < toFollow.length; i++) readEntries(toFollow[i], NAMED_REQUIREMENTS);
   result.notChecked.push(...ownLeftOut.filter((l) => NOT_CHECKED.has(baseName(l.path))).map((l) => l.path));
   for (const f of ownLeftOut) {
     const kind = lockfileKind(f.path);
-    if (kind === REQUIREMENTS) pinned.add(kind.ecosystem);
     if (kind || REPORTED_WHEN_LEFT_OUT.has(baseName(f.path))) result.couldNotRead.push({ file: f.path, reason: `${f.reason}, not checked` });
   }
   for (const f of ownFiles) {
     const manifest = MANIFESTS.get(baseName(f.path));
     if (!manifest) continue;
-    const sourcesOnly = lockedHere(manifest.ecosystem, f.path) || pinned.has(manifest.ecosystem);
-    if (readEntries(f, manifest, { sourcesOnly }) && !sourcesOnly) result.namesOnly.push(f.path);
+    if (readEntries(f, manifest, { manifest: true })?.length > 0) result.namesOnly.push(f.path);
   }
   // A pointer past npm's depth is reported once, as a line it cannot read that covers a lockfile.
   const pastDepthLines = new Set();
@@ -415,7 +424,7 @@ function readPackages(files, leftOut = []) {
     configCovers.get(file).push(null);
   };
   loadNpmrcTargets(npmrcTargets, byPath, { readAsNpmrc: (f) => readEntries(f, CONFIGS.get(".npmrc")), pastDepth });
-  readPnpmWorkspaces(ownFiles, { pnpmLocked, lockedHere, readEntries, namesOnly: result.namesOnly });
+  readPnpmWorkspaces(ownFiles, { pnpmLocked, readEntries, namesOnly: result.namesOnly });
   append(result.notRecorded, notRecordedNotes(unrecordedFiles, configCovers, npmrcTargets, [...ownFiles, ...ownLeftOut]));
   return result;
 }

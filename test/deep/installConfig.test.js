@@ -415,7 +415,7 @@ test("pnpm-workspace.yaml: packages folders outside the repository are reported 
   const catalogName = { ecosystem: "npm", name: "react", version: null, file: "pnpm-workspace.yaml", line: null };
   assert.deepEqual(read([["pnpm-workspace.yaml", text]]), { ...EMPTY, packages: [catalogName], namesOnly: ["pnpm-workspace.yaml"], sourced: [outside] });
   const lock = "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n";
-  assert.deepEqual(read([["pnpm-workspace.yaml", text], ["pnpm-lock.yaml", lock]]), EMPTY);
+  assert.deepEqual(read([["pnpm-workspace.yaml", text], ["pnpm-lock.yaml", lock]]), { ...EMPTY, packages: [catalogName], namesOnly: ["pnpm-workspace.yaml"] });
   assert.deepEqual(read([["pnpm-workspace.yaml", text]], [{ path: "pnpm-lock.yaml", reason: "larger than 5 MB" }]).sourced, []);
 });
 
@@ -856,7 +856,7 @@ test("packageExtensions in a shape it does not model is one it cannot read", () 
   assert.deepEqual(read([["package.json", json({ "a@*": { dependencies: { x: 1 } } })]]).sourced, [unread("package.json", 6, "x")]);
 });
 
-test("catalog entries from the registry go to OSV by name in a pnpm project with no lockfile, and not with one", () => {
+test("catalog entries from the registry go to OSV by name, but for those a lockfile covering the folder sent with a version", () => {
   const workspace = lines(
     "catalog:",
     "  react: ^18.2.0",
@@ -868,14 +868,16 @@ test("catalog entries from the registry go to OSV by name in a pnpm project with
   const names = (...list) => list.map((name) => ({ ecosystem: "npm", name, version: null, file: "pnpm-workspace.yaml", line: null }));
   const alone = read([["pnpm-workspace.yaml", workspace], ["package.json", '{ "dependencies": { "react": "catalog:" } }']]);
   assert.deepEqual(alone.packages, names("react", "@s/real"));
-  assert.deepEqual(alone.namesOnly, ["package.json", "pnpm-workspace.yaml"]);
+  assert.deepEqual(alone.namesOnly, ["pnpm-workspace.yaml"]);
   assert.deepEqual(alone.sourced, [pkg("pnpm-workspace.yaml")("left-pad", 3, "git", "https://github.com/u/left-pad")]);
-  const lock = "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n";
+  const lock = "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n\npackages:\n\n  react@18.2.0:\n    resolution: {integrity: sha512-x}\n";
   const locked = read([["pnpm-workspace.yaml", workspace], ["pnpm-lock.yaml", lock]]);
-  assert.deepEqual([locked.packages, locked.namesOnly], [[], []]);
+  assert.deepEqual(locked.packages.map((p) => `${p.file} ${p.name}@${p.version ?? "*"}`), ["pnpm-lock.yaml react@18.2.0", "pnpm-workspace.yaml @s/real@*"]);
+  assert.deepEqual(locked.namesOnly, ["pnpm-workspace.yaml"]);
   assert.deepEqual(locked.sourced, [pkg("pnpm-workspace.yaml")("left-pad", 3, "git", "https://github.com/u/left-pad")]);
-  const npmLocked = read([["pnpm-workspace.yaml", workspace], ["package-lock.json", JSON.stringify({ lockfileVersion: 3, packages: { "": {} } })]]);
-  assert.deepEqual([npmLocked.packages, npmLocked.namesOnly], [[], []]);
+  const npmLock = JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/react": { version: "18.2.0" }, "node_modules/@s/real": { version: "1.0.0" } } });
+  const npmLocked = read([["pnpm-workspace.yaml", workspace], ["package-lock.json", npmLock]]);
+  assert.deepEqual([npmLocked.packages.map((p) => p.file), npmLocked.namesOnly], [["package-lock.json", "package-lock.json"], []]);
 });
 
 test("pdm.toml: a named index of type find_links is a find-links page", () => {
