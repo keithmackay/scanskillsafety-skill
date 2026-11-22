@@ -1204,3 +1204,15 @@ test(".npmrc: files are followed only as far as npm loads them (project, its use
   assert.deepEqual(userThenGlobal.sourced, [npmConfig("p/etc/npmrc")(1, "host", "https://g.example", { scope: "@s" })]);
   assert.deepEqual(userThenGlobal.notRecorded, [NOTE("package-lock.json")]);
 });
+
+test("many pointers past npm's depth, and a lockfile thousands of folders deep, are read quickly", () => {
+  const pj = ["package.json", '{ "name": "t" }'];
+  const pastDepth = quickly(() => read([pj, ["package-lock.json", NO_RESOLVED], [".npmrc", "userconfig=u"], ["u", "userconfig=v\n".repeat(100000)], ["v", ""]]), 2000);
+  assert.equal(pastDepth.sourced.length, 100000);
+  assert.deepEqual(pastDepth.notRecorded, []);
+  const folder = Array(3000).fill("d").join("/");
+  const packages = Array.from({ length: 20000 }, (_, i) => `  '@s${i}/x@1.0.0':\n    resolution: {integrity: sha512-x}\n`).join("");
+  const lock = `lockfileVersion: '9.0'\n\npackages:\n\n${packages}`;
+  const deep = quickly(() => read([[`${folder}/pnpm-lock.yaml`, lock], [".npmrc", "@other:registry=https://m.example/"]]), 2000);
+  assert.deepEqual(deep.notRecorded, [NOTE(`${folder}/pnpm-lock.yaml`)]);
+});

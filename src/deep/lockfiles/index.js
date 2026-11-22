@@ -239,6 +239,8 @@ function notRecordedNotes(unrecordedFiles, configCovers, npmrcTargets, files) {
     let uncovered = names;
     for (const config of applying(file)) {
       const covers = ownCovers(config);
+      // A config that covers none of the scopes in use, or a folder with none, changes nothing.
+      if (covers.size === 0) continue;
       uncovered = covers.has(null) ? [] : uncovered.filter((name) => !covers.has(scopeOf(name)));
       if (uncovered.length === 0) break;
     }
@@ -399,7 +401,8 @@ function readPackages(files, leftOut = []) {
       unreadableFiles.add(file);
       result.couldNotRead.push({ file, reason: UNREADABLE_SOURCE_REASON });
     }
-    configCovers.set(file, [...(configCovers.get(file) ?? []), null]);
+    if (!configCovers.has(file)) configCovers.set(file, []);
+    configCovers.get(file).push(null);
   };
   loadNpmrcTargets(npmrcTargets, byPath, { readAsNpmrc: (f) => readEntries(f, CONFIGS.get(".npmrc")), pastDepth });
   readPnpmWorkspaces(ownFiles, { pnpmLocked, npmLocked: locked.has("npm"), readEntries, namesOnly: result.namesOnly });
