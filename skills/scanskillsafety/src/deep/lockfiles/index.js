@@ -285,10 +285,10 @@ function loadNpmrcTargets(npmrcTargets, byPath, { readAsNpmrc, pastDepth }) {
 // Reads each pnpm-workspace.yaml once the lockfiles are known: its catalogs' registry names are sent to OSV (and the file listed
 // in `namesOnly`) only for a pnpm project with no lockfile, as package.json's are; beside a pnpm lockfile, its folders are not
 // read.
-function readPnpmWorkspaces(ownFiles, { pnpmLocked, npmLocked, readEntries, namesOnly }) {
+function readPnpmWorkspaces(ownFiles, { pnpmLocked, lockedHere, readEntries, namesOnly }) {
   for (const f of ownFiles.filter((file) => baseName(file.path) === PNPM_WORKSPACE)) {
     const pnpmLock = pnpmLocked.has(folderOf(f.path));
-    const sourcesOnly = pnpmLock || npmLocked;
+    const sourcesOnly = pnpmLock || lockedHere("npm", f.path);
     const registry = readEntries(f, pnpmLock ? PNPM_WORKSPACE_SETTINGS_KIND : PNPM_WORKSPACE_KIND, { sourcesOnly });
     if (registry?.length > 0 && !sourcesOnly) namesOnly.push(f.path);
   }
@@ -320,13 +320,13 @@ function readPackages(files, leftOut = []) {
   // Files given the reason "a package source it could not read", each once.
   const unreadableFiles = new Set();
   const pnpmLocked = new Set([...ownFiles, ...ownLeftOut].filter((f) => baseName(f.path) === "pnpm-lock.yaml").map((f) => folderOf(f.path)));
-  // Ecosystems with a lockfile proper, whose manifests are not read; and those with a requirements file, whose manifests are read
-  // only for where they fetch from, since the requirements file's pins are what is checked.
-  const locked = new Set();
-  const pinned = new Set();
-  // Ecosystems with a lockfile proper that was read: a manifest of theirs that would be read for nothing is not listed when left out.
+  // Each folder with a lockfile proper that was read, by ecosystem: a manifest of that ecosystem in the same folder is not read for
+  // packages (and, when that is all it is read for, not listed when left out). A lockfile elsewhere is another project's, and says
+  // nothing of this one. Ecosystems with a requirements file have their manifests read only for where they fetch from, since the
+  // requirements file's pins are what is checked.
   const lockRead = new Set();
-  const lockedBy = (path) => (lockfileKind(path) === REQUIREMENTS ? pinned : locked);
+  const lockedHere = (ecosystem, path) => lockRead.has(`${ecosystem}\0${folderOf(path)}`);
+  const pinned = new Set();
   // Requirements files read in their own right, and those named by -r or -c still to read; each is read once.
   const visited = new Set(ownFiles.filter((f) => lockfileKind(f.path) === REQUIREMENTS).map((f) => f.path));
   const toFollow = [];
@@ -373,25 +373,25 @@ function readPackages(files, leftOut = []) {
     if (config) readEntries(f, config);
     const kind = lockfileKind(f.path);
     if (!kind) continue;
-    lockedBy(f.path).add(kind.ecosystem);
-    if (readEntries(f, kind) !== null && kind !== REQUIREMENTS) lockRead.add(kind.ecosystem);
+    if (kind === REQUIREMENTS) pinned.add(kind.ecosystem);
+    if (readEntries(f, kind) !== null && kind !== REQUIREMENTS) lockRead.add(`${kind.ecosystem}\0${folderOf(f.path)}`);
   }
   for (let i = 0; i < toFollow.length; i++) readEntries(toFollow[i], NAMED_REQUIREMENTS);
   result.notChecked.push(...ownLeftOut.filter((l) => NOT_CHECKED.has(baseName(l.path))).map((l) => l.path));
-  // A manifest read only when its ecosystem has no lockfile (package.json) would not have been read beside one that was.
+  // A manifest read only when there is no lockfile beside it (package.json) would not have been read beside one that was.
   const readForNothing = (path) => {
     const manifest = MANIFESTS.get(baseName(path));
-    return manifest !== undefined && !manifest.config && lockRead.has(manifest.ecosystem);
+    return manifest !== undefined && !manifest.config && lockedHere(manifest.ecosystem, path);
   };
   for (const f of ownLeftOut) {
     const kind = lockfileKind(f.path);
-    if (kind) lockedBy(f.path).add(kind.ecosystem);
+    if (kind === REQUIREMENTS) pinned.add(kind.ecosystem);
     if (kind || (REPORTED_WHEN_LEFT_OUT.has(baseName(f.path)) && !readForNothing(f.path))) result.couldNotRead.push({ file: f.path, reason: `${f.reason}, not checked` });
   }
   for (const f of ownFiles) {
     const manifest = MANIFESTS.get(baseName(f.path));
     if (!manifest) continue;
-    if (locked.has(manifest.ecosystem)) {
+    if (lockedHere(manifest.ecosystem, f.path)) {
       if (manifest.config) readEntries(f, { ecosystem: manifest.ecosystem, read: manifest.config }, { sourcesOnly: true });
       continue;
     }
@@ -412,7 +412,7 @@ function readPackages(files, leftOut = []) {
     configCovers.get(file).push(null);
   };
   loadNpmrcTargets(npmrcTargets, byPath, { readAsNpmrc: (f) => readEntries(f, CONFIGS.get(".npmrc")), pastDepth });
-  readPnpmWorkspaces(ownFiles, { pnpmLocked, npmLocked: locked.has("npm"), readEntries, namesOnly: result.namesOnly });
+  readPnpmWorkspaces(ownFiles, { pnpmLocked, lockedHere, readEntries, namesOnly: result.namesOnly });
   append(result.notRecorded, notRecordedNotes(unrecordedFiles, configCovers, npmrcTargets, [...ownFiles, ...ownLeftOut]));
   return result;
 }

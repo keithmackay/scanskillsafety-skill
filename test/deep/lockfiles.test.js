@@ -233,14 +233,19 @@ test("Cargo, Go and Ruby lockfiles are listed as not checked", () => {
   assert.deepEqual(read, { ...EMPTY, notChecked: ["Cargo.lock", "tools/go.sum", "Gemfile.lock"] });
 });
 
-test("a lockfile left out of the file list could not be read, with the reason it was left out", () => {
+test("a lockfile left out of the file list could not be read, with the reason it was left out; the package.json beside it is read in its place", () => {
   const leftOut = [
     { path: "package-lock.json", reason: "larger than 5 MB" },
     { path: "node_modules/x/yarn.lock", reason: "larger than 5 MB" },
     { path: "logo.png", reason: "binary" },
   ];
   const read = readPackages([{ path: "package.json", text: JSON.stringify({ dependencies: { chalk: "^5.0.0" } }) }], leftOut);
-  assert.deepEqual(read, { ...EMPTY, couldNotRead: [{ file: "package-lock.json", reason: "larger than 5 MB, not checked" }] });
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [{ ecosystem: "npm", name: "chalk", version: null, file: "package.json", line: null }],
+    namesOnly: ["package.json"],
+    couldNotRead: [{ file: "package-lock.json", reason: "larger than 5 MB, not checked" }],
+  });
 });
 
 test("lockfiles with Windows line endings read the same", () => {
