@@ -1113,3 +1113,52 @@ test("a config file an .npmrc loads covers npm lockfiles only: pnpm does not rea
   assert.deepEqual(read([...files, ["pnpm-lock.yaml", PNPM]]).notRecorded, [NOTE("pnpm-lock.yaml")]);
   assert.deepEqual(read([...files, ["package-lock.json", NO_RESOLVED]]).notRecorded, []);
 });
+
+// Repository-supplied certificate authorities
+
+const trustReplaced = (ecosystem, file, line, setting) => config(ecosystem, file, line, "http", null, { text: `${setting} replaces the trusted certificates` });
+
+test("pnpm-workspace.yaml strictSsl: false turns off certificate checks", () => {
+  assert.deepEqual(read([["pnpm-workspace.yaml", "strictSsl: false\n"]]).sourced, [certificateOff("npm", "pnpm-workspace.yaml", 1, "strictSsl: false")]);
+  assert.deepEqual(read([["pnpm-workspace.yaml", "strictSsl: true\n"]]).sourced, []);
+  assertUnreadableAt("npm", "pnpm-workspace.yaml", "strictSsl: maybe", 1);
+});
+
+test("a certificate authority the repository supplies is reported, whatever its value, and never shown", () => {
+  const npmrc = lines(
+    "ca=-----BEGIN CERTIFICATE-----SECRET",
+    "cafile=./certs/corp.pem",
+    "ca[]=SECRET",
+    "//npm.example.com/:cafile=./certs/SECRET.pem",
+    "certfile=SECRET",
+  );
+  const result = read([[".npmrc", npmrc]]);
+  assert.deepEqual(result.sourced, [
+    trustReplaced("npm", ".npmrc", 1, "ca"),
+    trustReplaced("npm", ".npmrc", 2, "cafile"),
+    trustReplaced("npm", ".npmrc", 3, "ca"),
+    trustReplaced("npm", ".npmrc", 4, "cafile"),
+  ]);
+  hidden(result, "SECRET");
+  const yml = lines(
+    "caFilePath: ./certs/SECRET.pem",
+    "httpsCaFilePath: ./certs/other.pem",
+    "npmRegistries:",
+    '  "https://r.example":',
+    "    caFilePath: ./certs/r.pem",
+    "    httpsCaFilePath: ./certs/r2.pem",
+  );
+  const yarn = read([[".yarnrc.yml", yml]]);
+  assert.deepEqual(yarn.sourced, [
+    trustReplaced("npm", ".yarnrc.yml", 1, "caFilePath"),
+    trustReplaced("npm", ".yarnrc.yml", 2, "httpsCaFilePath"),
+    npmConfig(".yarnrc.yml")(4, "host", "https://r.example"),
+    trustReplaced("npm", ".yarnrc.yml", 5, "caFilePath"),
+    trustReplaced("npm", ".yarnrc.yml", 6, "httpsCaFilePath"),
+  ]);
+  hidden(yarn, "SECRET");
+  const pnpm = read([["pnpm-workspace.yaml", "cafile: ./evil.pem\nca: |\n  -----BEGIN CERTIFICATE-----\n  SECRET\n"]]);
+  assert.deepEqual(pnpm.sourced, [trustReplaced("npm", "pnpm-workspace.yaml", 1, "cafile"), trustReplaced("npm", "pnpm-workspace.yaml", 2, "ca")]);
+  hidden(pnpm, "SECRET");
+  assert.deepEqual(read([[".npmrc", "https-proxy=http://p.example\n"], ["pnpm-workspace.yaml", "httpsProxy: http://evil.example:8080\n"]]).sourced, []);
+});

@@ -4,7 +4,15 @@
 
 const { EXPECTED, UNREADABLE } = require("../packageSources");
 const { withoutBom } = require("./shared");
-const { certificateChecksOff, configEntry, coveringUnreadable, registryEntry, registryVerdict, unreadableConfig } = require("./configEntries");
+const {
+  certificateChecksOff,
+  configEntry,
+  coveringUnreadable,
+  registryEntry,
+  registryVerdict,
+  trustedCertificatesReplaced,
+  unreadableConfig,
+} = require("./configEntries");
 
 // A scoped registry key's scope (`@myco:registry` → `@myco`).
 const scopeOfKey = (key) => key.slice(0, key.indexOf(":"));
@@ -70,6 +78,14 @@ function replacedHostVerdict(value) {
 // omit-lockfile-registry-resolved: true is reported, since it hides the registry from package-lock.json.
 const omitResolvedVerdict = (value) => (value === "true" ? OMITS_RESOLVED : value === "false" ? EXPECTED : UNREADABLE);
 
+// The settings that supply a certificate authority, alone or after a registry (`//host/:cafile`), each reported whatever its value.
+const CA_SETTINGS = new Map([["ca", trustedCertificatesReplaced("ca")], ["cafile", trustedCertificatesReplaced("cafile")]]);
+// The certificate authority setting a key names, however written; undefined for any other key.
+function caSetting(key) {
+  const loose = looseKey(key);
+  return CA_SETTINGS.get(loose.slice(loose.lastIndexOf(":") + 1));
+}
+
 // The settings read that name no registry for installs.
 const OTHER_NPM_SETTINGS = ["replace-registry-host", "omit-lockfile-registry-resolved", "strict-ssl"];
 
@@ -96,7 +112,7 @@ const DECODED = /["'\\]/;
 
 // .npmrc, read as npm's ini reader reads it: `key=value` lines, `;` and `#` comment lines, `[section]` headers, a key ending at its
 // first `;` or `#`. A key holding a quote or backslash is one it cannot read, whatever it names, before auth lines are told apart.
-// Only the registry settings, the pointers to other config files and strict-ssl are read; one written in any form not modelled here
+// Only the registry settings, the pointers to other config files, strict-ssl, and ca and cafile (whatever their value) are read; one written in any form not modelled here
 // (another spelling of the key, a value with an escape or variable, an array, no value, inside a section) is one it cannot read.
 function readNpmrc(text) {
   const out = [];
@@ -111,7 +127,9 @@ function readNpmrc(text) {
       return;
     }
     if (DECODED.test(key)) out.push(coveringUnreadable(i + 1));
-    else if (!isAuthLine(key) && mayNameSetting(looseKey(key), NPM_SETTINGS)) {
+    else if (isAuthLine(key)) return;
+    else if (caSetting(key)) out.push(configEntry(i + 1, caSetting(key)));
+    else if (mayNameSetting(looseKey(key), NPM_SETTINGS)) {
       const value = eq < 0 || inSection ? null : iniValue(raw.slice(eq + 1));
       out.push(npmSettingEntry(key, inSection, value, i + 1));
     }

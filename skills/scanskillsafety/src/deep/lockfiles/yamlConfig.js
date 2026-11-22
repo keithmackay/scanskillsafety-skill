@@ -1,10 +1,18 @@
-// ABOUTME: Reads .yarnrc.yml (registries, scopes, plain-http hosts, certificate checks, package extensions) and pnpm-workspace.yaml
-// ABOUTME: (registries, catalogs, overrides, package extensions, workspace folders) for where installs fetch packages from.
+// ABOUTME: Reads .yarnrc.yml and pnpm-workspace.yaml for where installs fetch packages from: registries, scopes, plain-http hosts,
+// ABOUTME: certificate checks and authorities, package extensions, and pnpm's catalogs, overrides and workspace folders.
 "use strict";
 
 const { classifySource } = require("../packageSources");
 const { manifestEntries, unnamedEntry, workspaceEntries } = require("./shared");
-const { certificateChecksOff, configEntry, configOrCovering, registryEntry, registryVerdict, unreadableConfig } = require("./configEntries");
+const {
+  certificateChecksOff,
+  configEntry,
+  configOrCovering,
+  registryEntry,
+  registryVerdict,
+  trustedCertificatesReplaced,
+  unreadableConfig,
+} = require("./configEntries");
 const { Unmodelled, collectionChildren, flowScalars, readYamlConfig, scalarFields, scalarText, section } = require("./yamlTree");
 const { dependencyFound, EXTENSION_META, EXTENSION_SECTIONS, overrideTarget } = require("./packageJson");
 
@@ -21,25 +29,35 @@ function npmScopesEntries(root) {
 // How Yarn reads a boolean setting's text, in any case; any other text is one it does not model.
 const YAML_FALSE = new Set(["false", "no", "off", "0"]);
 const YAML_TRUE = new Set(["true", "yes", "on", "1"]);
-const YARN_STRICT_SSL_OFF = certificateChecksOff("enableStrictSsl: false");
-
-// An enableStrictSsl setting: false is reported, true gives nothing.
-function strictSslEntries(node) {
-  const flag = scalarText(node).toLowerCase();
-  if (YAML_FALSE.has(flag)) return [configEntry(node.line, YARN_STRICT_SSL_OFF)];
-  if (YAML_TRUE.has(flag)) return [];
-  throw new Unmodelled(node.line);
+// A setting that checks certificates when true (Yarn's enableStrictSsl, pnpm's strictSsl): false is reported, true gives nothing.
+function strictSslReader(setting) {
+  const off = certificateChecksOff(`${setting}: false`);
+  return (node) => {
+    const flag = scalarText(node).toLowerCase();
+    if (YAML_FALSE.has(flag)) return [configEntry(node.line, off)];
+    if (YAML_TRUE.has(flag)) return [];
+    throw new Unmodelled(node.line);
+  };
 }
+const yarnStrictSslEntries = strictSslReader("enableStrictSsl");
 
-// .yarnrc.yml's npmRegistries: each key names a registry (`//host` read as https), its settings below it, an enableStrictSsl
-// among them read as the top-level one is.
+// A setting that supplies a certificate authority (Yarn's caFilePath and httpsCaFilePath, pnpm's ca and cafile): reported
+// whatever its value, which is never shown.
+const trustEntries = (node) => [configEntry(node.line, trustedCertificatesReplaced(node.key))];
+const YARN_CA_SETTINGS = ["caFilePath", "httpsCaFilePath"];
+
+// .yarnrc.yml's npmRegistries: each key names a registry (`//host` read as https), its settings below it, an enableStrictSsl or a
+// certificate authority among them read as the top-level ones are.
 function npmRegistriesEntries(root) {
   return collectionChildren(root, "key").flatMap((registry) => {
     const fields = scalarFields(registry);
     const verdict = registryVerdict(registry.key.startsWith("//") ? `https:${registry.key}` : registry.key);
-    const entry = configOrCovering(registry.line, verdict);
-    const strictSsl = fields.filter(({ field }) => field.key === "enableStrictSsl").flatMap(({ field }) => strictSslEntries(field));
-    return [entry, ...strictSsl];
+    const entries = [configOrCovering(registry.line, verdict)];
+    for (const { field } of fields) {
+      if (field.key === "enableStrictSsl") for (const entry of yarnStrictSslEntries(field)) entries.push(entry);
+      if (YARN_CA_SETTINGS.includes(field.key)) for (const entry of trustEntries(field)) entries.push(entry);
+    }
+    return entries;
   });
 }
 
@@ -62,7 +80,8 @@ const YARNRC_YML_SECTIONS = new Map([
   ["npmScopes", section(npmScopesEntries)],
   ["npmRegistries", section(npmRegistriesEntries)],
   ["unsafeHttpWhitelist", section(unsafeHttpEntries, unreadableConfig)],
-  ["enableStrictSsl", section(strictSslEntries, unreadableConfig)],
+  ["enableStrictSsl", section(yarnStrictSslEntries, unreadableConfig)],
+  ...YARN_CA_SETTINGS.map((setting) => [setting, section(trustEntries, unreadableConfig)]),
   ["packageExtensions", section(packageExtensionsEntries, unnamedEntry)],
 ]);
 
@@ -149,6 +168,9 @@ const namedRegistriesEntries = (root) =>
 
 const PNPM_SETTINGS_SECTIONS = new Map([
   ["registry", section(registryScalarEntries)],
+  ["strictSsl", section(strictSslReader("strictSsl"), unreadableConfig)],
+  ["ca", section(trustEntries, unreadableConfig)],
+  ["cafile", section(trustEntries, unreadableConfig)],
   ["registries", section((root) => collectionChildren(root, "key").map(pnpmRegistryEntry))],
   ["namedRegistries", section(namedRegistriesEntries)],
   ["catalog", section(catalogEntries, unnamedEntry)],
@@ -158,7 +180,8 @@ const PNPM_SETTINGS_SECTIONS = new Map([
 ]);
 const PNPM_WORKSPACE_SECTIONS = new Map([...PNPM_SETTINGS_SECTIONS, ["packages", section(pnpmPackagesEntries, unnamedEntry)]]);
 
-// .yarnrc.yml (Yarn 2 and later): npmRegistryServer, npmScopes, npmRegistries and unsafeHttpWhitelist.
+// .yarnrc.yml (Yarn 2 and later): npmRegistryServer, npmScopes, npmRegistries, unsafeHttpWhitelist, enableStrictSsl,
+// caFilePath, httpsCaFilePath and packageExtensions.
 const readYarnrcYml = (text, folder = "") => readYamlConfig(text, folder, YARNRC_YML_SECTIONS);
 
 // pnpm-workspace.yaml: its registry settings, catalogs and overrides, and the workspace's folders.

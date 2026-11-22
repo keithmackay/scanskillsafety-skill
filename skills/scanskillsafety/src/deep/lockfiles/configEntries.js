@@ -14,6 +14,11 @@ const configEntry = (line, classified, extra = {}) => ({ line, from: "config", c
 const certificateChecksOff = (setting) =>
   Object.freeze({ expected: false, kind: "http", address: null, text: `${setting} turns off certificate checks` });
 
+// A certificate authority the repository supplies, so a server it vouches for passes as any host: reported as plain http is, with
+// the setting named, and the certificate never shown.
+const trustedCertificatesReplaced = (setting) =>
+  Object.freeze({ expected: false, kind: "http", address: null, text: `${setting} replaces the trusted certificates` });
+
 // What a registry setting names: the official registry, a mirror (host) or plain http; anything else (a path, a git address, text
 // that is no address) is one it cannot read.
 function registryVerdict(address) {
@@ -34,4 +39,13 @@ function registryEntry(line, verdict, scope = null) {
   return configOrCovering(line, verdict, scope === null ? { covers: [null] } : { covers: [scope], scope });
 }
 
-module.exports = { certificateChecksOff, configEntry, configOrCovering, coveringUnreadable, registryEntry, registryVerdict, unreadableConfig };
+module.exports = {
+  certificateChecksOff,
+  configEntry,
+  configOrCovering,
+  coveringUnreadable,
+  registryEntry,
+  registryVerdict,
+  trustedCertificatesReplaced,
+  unreadableConfig,
+};
