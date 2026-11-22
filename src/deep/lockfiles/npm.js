@@ -9,6 +9,7 @@ const {
   jsonMembers,
   OUTSIDE_PROJECT,
   parseJson,
+  pathFrom,
   ROOT_OBJECT,
   SEMVER,
   staysInside,
@@ -49,8 +50,9 @@ function readNpmLock(text, folder = "") {
   const lineOf = jsonKeyLines(text);
   if (version === 2 || version === 3) {
     // Keys without node_modules/ are the project's own workspace folders, and a link entry stands for a folder linked in place of
-    // a package: either one that leaves the repository is a path outside the project, and one inside it, whose files are scanned,
-    // gives nothing. A link entry with no path is one it cannot read.
+    // a package: either one that leaves the repository is a path outside the project; a workspace folder inside it is listed as one
+    // (`{ workspace }`, its path in the repository), and a linked folder inside it, whose files are scanned, gives nothing. A link
+    // entry with no path is one it cannot read.
     const out = [];
     const installed = [];
     const packages = [];
@@ -62,7 +64,8 @@ function readNpmLock(text, folder = "") {
     };
     for (const [key, entry] of Object.entries(isObject(json.packages) ? json.packages : {})) {
       if (!key.includes("node_modules/")) {
-        if (key !== "" && !staysInside(folder, key)) {
+        if (key !== "" && staysInside(folder, key)) out.push({ workspace: pathFrom(folder, key) });
+        else if (key !== "") {
           // A workspace is named by its own name, or else by its folder's.
           const folderName = key.slice(key.lastIndexOf("/") + 1) || null;
           const named = isObject(entry) && typeof entry.name === "string" ? entry.name : folderName;

@@ -9,6 +9,7 @@ const {
   linesOf,
   LONE_CR_OR_TAB,
   opensUnclosed,
+  pathFrom,
   PLAIN_NAME,
   startsWithAny,
   staysInside,
@@ -187,8 +188,8 @@ function readClassicLine(entry, line) {
 // file with a `__metadata:` line is read here by the stricter Berry rules, under which a classic-shaped line makes its entry
 // unreadable, so a source Yarn reads is never taken for the registry. Berry is YAML, read only as Berry writes it: a lone
 // carriage return or a tab makes the file one it cannot read, a header in any other shape is an entry it cannot name, and only an
-// entry whose resolution is a `workspace:` folder inside the repository (read from the lockfile's `folder`) is skipped; one
-// outside it is classified as that source. A classic entry is never skipped.
+// entry whose resolution is a `workspace:` folder inside the repository (read from the lockfile's `folder`) is listed as a
+// workspace folder (`{ workspace }`, its path in the repository) rather than a package; one outside it is classified as that source. A classic entry is never skipped.
 function readYarnLock(text, folder = "") {
   const lines = linesOf(text);
   const berry = lines.includes("__metadata:");
@@ -199,7 +200,8 @@ function readYarnLock(text, folder = "") {
   let entry = null;
   const finish = () => {
     const workspace = entry && entry.workspace !== false && !entry.unreadable;
-    if (entry && !(workspace && staysInside(folder, entry.workspace))) {
+    if (workspace && staysInside(folder, entry.workspace)) out.push({ workspace: pathFrom(folder, entry.workspace) });
+    else if (entry) {
       const workspaceSource = workspace ? { source: `${WORKSPACE}${entry.workspace}` } : null;
       const origin = entry.unreadable ? UNREADABLE_ENTRY : workspaceSource ?? entry.origin ?? noOrigin(entry);
       out.push({ name: entry.name, line: entry.line, version: entry.version ?? null, ...origin });

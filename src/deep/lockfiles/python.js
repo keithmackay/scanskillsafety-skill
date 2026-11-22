@@ -13,7 +13,9 @@ const POETRY_SOURCE_FIELDS = new Set(["type", "url", "reference", "resolved_refe
 const UV_SOURCE_KINDS = ["registry", "git", "url", "path", "directory", "editable", "virtual"];
 // The fields uv writes in an `sdist` or a `wheels` item.
 const UV_FILE_FIELDS = new Set(["url", "path", "filename", "hash", "size", "upload-time"]);
-const PROJECT = Object.freeze({ project: true });
+// The project itself, or a workspace member of it, at its folder in the repository: listed as a workspace folder, not a package.
+const project = (workspace) => Object.freeze({ project: true, workspace });
+const isProject = (verdict) => verdict?.project === true;
 // A Poetry block with no [package.source]: from whatever index the project is set to use.
 const NO_SOURCE = Object.freeze({});
 
@@ -67,7 +69,7 @@ function uvTable(value) {
 }
 
 // A uv `source`: exactly one kind, a string: an index (a folder when it is a path), a git repository with its commit after `#`, one
-// archive, a file or folder, or the project itself (`editable` or `virtual` inside the repository).
+// archive, a file or folder, or the project itself or a member of it (`editable` or `virtual` inside the repository, at its folder).
 function uvSourceVerdict(value, folder) {
   const fields = uvTable(value);
   const kinds = fields ? UV_SOURCE_KINDS.filter((kind) => fields.has(kind)) : [];
@@ -79,7 +81,7 @@ function uvSourceVerdict(value, folder) {
   if (kind === "git") return pythonAddress(address.raw, folder, { git: true });
   if (kind === "url") return pythonAddress(address.raw, folder, { direct: true });
   const verdict = pythonAddress(address.raw, folder, { pathField: true, role: kind === "registry" ? "index" : undefined });
-  return (kind === "editable" || kind === "virtual") && verdict === LOCAL ? PROJECT : verdict;
+  return (kind === "editable" || kind === "virtual") && verdict === LOCAL ? project(pathFrom(folder, address.raw)) : verdict;
 }
 
 // A uv `sdist` or `wheels` item: the address of its `url` or its `path`, null when it names neither.
@@ -109,7 +111,7 @@ function uvOrigin(block, folder) {
     else verdicts.push(UNREADABLE);
   }
   const named = verdicts.filter((verdict) => verdict !== null);
-  if (named[0] === PROJECT) return named.length === 1 ? PROJECT : UNREADABLE_ENTRY;
+  if (isProject(named[0])) return named.length === 1 ? named[0] : UNREADABLE_ENTRY;
   const reported = named.find((verdict) => !verdict.expected && verdict.kind !== "local");
   return { classified: reported ?? named[0] };
 }
@@ -140,7 +142,7 @@ function fieldText(block, name) {
   return field.value.kind === "string" && field.value.plain ? field.value.raw : null;
 }
 
-// What a finished block stands for: the project itself (skipped, `{ project: true }`), or an entry. A block in a shape the tool
+// What a finished block stands for: the project itself or a member (`{ project: true, workspace }`), or an entry. A block in a shape the tool
 // does not write, or with neither a version nor a source of its own, is one it cannot read; one with no name it can read is one
 // it cannot name.
 function blockEntry(block, format, folder) {
@@ -150,7 +152,7 @@ function blockEntry(block, format, folder) {
   const odd = format.foreignFields.some((field) => block.fields.has(field));
   const unversioned = version === undefined && origin === NO_SOURCE;
   const unreadable = block.unreadable || odd || name === null || version === null || unversioned;
-  if (origin === PROJECT && !unreadable) return PROJECT;
+  if (isProject(origin) && !unreadable) return origin;
   if (typeof name !== "string") return unnamedEntry(block.line);
   return { name, version: version ?? null, line: block.fields.get("name").line, ...(unreadable ? UNREADABLE_ENTRY : origin) };
 }
@@ -189,7 +191,7 @@ function readPackageBlocks(text, format, folder) {
     if (!block) return;
     const entry = blockEntry(block, format, folder);
     block = null;
-    if (entry !== PROJECT) out.push(entry);
+    out.push(isProject(entry) ? { workspace: entry.workspace } : entry);
   };
   for (const statement of tomlStatements(text, layout)) {
     if (statement.header) {

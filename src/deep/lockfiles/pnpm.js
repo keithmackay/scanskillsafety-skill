@@ -198,8 +198,8 @@ const IMPORTER_DEPENDENCY_SECTIONS = ["dependencies", "devDependencies", "option
 // and its fields at 8. Lines under another section are passed over. An odd indentation, a line that is no field where one is
 // read, or a line deeper than a dependency's fields means the file is not one it can read; a dependency section or a dependency
 // written in a flow map, or a version that is not a scalar on its line, is a source it could not read. An importer's folder, or a
-// linked folder read from it, that leaves the repository is a path outside the project; one inside it, whose files are scanned,
-// gives nothing.
+// linked folder read from it, that leaves the repository is a path outside the project; an importer's folder inside it is listed
+// as a workspace folder (`{ workspace }`), and a linked folder inside it, whose files are scanned, gives nothing.
 function readImporterLine(importers, indent, text, lineNumber, folder) {
   if (indent % 2 === 1) throw new Unreadable(PNPM_LAYOUT);
   const field = fieldOf(text);
@@ -213,7 +213,7 @@ function readImporterLine(importers, indent, text, lineNumber, folder) {
     const importer = unquote(field.key);
     const importerFolder = staysInside(folder, importer) ? pathFrom(folder, importer) : null;
     Object.assign(importers, { folder: importerFolder, section: null, dependency: null });
-    return importers.folder === null ? outside(null) : null;
+    return importers.folder === null ? outside(null) : { workspace: importers.folder };
   }
   if (indent === 4) {
     const dependencySection = IMPORTER_DEPENDENCY_SECTIONS.includes(field.key);
@@ -247,6 +247,8 @@ function readPnpmLock(text, folder = "") {
   let inPackages = false;
   let inImporters = false;
   const importers = { folder, section: null, dependency: null };
+  // The workspace folders the importers name, kept apart so they never count as packages read.
+  const workspaces = [];
   let entries = 0;
   let entry = null;
   const finish = () => {
@@ -266,7 +268,7 @@ function readPnpmLock(text, folder = "") {
     }
     if (inImporters) {
       const link = readImporterLine(importers, indent, line.slice(indent), i + 1, folder);
-      if (link) out.push(link);
+      if (link) (link.workspace === undefined ? out : workspaces).push(link);
       return;
     }
     if (!inPackages) return;
@@ -280,7 +282,7 @@ function readPnpmLock(text, folder = "") {
     else readPnpmDeeperLine(entry, indent, line.slice(indent));
   });
   finish();
-  return found(out, entries);
+  return [...found(out, entries), ...workspaces];
 }
 
 module.exports = { readPnpmLock };

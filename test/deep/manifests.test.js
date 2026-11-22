@@ -195,6 +195,48 @@ test("package.json: with an npm lockfile read in its own folder, package.json is
   assert.deepEqual(unread.sourced, [item("npm", "package.json")("evil", 1, "git", "https://evil.example/evil.git")]);
 });
 
+// A read lockfile's workspace folders: their manifests are covered by it, as one beside it is.
+const EVIL_DEPENDENCY = JSON.stringify({ dependencies: { evil: "git+https://evil.example/evil.git" } });
+const EVIL_PYPROJECT = '[tool.uv.sources]\nx = { git = "https://e.example/x" }\n';
+const WORKSPACE_LOCKS = [
+  ["package-lock.json", JSON.stringify({
+    lockfileVersion: 3,
+    packages: { "": { name: "root" }, "packages/a": { name: "a" }, "node_modules/a": { resolved: "packages/a", link: true }, "../outside": { name: "o" } },
+  }, null, 2)],
+  ["pnpm-lock.yaml", "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n\n  packages/a: {}\n\n  ../outside: {}\n"],
+  ["yarn.lock", '__metadata:\n  version: 8\n  cacheKey: 10\n\n"root@workspace:.":\n  version: 0.0.0-use.local\n  resolution: "root@workspace:."\n  languageName: unknown\n  linkType: soft\n\n"a@workspace:packages/a":\n  version: 0.0.0-use.local\n  resolution: "a@workspace:packages/a"\n  languageName: unknown\n  linkType: soft\n'],
+];
+
+test("package.json: a workspace folder a read lockfile lists (npm package keys, pnpm importers, Yarn Berry workspace: resolutions) is covered by it; one it does not list is read", () => {
+  for (const [lockPath, lockText] of WORKSPACE_LOCKS) {
+    const read = readPackages([
+      { path: lockPath, text: lockText },
+      { path: "packages/a/package.json", text: EVIL_DEPENDENCY },
+      { path: "packages/b/package.json", text: EVIL_DEPENDENCY },
+    ]);
+    assert.deepEqual(read.sourced.filter((i) => i.file.endsWith("package.json")), [item("npm", "packages/b/package.json")("evil", 1, "git", "https://evil.example/evil.git")], lockPath);
+    assert.deepEqual(read.namesOnly, ["packages/b/package.json"], lockPath);
+    const leftOut = [{ path: "packages/a/package.json", reason: "larger than 5 MB" }, { path: "packages/b/package.json", reason: "larger than 5 MB" }];
+    assert.deepEqual(readPackages([{ path: lockPath, text: lockText }], leftOut).couldNotRead, [{ file: "packages/b/package.json", reason: "larger than 5 MB, not checked" }], lockPath);
+  }
+});
+
+test("package.json: a lockfile in a subfolder covers the workspace folders it lists from its own folder", () => {
+  const [, lockText] = WORKSPACE_LOCKS[0];
+  const read = readPackages([{ path: "app/package-lock.json", text: lockText }, { path: "app/packages/a/package.json", text: EVIL_DEPENDENCY }, { path: "packages/a/package.json", text: EVIL_DEPENDENCY }]);
+  assert.deepEqual(read.sourced.filter((i) => i.file.endsWith("package.json")).map((i) => i.file), ["packages/a/package.json"]);
+});
+
+test("pyproject.toml: a uv.lock's editable or virtual member folders are covered by it; a folder it does not list is read", () => {
+  const uvLock = 'version = 1\n\n[[package]]\nname = "root"\nversion = "0.1.0"\nsource = { virtual = "." }\n\n[[package]]\nname = "a"\nversion = "0.1.0"\nsource = { editable = "packages/a" }\n';
+  const read = readPackages([
+    { path: "uv.lock", text: uvLock },
+    { path: "packages/a/pyproject.toml", text: EVIL_PYPROJECT },
+    { path: "packages/b/pyproject.toml", text: EVIL_PYPROJECT },
+  ]);
+  assert.deepEqual(read.sourced, [item("PyPI", "packages/b/pyproject.toml")("x", 2, "git", "https://e.example/x")]);
+});
+
 test("package.json: Windows line endings give the same lines", () => {
   const text = '{\r\n  "dependencies": {\r\n    "a": "^1",\r\n    "b": "github:u/b"\r\n  }\r\n}\r\n';
   assert.deepEqual(readOne("package.json", text).sourced, [item("npm", "package.json")("b", 4, "git", "https://github.com/u/b")]);

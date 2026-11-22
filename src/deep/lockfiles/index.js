@@ -133,9 +133,11 @@ function sourcedLine(ecosystem, file, { line, from, classified, scope }) {
 // One file's entries sorted by source: those from the official registry, those from anywhere else (local ones dropped; a line
 // naming the official registry gives nothing), the files it names to be read in turn (a requirements file's -r and -c), whether
 // any source could not be read, the names of registry packages whose host it does not record, and the scopes whose registry its
-// settings name (null for the unscoped registry), and the config files it loads (an .npmrc's userconfig, globalconfig, prefix).
+// settings name (null for the unscoped registry), the config files it loads (an .npmrc's userconfig, globalconfig, prefix), and the
+// workspace folders inside the repository a lockfile lists, as their paths in the repository.
 function classifyEntries(ecosystem, file, entries) {
   const registry = [];
+  const workspaces = [];
   const sourced = [];
   const requires = [];
   const unrecorded = [];
@@ -149,6 +151,10 @@ function classifyEntries(ecosystem, file, entries) {
     }
     if (readEntry.follows !== undefined) {
       follows.push(readEntry);
+      continue;
+    }
+    if (readEntry.workspace !== undefined) {
+      workspaces.push(readEntry.workspace);
       continue;
     }
     if (readEntry.from) {
@@ -167,7 +173,7 @@ function classifyEntries(ecosystem, file, entries) {
       unreadable ||= verdict.unreadable === true;
     }
   }
-  return { registry, sourced, requires, unreadable, unrecorded, covers, follows };
+  return { registry, sourced, requires, unreadable, unrecorded, covers, follows, workspaces };
 }
 
 // A package's npm scope (`@myco` for `@myco/x`), or null for an unscoped name.
@@ -320,9 +326,9 @@ function readPackages(files, leftOut = []) {
   // Files given the reason "a package source it could not read", each once.
   const unreadableFiles = new Set();
   const pnpmLocked = new Set([...ownFiles, ...ownLeftOut].filter((f) => baseName(f.path) === "pnpm-lock.yaml").map((f) => folderOf(f.path)));
-  // Each folder with a lockfile proper that was read, by ecosystem: a manifest of that ecosystem in the same folder is not read for
-  // packages (and, when that is all it is read for, not listed when left out). A lockfile elsewhere is another project's, and says
-  // nothing of this one. Ecosystems with a requirements file have their manifests read only for where they fetch from, since the
+  // Each folder with a lockfile proper that was read, or listed by one as a workspace folder, by ecosystem: a manifest of that
+  // ecosystem in such a folder is not read for packages (and, when that is all it is read for, not listed when left out). A
+  // lockfile elsewhere is another project's, and says nothing of this one. Ecosystems with a requirements file have their manifests read only for where they fetch from, since the
   // requirements file's pins are what is checked.
   const lockRead = new Set();
   const lockedHere = (ecosystem, path) => lockRead.has(`${ecosystem}\0${folderOf(path)}`);
@@ -338,7 +344,8 @@ function readPackages(files, leftOut = []) {
       result.couldNotRead.push({ file: f.path, reason: read.reason });
       return null;
     }
-    const { registry, sourced, requires, unreadable, unrecorded, covers, follows } = classifyEntries(kind.ecosystem, f.path, read.entries);
+    const { registry, sourced, requires, unreadable, unrecorded, covers, follows, workspaces } = classifyEntries(kind.ecosystem, f.path, read.entries);
+    for (const folder of workspaces) lockRead.add(`${kind.ecosystem}\0${folder}`);
     if (!sourcesOnly) for (const entry of registry) add(kind.ecosystem, f.path, entry);
     for (const item of sourced) result.sourced.push(item);
     if (unrecorded.length > 0) unrecordedFiles.push({ file: f.path, ecosystem: kind.ecosystem, names: unrecorded });
