@@ -939,3 +939,46 @@ test(".npmrc: a config file it cannot follow is one it cannot read, covering a l
   assert.deepEqual(leftOut.sourced, [npmConfig(".npmrc")(1, "unreadable", null)]);
   assert.deepEqual(leftOut.notRecorded, []);
 });
+
+// uv's override, constraint and dependency-metadata lists
+
+test("uv: override-dependencies, constraint-dependencies and dependency-metadata requires-dist are read for sources, in uv.toml and in pyproject.toml with a lockfile", () => {
+  const uvText = lines(
+    'override-dependencies = ["over @ https://e.example/over-1.0.zip", "numpy<2"]',
+    'constraint-dependencies = ["con @ git+https://e.example/con"]',
+    "[[dependency-metadata]]",
+    'name = "x"',
+    'version = "1.0"',
+    'requires-dist = ["dep @ https://e.example/dep-1.0.zip", "idna"]',
+  );
+  const item = (file) => (name, line, kind, address) => ({ ecosystem: "PyPI", file, line, name, version: null, kind, address });
+  const uv = read([["uv.toml", uvText]]);
+  assert.deepEqual(uv.sourced, [
+    item("uv.toml")("over", 1, "url", "https://e.example/over-1.0.zip"),
+    item("uv.toml")("con", 2, "git", "https://e.example/con"),
+    item("uv.toml")("dep", 6, "url", "https://e.example/dep-1.0.zip"),
+  ]);
+  assert.deepEqual(uv.packages, []);
+  const uvLock = 'version = 1\n\n[[package]]\nname = "t"\nversion = "0.1.0"\nsource = { editable = "." }\n';
+  const pyprojectText = lines(
+    "[tool.uv]",
+    'override-dependencies = ["over @ https://e.example/over-1.0.zip", "numpy<2"]',
+    'constraint-dependencies = ["con @ git+https://e.example/con"]',
+    "[[tool.uv.dependency-metadata]]",
+    'name = "x"',
+    'version = "1.0"',
+    'requires-dist = ["dep @ https://e.example/dep-1.0.zip", "idna"]',
+  );
+  const pyproject = read([["pyproject.toml", pyprojectText], ["uv.lock", uvLock]]);
+  assert.deepEqual(pyproject.sourced.map((s) => [s.name, s.line, s.kind]), [["over", 2, "url"], ["con", 3, "git"], ["dep", 7, "url"]]);
+  assert.deepEqual(pyproject.packages, []);
+});
+
+test("uv: those lists in a shape uv does not take are ones it cannot read", () => {
+  const unread = (file, line) => ({ ecosystem: "PyPI", file, line, name: null, version: null, kind: "unreadable", address: null });
+  for (const [text, line] of [['override-dependencies = "x"', 1], ['override-dependencies.x = ["y"]', 1], ['[[dependency-metadata]]\nrequires-dist = "x"', 2], ['dependency-metadata = ["x"]', 1]]) {
+    const result = read([["uv.toml", text]]);
+    assert.deepEqual(result.sourced, [unread("uv.toml", line)], text);
+    assert.deepEqual(result.couldNotRead, [{ file: "uv.toml", reason: UNREADABLE_SOURCE }], text);
+  }
+});

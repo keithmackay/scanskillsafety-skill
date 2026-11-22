@@ -346,6 +346,33 @@ const uvConfigEntries = (values, prefix, folder) => [
   ...sourceTableEntries(values, [...prefix, "index"], folder, { roleOf: UV_INDEX_ROLE }),
 ];
 
+// uv's lists of PEP 508 strings that apply to every install, read whether or not a lockfile is present.
+const UV_REQUIREMENT_LISTS = ["override-dependencies", "constraint-dependencies"];
+
+// uv's override and constraint lists and each `dependency-metadata` table's `requires-dist` at `prefix` (the top of uv.toml, or
+// [tool.uv] in pyproject.toml), as a manifest's found entries whose names are never sent to OSV; a list or table in any other
+// shape is one it cannot read.
+function uvRequirementFound(values, prefix, folder) {
+  const entries = [];
+  for (const { path, value } of values) {
+    const rest = after(path, prefix);
+    if (rest === null || !UV_REQUIREMENT_LISTS.includes(rest[0])) continue;
+    if (rest.length === 1) for (const entry of requirementListEntries(value, folder)) entries.push(entry);
+    else entries.push(unnamedEntry(value.line));
+  }
+  const { tables, badLine } = arrayTables(values, [...prefix, "dependency-metadata"]);
+  if (badLine !== null) entries.push(unnamedEntry(badLine));
+  for (const { fields, line, nested } of tables) {
+    if (fields === null || nested.has("requires-dist")) entries.push(unnamedEntry(line));
+    else if (fields.has("requires-dist")) for (const entry of requirementListEntries(fields.get("requires-dist"), folder)) entries.push(entry);
+  }
+  return entries.map((entry) => ({ entry, checked: false }));
+}
+
+// Those lists as entries, without a manifest's other lists: only the packages from outside the registry.
+const uvRequirementEntries = (values, prefix, folder) =>
+  manifestEntries(uvRequirementFound(values, prefix, folder), (name) => (name === null ? null : normalisePyPI(name)));
+
 // pdm.toml's indexes: [pypi] url, PyPI's replacement, an index; and [pypi.<name>] url, an index or, with `type = "find_links"`, a
 // find-links page. A url in any other place under [pypi], one that is not a string, or a type PDM does not take is one it cannot
 // read.
@@ -389,8 +416,6 @@ const DEPENDENCY_GROUPS = ["dependency-groups"];
 const OTHER_REQUIREMENT_LISTS = [
   ["build-system", "requires"],
   ["tool", "uv", "dev-dependencies"],
-  ["tool", "uv", "override-dependencies"],
-  ["tool", "uv", "constraint-dependencies"],
   ["tool", "uv", "build-constraint-dependencies"],
 ];
 // Tables of named lists that are build or development inputs, each with the form its items may take.
@@ -507,8 +532,8 @@ function workspaceMemberEntries(value, folder) {
 }
 
 // pyproject.toml's dependencies in every section that can name a source: PEP 508 strings in [project] dependencies,
-// [project.optional-dependencies], [dependency-groups], [build-system] requires, uv's dev, override, constraint and build
-// dependencies and PDM's dev-dependencies; [tool.uv.sources]; Poetry's dependency tables. Pixi and Hatch environments are not
+// [project.optional-dependencies], [dependency-groups], [build-system] requires, uv's dev, override, constraint, build and
+// dependency-metadata dependencies and PDM's dev-dependencies; [tool.uv.sources]; Poetry's dependency tables. Pixi and Hatch environments are not
 // read. Each value is placed by its whole key path, so dotted keys, inline tables and table headers read alike, and any value in
 // those sections in a shape it does not know is one it cannot read. The names of [project] dependencies and
 // [tool.poetry.dependencies] are sent to OSV. Its settings that name an index or a source follow, read from the same values.
@@ -544,11 +569,16 @@ function readPyproject(text, folder = "") {
     if (unit.list) return requirementListEntries(unit.list, folder, unit.form).map((entry) => ({ entry, checked: unit.checked }));
     return dependencyEntries(unit.dependency, folder, indexes);
   });
+  for (const uvFound of uvRequirementFound(values, ["tool", "uv"], folder)) found.push(uvFound);
   const entries = manifestEntries(found, (name) => (name === null ? null : normalisePyPI(name)));
   return [...entries, ...pyprojectConfigEntries(values, folder)];
 }
 
-// pyproject.toml read only for its settings that name where packages come from, for a target with a uv or Poetry lockfile.
-const readPyprojectConfig = (text, folder = "") => pyprojectConfigEntries(tomlValues(withoutBom(text)), folder);
+// pyproject.toml read, for a target with a uv or Poetry lockfile, only for its settings that name where packages come from and
+// uv's lists that apply to every install.
+function readPyprojectConfig(text, folder = "") {
+  const values = tomlValues(withoutBom(text));
+  return [...uvRequirementEntries(values, ["tool", "uv"], folder), ...pyprojectConfigEntries(values, folder)];
+}
 
-module.exports = { readPyproject, readPyprojectConfig, tomlValues, uvConfigEntries, pdmTomlEntries };
+module.exports = { readPyproject, readPyprojectConfig, tomlValues, uvConfigEntries, uvRequirementEntries, pdmTomlEntries };

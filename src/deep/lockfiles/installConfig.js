@@ -4,7 +4,7 @@
 
 const { classifySource, EXPECTED, UNREADABLE } = require("../packageSources");
 const { configEntry, fieldOf, leadingSpaces, linesOf, manifestEntries, startsWithAny, unnamedEntry, workspaceEntries } = require("./shared");
-const { pdmTomlEntries, tomlValues, uvConfigEntries } = require("./pyproject");
+const { pdmTomlEntries, tomlValues, uvConfigEntries, uvRequirementEntries } = require("./pyproject");
 const { dependencyFound, overrideTarget } = require("./packageJson");
 
 const withoutBom = (text) => (text.startsWith("\uFEFF") ? text.slice(1) : text);
@@ -518,8 +518,11 @@ const readPnpmWorkspace = (text, folder = "") => readYamlConfig(text, folder, PN
 // pnpm-workspace.yaml beside a pnpm lockfile, whose importers already name the workspace's folders.
 const readPnpmWorkspaceSettings = (text, folder = "") => readYamlConfig(text, folder, PNPM_SETTINGS_SECTIONS);
 
-// uv.toml: uv's index settings at its top level and in [pip].
-const readUvToml = (text, folder = "") => uvConfigEntries(tomlValues(withoutBom(text)), [], folder);
+// uv.toml: uv's index settings at its top level and in [pip], and its lists that apply to every install.
+function readUvToml(text, folder = "") {
+  const values = tomlValues(withoutBom(text));
+  return [...uvConfigEntries(values, [], folder), ...uvRequirementEntries(values, [], folder)];
+}
 
 // pdm.toml: PDM's index settings.
 const readPdmToml = (text, folder = "") => pdmTomlEntries(tomlValues(withoutBom(text)), folder);
