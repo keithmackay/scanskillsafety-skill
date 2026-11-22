@@ -5,6 +5,7 @@
 
 const { formatText, pushFinding } = require("../scanTarget");
 const { printable, printableCut, printableLines } = require("../printable");
+const { n } = require("./util");
 
 const COMMAND_MAX = 300;
 const SITE_TEXT_MAX = 300;
@@ -46,7 +47,6 @@ function packageLines(packages, findings) {
   return lines;
 }
 
-const n = (x) => x.toLocaleString("en-US");
 const commits = (count) => `${n(count)} commit${count === 1 ? "" : "s"}`;
 const dayOf = (timestamp) => (timestamp === null ? "an unknown date" : printable(timestamp.slice(0, 10)));
 

@@ -573,7 +573,7 @@ test("packages that record no host under a mirror .npmrc are still sent to OSV; 
   const result = await runDeep(root, { ...ALL_OFF, osv: true }, { fetchImpl });
   assert.deepEqual(sentToOsv(fetchImpl), ["flatmap-stream@0.1.1", "minimist@1.2.0"]);
   assert.equal(result.rating, "yellow");
-  assert.deepEqual(sourceFindings(result), [sourceFinding(".npmrc", 1, "names the npm registry https://npm.example.com")]);
+  assert.deepEqual(sourceFindings(result), [sourceFinding(".npmrc", 1, "names the npm registry https://npm.example.com for installs in this folder")]);
   assert.equal(result.deep.packages.notSentToOsv, 0);
   assert.equal(result.deep.packages.checked, 2);
 });
@@ -638,6 +638,15 @@ test("past 100 sources, each kept one is a warning and the packages of the rest 
   assert.deepEqual(sourceFindings(result)[0], sourceFinding("package-lock.json", 7, `g0 comes from git https://github.com/u/g0.git (commit ${SHA})`));
 });
 
+test("a package name longer than npm allows is cut in the warning and the entry", async () => {
+  const name = `x${"a".repeat(300)}`;
+  const root = makeTree({ "SKILL.md": "Formats tables.", "package.json": JSON.stringify({ dependencies: { [name]: "github:u/r" } }, null, 2) });
+  const result = await runDeep(root, ALL_OFF, { fetchImpl: fakeFetch({}) });
+  const cut = `${name.slice(0, 214)}…`;
+  assert.deepEqual(sourceFindings(result), [sourceFinding("package.json", 3, `${cut} comes from git https://github.com/u/r`)]);
+  assert.equal(result.deep.packages.offRegistry[0].packages[0].name, cut);
+});
+
 test("each kind of source has its own warning text, built from the classified fields only", async () => {
   const root = makeTree({
     "SKILL.md": "Formats tables.",
@@ -647,7 +656,7 @@ test("each kind of source has its own warning text, built from the classified fi
   });
   const result = await runDeep(root, ALL_OFF, { fetchImpl: fakeFetch({}) });
   assert.deepEqual(sourceFindings(result).map((f) => `${f.file}:${f.line} ${f.detail}`), [
-    ".npmrc:1 names the npm registry https://npm.example.com for @myco",
+    ".npmrc:1 names the npm registry https://npm.example.com for installs in this folder for @myco",
     ".npmrc:2 strict-ssl=false turns off certificate checks",
     "package.json:3 a comes from a script that produces the package",
     "package.json:4 b comes from git https://github.com/u/b",
@@ -655,7 +664,7 @@ test("each kind of source has its own warning text, built from the classified fi
     "package.json:6 d comes from http://pkgs.example",
     "package.json:7 2 packages come from https://npm.jsr.io",
     "requirements.txt:1 names the package index https://pypi.example.com",
-    "requirements.txt:2 an index set from an environment variable",
+    "requirements.txt:2 names an index set from an environment variable",
     "requirements.txt:3 allows plain http from http://pypi.example.com",
   ]);
 });

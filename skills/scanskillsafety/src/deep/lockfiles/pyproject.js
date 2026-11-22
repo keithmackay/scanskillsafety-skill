@@ -10,7 +10,7 @@ const { pythonAddress } = require("./python");
 const { BUILD, EDITABLE, GROUPS, requirementListEntries } = require("./requirementLists");
 const { pyprojectConfigEntries, UV_REQUIREMENT_LISTS, uvRequirementEntries, uvRequirementFound } = require("./pythonConfig");
 
-const NAMED_INDEX = Object.freeze({ expected: false, kind: "host", address: null, text: "a named index" });
+const NAMED_INDEX = Object.freeze({ expected: false, kind: "host", address: null, text: "an index it cannot resolve" });
 
 const isTrue = (value) => value.kind === "scalar" && value.text === "true";
 

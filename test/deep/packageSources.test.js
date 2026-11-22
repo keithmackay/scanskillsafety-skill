@@ -487,3 +487,20 @@ test("grouping keeps memory bounded by the entries kept, however many addresses 
   assert.deepEqual(more, { packages: 1000000 - 100 * 5, lines: 0 });
   assert.ok(grownMb < 8, `grew by ${grownMb} MB`);
 });
+
+test("a package name longer than npm allows is cut to 214 characters, whole characters only, with an ellipsis", () => {
+  const long = `${"a".repeat(213)}\u{1F600}${"b".repeat(100)}`;
+  const { entries } = groupSources([hosted("package-lock.json", 1, long), hosted("package-lock.json", 2, "a".repeat(214))]);
+  assert.deepEqual(entries[0].packages.map((p) => p.name), [`${"a".repeat(213)}\u{1F600}…`, "a".repeat(214)]);
+});
+
+test("items with no line sort before those with one, in file order, and still group", () => {
+  const { entries } = groupSources([
+    hosted("b.json", 4, "x"),
+    hosted("b.json", null, "y"),
+    hosted("a.json", undefined, "z"),
+    hosted("b.json", undefined, "w"),
+  ]);
+  assert.deepEqual(entries.map((e) => [e.file, e.line, e.total]), [["a.json", undefined, 1], ["b.json", null, 3]]);
+  assert.deepEqual(entries[1].packages.map((p) => p.name), ["y", "w", "x"]);
+});

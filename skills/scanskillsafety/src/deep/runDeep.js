@@ -17,6 +17,7 @@ const { installTimeEntries } = require("./installTime");
 const { readPackages, NO_PINS_REASON, UNREADABLE_SOURCE_REASON } = require("./lockfiles");
 const { checkPackages, osvUrl } = require("./osv");
 const { groupSources } = require("./packageSources");
+const { sourceDetail } = require("./sourceText");
 const { compareWithSite, siteUrl } = require("./siteCompare");
 const { findClaude } = require("./runClaude");
 const { chooseForReading, planReading, readEveryFile, quoteLine } = require("./reading");
@@ -195,42 +196,14 @@ async function claudeStage({ plan, calls }, files, options, claudePath, deps) {
   };
 }
 
-const n = (x) => x.toLocaleString("en-US");
-
-// What a source entry's packages come from, after "comes from" or "come from".
-function packageSourceText({ kind, address, commit, text }) {
-  if (address === null) return text;
-  if (kind === "git") return `git ${address}${commit ? ` (commit ${commit})` : ""}`;
-  if (kind === "bundled") return `${address}, ${text}`;
-  return address;
-}
-
-// What a setting or index line names.
-function lineSourceText({ kind, address, text, from, ecosystem, scope }) {
-  if (kind === "unreadable") return "names a source it could not read";
-  if (address === null) return text;
-  if (kind === "http") return `allows plain http from ${address}`;
-  if (kind === "bundled") return `names ${address}, ${text}`;
-  if (from === "requirements") return `names the package index ${address}`;
-  return `names the ${ecosystem} registry ${address}${scope ? ` for ${scope}` : ""}`;
-}
-
-// The warning an entry of packages or settings from outside the registry adds, its text built only from the classified fields
-// (addresses cut to what is safe to show, fixed texts, parsed names), never from the file's own text.
-function sourceFinding(entry) {
-  const one = entry.total === 1;
-  const who = one ? entry.packages[0].name ?? "a package" : `${n(entry.total)} packages`;
-  let detail;
-  if (entry.from) detail = lineSourceText(entry);
-  else if (entry.kind === "unreadable") detail = `${who} ${one ? "has" : "have"} a source it could not read`;
-  else detail = `${who} ${one ? "comes" : "come"} from ${packageSourceText(entry)}`;
-  return { severity: "warning", category: "package-source", source: "deep", file: entry.file, line: entry.line, detail };
-}
+// The warning an entry of packages or settings from outside the registry adds.
+const sourceFinding = (entry) =>
+  ({ severity: "warning", category: "package-source", source: "deep", file: entry.file, line: entry.line, detail: sourceDetail(entry) });
 
 // A file that can install packages but could not be read may name any source, so it is a warning too. A file read but for a source
 // it could not read is not: that source is already a warning of its own. Nor is a requirements file with no pins: it installs from
 // PyPI, so nothing about its sources is unknown.
-const NOT_UNKNOWN_SOURCES = new Set([UNREADABLE_SOURCE_REASON, NO_PINS_REASON]);
+const REASONS_ADDING_NO_WARNING = new Set([UNREADABLE_SOURCE_REASON, NO_PINS_REASON]);
 const unreadFinding = ({ file, reason }) =>
   ({ severity: "warning", category: "package-source", source: "deep", file, line: null, detail: `${file} could not be read: ${reason}` });
 
@@ -246,7 +219,7 @@ async function packageCheck(files, leftOut, options, fetchImpl) {
     notRecorded,
     notSentToOsv: sourced.filter((item) => item.from === undefined).length,
   };
-  const unreadFiles = couldNotRead.filter((c) => !NOT_UNKNOWN_SOURCES.has(c.reason));
+  const unreadFiles = couldNotRead.filter((c) => !REASONS_ADDING_NO_WARNING.has(c.reason));
   const sourceFindings = [...entries.map(sourceFinding), ...unreadFiles.map(unreadFinding)];
   if (!options.osv) return { findings: sourceFindings, packages: { status: "off", ...sources, couldNotRead } };
   const checked = await checkPackages(packages, fetchImpl);

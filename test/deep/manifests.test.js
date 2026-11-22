@@ -10,7 +10,7 @@ const SHA1 = "3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a";
 const UNREADABLE_SOURCE = { reason: "a package source it could not read" };
 const BUNDLED = { text: "a bundled package file the scan cannot read" };
 const OUTSIDE = { text: "a path outside the project" };
-const NAMED_INDEX = { text: "a named index" };
+const NAMED_INDEX = { text: "an index it cannot resolve" };
 const EXEC = { text: "a script that produces the package" };
 const readOne = (path, text) => readPackages([{ path, text }]);
 const lines = (...rows) => rows.join("\n");

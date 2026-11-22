@@ -4,6 +4,10 @@
 
 const { classifySource, UNREADABLE } = require("../packageSources");
 
+// The name of an npm scope after its `@`, as every config reader takes one (.npmrc, .yarnrc, .yarnrc.yml, pnpm-workspace.yaml):
+// the characters a scope may hold, so a key holding anything else (a control character, a slash) is one it cannot read.
+const SCOPE_NAME = "[A-Za-z0-9._~-]+";
+
 // A config setting that names where packages come from, as a reader read it: `covers` lists the scopes whose registry for installs
 // it names (null for the unscoped registry), so a lockfile that records no host is known to be covered by it; `scope` is the one
 // scope a scoped setting names, shown with it.
@@ -46,6 +50,7 @@ module.exports = {
   coveringUnreadable,
   registryEntry,
   registryVerdict,
+  SCOPE_NAME,
   trustedCertificatesReplaced,
   unreadableConfig,
 };

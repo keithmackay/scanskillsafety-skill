@@ -272,7 +272,16 @@ function classifyManifestValue(ecosystem, value) {
 const MAX_SOURCE_ENTRIES = 100;
 const PACKAGES_SHOWN = 5;
 
-const byFileThenLine = (a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.line - b.line);
+// The longest package name npm allows (PyPI's are shorter); a longer one is cut, by whole characters, and marked so.
+const NAME_MAX = 214;
+const cutName = (name) => {
+  if (name === null || name.length <= NAME_MAX) return name;
+  const chars = Array.from(name);
+  return chars.length <= NAME_MAX ? name : `${chars.slice(0, NAME_MAX).join("")}…`;
+};
+
+// File order, then line order, an item with no line first.
+const byFileThenLine = (a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : (a.line ?? 0) - (b.line ?? 0));
 
 // An entry as its first item gives it: where it comes from, and the fields that say more about that source.
 function startEntry(item) {
@@ -283,9 +292,9 @@ function startEntry(item) {
 
 // sourced: the packages and settings readPackages found coming from outside the registry, in any order. The packages of one file
 // from one source (kind, address, and a git commit or a fixed text when there is one) are one entry, at its first line, naming its
-// first five packages; each setting or index line is its own entry. Entries are in file and line order, the first 100 kept; once
-// that many exist, a package or line of any other source is only counted in `more`, so memory stays bounded however many sources
-// there are.
+// first five packages (a name longer than npm allows cut); each setting or index line is its own entry. Entries are in file and
+// line order, the first 100 kept; once that many exist, a package or line of any other source is only counted in `more`, so memory
+// stays bounded however many sources there are.
 function groupSources(sourced) {
   const groups = new Map();
   const more = { packages: 0, lines: 0 };
@@ -304,7 +313,7 @@ function groupSources(sourced) {
     }
     if (item.from) continue;
     entry.total++;
-    if (entry.packages.length < PACKAGES_SHOWN) entry.packages.push({ name: item.name, version: item.version, line: item.line });
+    if (entry.packages.length < PACKAGES_SHOWN) entry.packages.push({ name: cutName(item.name), version: item.version, line: item.line });
   }
   return { entries: [...groups.values()], more };
 }

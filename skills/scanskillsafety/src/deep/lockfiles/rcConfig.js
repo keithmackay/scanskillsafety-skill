@@ -10,6 +10,7 @@ const {
   coveringUnreadable,
   registryEntry,
   registryVerdict,
+  SCOPE_NAME,
   trustedCertificatesReplaced,
   unreadableConfig,
 } = require("./configEntries");
@@ -46,7 +47,7 @@ const NPM_STRICT_SSL_OFF = certificateChecksOff("strict-ssl=false");
 const mayNameSetting = (loose, settings) => loose.includes("${") || settings.includes(loose) || loose.endsWith(":registry");
 
 // A scoped registry key as npm and Yarn write one.
-const SCOPED_REGISTRY = /^@[A-Za-z0-9._~-]+:registry$/;
+const SCOPED_REGISTRY = new RegExp(`^@${SCOPE_NAME}:registry$`);
 
 // A value as npm's ini reader gives it, in the forms modelled here: unquoted with no escape or quote, up to an ini comment, or
 // quoted with no quote or escape inside; null for any other form, or one holding a variable, which npm expands.
@@ -141,7 +142,7 @@ function readNpmrc(text) {
 
 // A .yarnrc registry line as Yarn 1 writes one: the key bare or double-quoted, spaces, and the address double-quoted with no
 // escape, an optional comment after.
-const YARNRC_REGISTRY = /^(registry|"registry"|"@[A-Za-z0-9._~-]+:registry") +"([^"\\]*)"(?:\s+#.*)?$/;
+const YARNRC_REGISTRY = new RegExp(`^(registry|"registry"|"@${SCOPE_NAME}:registry") +"([^"\\\\]*)"(?:\\s+#.*)?$`);
 
 // The first word of a .yarnrc line: a double-quoted key, or the text up to a space, without a colon ending it.
 function yarnrcKey(line) {

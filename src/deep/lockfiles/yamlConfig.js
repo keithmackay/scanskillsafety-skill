@@ -10,6 +10,7 @@ const {
   configOrCovering,
   registryEntry,
   registryVerdict,
+  SCOPE_NAME,
   trustedCertificatesReplaced,
   unreadableConfig,
 } = require("./configEntries");
@@ -17,7 +18,7 @@ const { Unmodelled, collectionChildren, flowScalars, readYamlConfig, scalarField
 const { dependencyFound, EXTENSION_META, EXTENSION_SECTIONS, overrideTarget } = require("./packageJson");
 
 // A scope as Yarn names one under npmScopes, with or without its `@`: the characters an npm scope may hold, as .npmrc's are read.
-const YARN_SCOPE = /^@?[A-Za-z0-9._~-]+$/;
+const YARN_SCOPE = new RegExp(`^@?${SCOPE_NAME}$`);
 
 // .yarnrc.yml's npmScopes: each scope's npmRegistryServer, for that scope; a scope named otherwise is one it does not model.
 function npmScopesEntries(root) {
@@ -128,7 +129,7 @@ function packageExtensionsEntries(root, folder) {
 }
 
 // A scope as pnpm names one in `scopes`; a bare `@` is the unscoped default registry.
-const PNPM_SCOPE = /^@(?:[A-Za-z0-9._~-]+)?$/;
+const PNPM_SCOPE = new RegExp(`^@(?:${SCOPE_NAME})?$`);
 const coveredScope = (scope) => (scope === "@" ? null : scope);
 
 // A registries entry's scopes, as a flow sequence on its line or a block sequence below it, each a scope.

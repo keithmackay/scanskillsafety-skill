@@ -1,5 +1,5 @@
 // ABOUTME: Small helpers the deep scan's files share: path names, ordering, JSON and object checks, git object ids, vendored
-// ABOUTME: folders, how a size limit is named, and temporary folders removed however the scan ends.
+// ABOUTME: folders, how a size limit and a count are written, and temporary folders removed however the scan ends.
 "use strict";
 
 const fs = require("fs");
@@ -17,6 +17,9 @@ const LINK_MODE = "120000";
 
 // Folders that hold copies of other projects' code.
 const VENDORED_FOLDERS = ["node_modules", "vendor"];
+
+// A count as the output writes it, with thousands separators.
+const n = (x) => x.toLocaleString("en-US");
 
 const baseName = (p) => p.slice(p.lastIndexOf("/") + 1);
 const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -58,4 +61,4 @@ function temporaryFolder(prefix, tmpDir = os.tmpdir()) {
   return { dir, cleanup };
 }
 
-module.exports = { OBJECT_ID, COMMIT_LIMITS, LINK_MODE, VENDORED_FOLDERS, baseName, compare, isObject, isVendored, parseJson, describeLimit, temporaryFolder };
+module.exports = { OBJECT_ID, COMMIT_LIMITS, LINK_MODE, VENDORED_FOLDERS, baseName, compare, isObject, isVendored, n, parseJson, describeLimit, temporaryFolder };
