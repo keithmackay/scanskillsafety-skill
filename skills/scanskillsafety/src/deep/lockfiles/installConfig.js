@@ -52,7 +52,10 @@ function looseKey(key) {
   return bare.toLowerCase().replace(/_/g, "-");
 }
 
-const NPM_SETTINGS = ["registry", "replace-registry-host", "omit-lockfile-registry-resolved"];
+// The settings that make npm load another config file, each with the path of that file under the value (`prefix` loads
+// `<prefix>/etc/npmrc`).
+const CONFIG_POINTERS = new Map([["userconfig", ""], ["globalconfig", ""], ["prefix", "/etc/npmrc"]]);
+const NPM_SETTINGS = ["registry", "replace-registry-host", "omit-lockfile-registry-resolved", ...CONFIG_POINTERS.keys()];
 // A key that may name a registry setting, however written; one holding a variable may become any key.
 const mayNameSetting = (loose, settings) => loose.includes("${") || settings.includes(loose) || loose.endsWith(":registry");
 
@@ -93,8 +96,12 @@ const omitResolvedVerdict = (value) => (value === "true" ? OMITS_RESOLVED : valu
 const OTHER_NPM_SETTINGS = ["replace-registry-host", "omit-lockfile-registry-resolved"];
 
 // What one .npmrc registry setting gives, by its key as written, whether it sits in a section, and its value (null when not in a
-// form modelled). Any other spelling, or a key in a section, is one it cannot read.
+// form modelled): a pointer to another config file gives the path it names (`follows`), read from the .npmrc's folder. Any other
+// spelling, or a key in a section, is one it cannot read.
 function npmSettingEntry(key, inSection, value, line) {
+  if (!inSection && CONFIG_POINTERS.has(key)) {
+    return value === null || value === "" ? coveringUnreadable(line) : { line, follows: `${value}${CONFIG_POINTERS.get(key)}` };
+  }
   if (!inSection && key === "registry") return registryEntry(line, registryVerdict(value));
   if (!inSection && SCOPED_REGISTRY.test(key)) return registryEntry(line, registryVerdict(value), scopeOfKey(key));
   if (!inSection && key === "replace-registry-host") return configEntry(line, replacedHostVerdict(value));

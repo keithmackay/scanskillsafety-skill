@@ -4,7 +4,7 @@
 
 const { baseName, isVendored } = require("../util");
 const { classifySource } = require("../packageSources");
-const { isPep440, localPathVerdict, normalisePyPI, SEMVER, Unreadable, UNREADABLE_ENTRY } = require("./shared");
+const { isPep440, localPathVerdict, normalisePyPI, pathFrom, SEMVER, staysInside, Unreadable, UNREADABLE_ENTRY } = require("./shared");
 const { readNpmLock } = require("./npm");
 const { readYarnLock } = require("./yarn");
 const { readPnpmLock } = require("./pnpm");
@@ -40,7 +40,7 @@ const MANIFESTS = new Map([
 // Config files that name where installs in their folder fetch from. pnpm-workspace.yaml's folders are read only where no pnpm
 // lockfile sits beside it, since the lockfile's importers already name them; its other settings always.
 const CONFIGS = new Map([
-  [".npmrc", { ecosystem: "npm", read: readNpmrc }],
+  [".npmrc", { ecosystem: "npm", read: readNpmrc, follows: true }],
   [".yarnrc", { ecosystem: "npm", read: readYarnrc }],
   [".yarnrc.yml", { ecosystem: "npm", read: readYarnrcYml }],
   ["uv.toml", { ecosystem: "PyPI", read: readUvToml }],
@@ -137,10 +137,15 @@ function classifyEntries(ecosystem, file, entries) {
   const requires = [];
   const unrecorded = [];
   const covers = [];
+  const follows = [];
   let unreadable = false;
   for (const readEntry of entries) {
     if (readEntry.requires !== undefined) {
       requires.push(readEntry);
+      continue;
+    }
+    if (readEntry.follows !== undefined) {
+      follows.push(readEntry);
       continue;
     }
     if (readEntry.from) {
@@ -159,7 +164,7 @@ function classifyEntries(ecosystem, file, entries) {
       unreadable ||= verdict.unreadable === true;
     }
   }
-  return { registry, sourced, requires, unreadable, unrecorded, covers };
+  return { registry, sourced, requires, unreadable, unrecorded, covers, follows };
 }
 
 // A package's npm scope (`@myco` for `@myco/x`), or null for an unscoped name.
@@ -172,6 +177,29 @@ const appliesTo = (configFolder, folder) => configFolder === "" || folder === co
 function projectFolder(folder, projects) {
   for (let at = folder; at !== ""; at = folderOf(at)) if (projects.has(at)) return at;
   return "";
+}
+
+// The coverage each .npmrc gives: its own settings' and those of every config file it loads, followed through `npmrcs` (each
+// read file's covers and the files it loads), each file once.
+function npmrcCoverage(npmrcs) {
+  const settings = [];
+  for (const file of npmrcs.keys()) {
+    const covers = [];
+    const visited = new Set([file]);
+    const queue = [file];
+    for (let i = 0; i < queue.length; i++) {
+      const { covers: own, targets } = npmrcs.get(queue[i]);
+      for (const scope of own) covers.push(scope);
+      for (const target of targets) {
+        if (!visited.has(target) && npmrcs.has(target)) {
+          visited.add(target);
+          queue.push(target);
+        }
+      }
+    }
+    if (covers.length > 0) settings.push({ file, covers });
+  }
+  return settings;
 }
 
 // The lockfiles that record no host for some packages, none of which a config that applies to them names a registry for: a
@@ -209,9 +237,11 @@ function readPackages(files, leftOut = []) {
   const ownFiles = files.filter((f) => !isVendored(f.path));
   const ownLeftOut = leftOut.filter((l) => !isVendored(l.path));
   const byPath = new Map(files.map((f) => [f.path, f]));
-  // Lockfiles with packages whose host they do not record, and the config files whose settings name a registry.
+  // Lockfiles with packages whose host they do not record, the config files whose settings name a registry, and each .npmrc read
+  // (or file read as one) with its covers and the config files it loads.
   const unrecordedFiles = [];
   const settings = [];
+  const npmrcs = new Map();
   const pnpmLocked = new Set([...ownFiles, ...ownLeftOut].filter((f) => baseName(f.path) === "pnpm-lock.yaml").map((f) => folderOf(f.path)));
   // Ecosystems with a lockfile proper, whose manifests are not read; and those with a requirements file, whose manifests are read
   // only for where they fetch from, since the requirements file's pins are what is checked.
@@ -229,17 +259,31 @@ function readPackages(files, leftOut = []) {
       result.couldNotRead.push({ file: f.path, reason: read.reason });
       return null;
     }
-    const { registry, sourced, requires, unreadable, unrecorded, covers } = classifyEntries(kind.ecosystem, f.path, read.entries);
+    const { registry, sourced, requires, unreadable, unrecorded, covers, follows } = classifyEntries(kind.ecosystem, f.path, read.entries);
     if (!sourcesOnly) for (const entry of registry) add(kind.ecosystem, f.path, entry);
     for (const item of sourced) result.sourced.push(item);
     if (unrecorded.length > 0) unrecordedFiles.push({ file: f.path, ecosystem: kind.ecosystem, names: unrecorded });
-    if (covers.length > 0) settings.push({ file: f.path, covers });
+    // A config file another names, read from the naming file's folder: one inside the repository that the scan read is read in
+    // turn; any other (outside, missing, left out) is one it cannot read, covering a lockfile.
+    const targets = [];
+    for (const { line, follows: path } of follows) {
+      const target = staysInside(folderOf(f.path), path) ? pathFrom(folderOf(f.path), path) : null;
+      if (target !== null && byPath.has(target)) targets.push(target);
+      else {
+        result.sourced.push({ ecosystem: kind.ecosystem, file: f.path, line, from: "config", kind: "unreadable", address: null });
+        covers.push(null);
+      }
+    }
+    if (kind.follows) npmrcs.set(f.path, { covers, targets });
+    else if (covers.length > 0) settings.push({ file: f.path, covers });
     // A named file the scan did not read (missing, or left out) may hold anything, and one another reader handles (a lockfile or a
     // manifest) is not a requirements file, so either is a source it could not read and is not followed.
     const followable = (r) => byPath.has(r.requires) && !isOtherFormat(r.requires);
     const unread = requires.filter((r) => !followable(r));
     for (const { line } of unread) result.sourced.push({ ecosystem: kind.ecosystem, file: f.path, line, from: "requirements", kind: "unreadable", address: null });
-    if (unreadable || unread.length > 0) result.couldNotRead.push({ file: f.path, reason: UNREADABLE_SOURCE_REASON });
+    if (unreadable || unread.length > 0 || targets.length < follows.length) {
+      result.couldNotRead.push({ file: f.path, reason: UNREADABLE_SOURCE_REASON });
+    }
     for (const r of requires) {
       if (followable(r) && !visited.has(r.requires)) {
         visited.add(r.requires);
@@ -274,6 +318,15 @@ function readPackages(files, leftOut = []) {
     const sourcesOnly = pinned.has(manifest.ecosystem);
     if (readEntries(f, manifest, { sourcesOnly }) && !sourcesOnly) result.namesOnly.push(f.path);
   }
+  // The config files the .npmrc files load, each read once, as an .npmrc, wherever they are.
+  const npmrcKind = CONFIGS.get(".npmrc");
+  const toLoad = [...npmrcs.values()].flatMap(({ targets }) => targets);
+  for (let i = 0; i < toLoad.length; i++) {
+    if (npmrcs.has(toLoad[i])) continue;
+    readEntries(byPath.get(toLoad[i]), npmrcKind);
+    for (const target of npmrcs.get(toLoad[i])?.targets ?? []) toLoad.push(target);
+  }
+  for (const setting of npmrcCoverage(npmrcs)) settings.push(setting);
   // pnpm-workspace.yaml, once the lockfiles are known: its catalogs' registry names are sent to OSV only for a pnpm project with no
   // lockfile, as package.json's are.
   for (const f of ownFiles.filter((file) => baseName(file.path) === PNPM_WORKSPACE)) {

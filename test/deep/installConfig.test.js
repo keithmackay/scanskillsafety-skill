@@ -888,3 +888,54 @@ test(".npmrc and .yarnrc: a key holding a quote or backslash, which npm or Yarn 
   }
   assert.deepEqual(read([[".yarnrc", '"registry" "https://evil.example/"']]).sourced, [npmConfig(".yarnrc")(1, "host", "https://evil.example")]);
 });
+
+// .npmrc files that load another config file
+
+test(".npmrc: userconfig, globalconfig and prefix name a file that is read as an .npmrc and covers like one", () => {
+  const pj = ["package.json", '{ "name": "t" }'];
+  const lock = ["package-lock.json", NO_RESOLVED];
+  const cases = [
+    ["userconfig=config/npmrc", "config/npmrc"],
+    ["globalconfig = ./etc/global", "etc/global"],
+    ["prefix=tools", "tools/etc/npmrc"],
+    ["prefix=./tools/", "tools/etc/npmrc"],
+  ];
+  for (const [npmrc, target] of cases) {
+    const result = read([pj, lock, [".npmrc", npmrc], [target, "registry=https://m.example/\n"]]);
+    assert.deepEqual(result.sourced, [npmConfig(target)(1, "host", "https://m.example")], npmrc);
+    assert.deepEqual([result.notRecorded, result.couldNotRead], [[], []], npmrc);
+  }
+  const chain = read([pj, lock, [".npmrc", "userconfig=a/one"], ["a/one", "globalconfig=two"], ["a/two", "registry=https://m.example/"]]);
+  assert.deepEqual(chain.sourced, [npmConfig("a/two")(1, "host", "https://m.example")]);
+  assert.deepEqual(chain.notRecorded, []);
+  const loop = read([pj, lock, [".npmrc", "userconfig=a/one"], ["a/one", "userconfig=../.npmrc\nregistry=https://m.example/"]]);
+  assert.deepEqual(loop.sourced, [npmConfig("a/one")(2, "host", "https://m.example")]);
+  assert.deepEqual(loop.notRecorded, []);
+  const scoped = read([pj, lock, [".npmrc", "userconfig=a/one"], ["a/one", "@other:registry=https://m.example/"]]);
+  assert.deepEqual(scoped.notRecorded, [NOTE("package-lock.json")]);
+});
+
+test(".npmrc: a config file it cannot follow is one it cannot read, covering a lockfile", () => {
+  const lock = ["package-lock.json", NO_RESOLVED];
+  for (const npmrc of [
+    "userconfig=/etc/npmrc",
+    "userconfig=~/.npmrc",
+    "globalconfig=../outside/npmrc",
+    "userconfig=missing/npmrc",
+    "userconfig=${HOME}/.npmrc",
+    "prefix=${PREFIX}",
+    "userconfig=",
+    "userconfig",
+    "USERCONFIG=config/npmrc",
+    "[x]\nuserconfig=config/npmrc",
+  ]) {
+    const line = npmrc.startsWith("[") ? 2 : 1;
+    const result = read([lock, [".npmrc", npmrc]]);
+    assert.deepEqual(result.sourced, [npmConfig(".npmrc")(line, "unreadable", null)], npmrc);
+    assert.deepEqual(result.couldNotRead, [{ file: ".npmrc", reason: UNREADABLE_SOURCE }], npmrc);
+    assert.deepEqual(result.notRecorded, [], npmrc);
+  }
+  const leftOut = read([lock, [".npmrc", "userconfig=big/npmrc"]], [{ path: "big/npmrc", reason: "larger than 5 MB" }]);
+  assert.deepEqual(leftOut.sourced, [npmConfig(".npmrc")(1, "unreadable", null)]);
+  assert.deepEqual(leftOut.notRecorded, []);
+});
