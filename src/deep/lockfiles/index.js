@@ -11,7 +11,7 @@ const { readPnpmLock } = require("./pnpm");
 const { readPoetryLock, readUvLock } = require("./python");
 const { NO_PINS_REASON, readNamedRequirements, readRequirements } = require("./requirements");
 const { readPackageJson } = require("./packageJson");
-const { readPyproject, readPyprojectConfig } = require("./pyproject");
+const { readPyproject } = require("./pyproject");
 const { readNpmrc, readYarnrc } = require("./rcConfig");
 const { readPnpmWorkspace, readPnpmWorkspaceSettings, readYarnrcYml } = require("./yamlConfig");
 const { readPdmToml, readUvToml } = require("./pythonConfig");
@@ -33,10 +33,10 @@ const lockfileKind = (p) => LOCKFILES.get(baseName(p)) ?? (/^requirements.*\.txt
 // package indexes and git sources, which OSV never sees.
 const isLockfile = (p) => LOCKFILES.has(baseName(p)) || NOT_CHECKED.has(baseName(p));
 
-// Manifests, read for packages when their ecosystem has no lockfile; pyproject.toml is read for its settings (`config`) when it has.
+// Manifests, always read for where their packages come from; their registry packages go to OSV only when no lockfile covers them.
 const MANIFESTS = new Map([
   ["package.json", { ecosystem: "npm", read: readPackageJson }],
-  ["pyproject.toml", { ecosystem: "PyPI", read: readPyproject, config: readPyprojectConfig }],
+  ["pyproject.toml", { ecosystem: "PyPI", read: readPyproject }],
 ]);
 
 // Config files that name where installs in their folder fetch from, read in file order; an .npmrc may load other config files.
@@ -185,6 +185,10 @@ function projectFolder(folder, projects) {
   return "";
 }
 
+// Whether a folder is strictly below another ("" being the root): a workspace folder a lockfile lists at or above its own folder
+// is no member of its project.
+const isBelow = (folder, inner) => (folder === "" ? inner !== "" : inner.startsWith(`${folder}/`));
+
 // A file's path in a folder.
 const inFolder = (folder, name) => (folder === "" ? name : `${folder}/${name}`);
 
@@ -326,10 +330,11 @@ function readPackages(files, leftOut = []) {
   // Files given the reason "a package source it could not read", each once.
   const unreadableFiles = new Set();
   const pnpmLocked = new Set([...ownFiles, ...ownLeftOut].filter((f) => baseName(f.path) === "pnpm-lock.yaml").map((f) => folderOf(f.path)));
-  // Each folder with a lockfile proper that was read, or listed by one as a workspace folder, by ecosystem: a manifest of that
-  // ecosystem in such a folder is not read for packages (and, when that is all it is read for, not listed when left out). A
-  // lockfile elsewhere is another project's, and says nothing of this one. Ecosystems with a requirements file have their manifests read only for where they fetch from, since the
-  // requirements file's pins are what is checked.
+  // Each folder with a lockfile proper that was read, or listed by one as a workspace folder below its own, by ecosystem: a
+  // manifest of that ecosystem in such a folder is still read for its sources, but its registry packages are not sent to OSV,
+  // since the lockfile's are. A lockfile elsewhere is another project's, and says nothing of this one. Ecosystems with a
+  // requirements file likewise have their manifests read only for where they fetch from, since the requirements file's pins are
+  // what is checked.
   const lockRead = new Set();
   const lockedHere = (ecosystem, path) => lockRead.has(`${ecosystem}\0${folderOf(path)}`);
   const pinned = new Set();
@@ -345,7 +350,7 @@ function readPackages(files, leftOut = []) {
       return null;
     }
     const { registry, sourced, requires, unreadable, unrecorded, covers, follows, workspaces } = classifyEntries(kind.ecosystem, f.path, read.entries);
-    for (const folder of workspaces) lockRead.add(`${kind.ecosystem}\0${folder}`);
+    for (const folder of workspaces) if (isBelow(folderOf(f.path), folder)) lockRead.add(`${kind.ecosystem}\0${folder}`);
     if (!sourcesOnly) for (const entry of registry) add(kind.ecosystem, f.path, entry);
     for (const item of sourced) result.sourced.push(item);
     if (unrecorded.length > 0) unrecordedFiles.push({ file: f.path, ecosystem: kind.ecosystem, names: unrecorded });
@@ -385,24 +390,15 @@ function readPackages(files, leftOut = []) {
   }
   for (let i = 0; i < toFollow.length; i++) readEntries(toFollow[i], NAMED_REQUIREMENTS);
   result.notChecked.push(...ownLeftOut.filter((l) => NOT_CHECKED.has(baseName(l.path))).map((l) => l.path));
-  // A manifest read only when there is no lockfile beside it (package.json) would not have been read beside one that was.
-  const readForNothing = (path) => {
-    const manifest = MANIFESTS.get(baseName(path));
-    return manifest !== undefined && !manifest.config && lockedHere(manifest.ecosystem, path);
-  };
   for (const f of ownLeftOut) {
     const kind = lockfileKind(f.path);
     if (kind === REQUIREMENTS) pinned.add(kind.ecosystem);
-    if (kind || (REPORTED_WHEN_LEFT_OUT.has(baseName(f.path)) && !readForNothing(f.path))) result.couldNotRead.push({ file: f.path, reason: `${f.reason}, not checked` });
+    if (kind || REPORTED_WHEN_LEFT_OUT.has(baseName(f.path))) result.couldNotRead.push({ file: f.path, reason: `${f.reason}, not checked` });
   }
   for (const f of ownFiles) {
     const manifest = MANIFESTS.get(baseName(f.path));
     if (!manifest) continue;
-    if (lockedHere(manifest.ecosystem, f.path)) {
-      if (manifest.config) readEntries(f, { ecosystem: manifest.ecosystem, read: manifest.config }, { sourcesOnly: true });
-      continue;
-    }
-    const sourcesOnly = pinned.has(manifest.ecosystem);
+    const sourcesOnly = lockedHere(manifest.ecosystem, f.path) || pinned.has(manifest.ecosystem);
     if (readEntries(f, manifest, { sourcesOnly }) && !sourcesOnly) result.namesOnly.push(f.path);
   }
   // A pointer past npm's depth is reported once, as a line it cannot read that covers a lockfile.

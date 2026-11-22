@@ -656,7 +656,7 @@ test("each kind of source has its own warning text, built from the classified fi
   });
   const result = await runDeep(root, ALL_OFF, { fetchImpl: fakeFetch({}) });
   assert.deepEqual(sourceFindings(result).map((f) => `${f.file}:${f.line} ${f.detail}`), [
-    ".npmrc:1 names the npm registry https://npm.example.com for installs in this folder for @myco",
+    ".npmrc:1 names the npm registry https://npm.example.com for @myco installs in this folder",
     ".npmrc:2 strict-ssl=false turns off certificate checks",
     "package.json:3 a comes from a script that produces the package",
     "package.json:4 b comes from git https://github.com/u/b",

@@ -1,5 +1,5 @@
-// ABOUTME: Words a package or setting from outside the registry: what packages come from, what a setting or index line names,
-// ABOUTME: and the whole warning text. Built only from classified fields (cut addresses, fixed texts, parsed names), never raw input.
+// ABOUTME: Words a package or setting from outside the registry: what packages come from, what a setting or index line names, and
+// ABOUTME: the whole warning text, built only from classified fields (cut addresses, fixed texts, parsed names), never raw input.
 "use strict";
 
 const { n } = require("./util");
@@ -26,7 +26,7 @@ function lineText({ kind, address, text, from, ecosystem, scope }) {
   if (kind === "http") return `allows plain http from ${address}`;
   if (kind === "bundled") return `names ${address}, ${text}`;
   if (from === "requirements") return `names the package index ${address}`;
-  return `names the ${ecosystem} registry ${address} for installs in this folder${scope ? ` for ${scope}` : ""}`;
+  return `names the ${ecosystem} registry ${address} for ${scope ? `${scope} ` : ""}installs in this folder`;
 }
 
 // A source entry's warning text: a line's verb phrase, or its packages (one by name, several by count) and where they come from.

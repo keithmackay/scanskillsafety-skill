@@ -208,8 +208,8 @@ const unreadFinding = ({ file, reason }) =>
   ({ severity: "warning", category: "package-source", source: "deep", file, line: null, detail: `${file} could not be read: ${reason}` });
 
 // The packages the files pull in and where each comes from, read whether or not OSV is asked; those from the official registry
-// are checked against OSV unless the person turned that off. Packages from elsewhere are never sent to OSV, since their name may not
-// mean what OSV's record means.
+// are checked against OSV unless the person turned that off. Packages from elsewhere are never sent to OSV, since their name may
+// not mean what OSV's record means.
 async function packageCheck(files, leftOut, options, fetchImpl) {
   const { packages, namesOnly, couldNotRead, notChecked, sourced, notRecorded } = readPackages(files, leftOut);
   const { entries, more } = groupSources(sourced);

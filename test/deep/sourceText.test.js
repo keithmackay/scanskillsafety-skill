@@ -32,7 +32,7 @@ test("packages: one by its name, several by their count, an unreadable source sa
 test("setting and index lines: each kind in one wording, a verb phrase after the file and line", () => {
   const cases = [
     [line("config", "host", "https://npm.example.com"), "names the npm registry https://npm.example.com for installs in this folder"],
-    [line("config", "host", "https://npm.example.com", { scope: "@myco" }), "names the npm registry https://npm.example.com for installs in this folder for @myco"],
+    [line("config", "host", "https://npm.example.com", { scope: "@myco" }), "names the npm registry https://npm.example.com for @myco installs in this folder"],
     [line("config", "host", "https://uv.example.com", { ecosystem: "PyPI" }), "names the PyPI registry https://uv.example.com for installs in this folder"],
     [line("requirements", "host", "https://pypi.example.com"), "names the package index https://pypi.example.com"],
     [line("requirements", "host", null, { text: "an index set from an environment variable" }), "names an index set from an environment variable"],

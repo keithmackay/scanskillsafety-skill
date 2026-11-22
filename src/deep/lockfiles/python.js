@@ -69,7 +69,8 @@ function uvTable(value) {
 }
 
 // A uv `source`: exactly one kind, a string: an index (a folder when it is a path), a git repository with its commit after `#`, one
-// archive, a file or folder, or the project itself or a member of it (`editable` or `virtual` inside the repository, at its folder).
+// archive, a file or folder, or the project itself or a member of it (`editable` or `virtual` inside the repository, at its
+// folder).
 function uvSourceVerdict(value, folder) {
   const fields = uvTable(value);
   const kinds = fields ? UV_SOURCE_KINDS.filter((kind) => fields.has(kind)) : [];
@@ -142,9 +143,9 @@ function fieldText(block, name) {
   return field.value.kind === "string" && field.value.plain ? field.value.raw : null;
 }
 
-// What a finished block stands for: the project itself or a member (`{ project: true, workspace }`), or an entry. A block in a shape the tool
-// does not write, or with neither a version nor a source of its own, is one it cannot read; one with no name it can read is one
-// it cannot name.
+// What a finished block stands for: the project itself or a member (`{ project: true, workspace }`), or an entry. A block in a
+// shape the tool does not write, or with neither a version nor a source of its own, is one it cannot read; one with no name it can
+// read is one it cannot name.
 function blockEntry(block, format, folder) {
   const name = fieldText(block, "name");
   const version = fieldText(block, "version");

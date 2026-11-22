@@ -189,7 +189,8 @@ function readClassicLine(entry, line) {
 // unreadable, so a source Yarn reads is never taken for the registry. Berry is YAML, read only as Berry writes it: a lone
 // carriage return or a tab makes the file one it cannot read, a header in any other shape is an entry it cannot name, and only an
 // entry whose resolution is a `workspace:` folder inside the repository (read from the lockfile's `folder`) is listed as a
-// workspace folder (`{ workspace }`, its path in the repository) rather than a package; one outside it is classified as that source. A classic entry is never skipped.
+// workspace folder (`{ workspace }`, its path in the repository) rather than a package; one outside it is classified as that
+// source. A classic entry is never skipped.
 function readYarnLock(text, folder = "") {
   const lines = linesOf(text);
   const berry = lines.includes("__metadata:");

@@ -8,7 +8,7 @@ const { manifestEntries, normalisePyPI, unnamedEntry, withoutBom, workspaceEntri
 const { after, arrayTables, stringOf, tableFields, tomlValues } = require("./toml");
 const { pythonAddress } = require("./python");
 const { BUILD, EDITABLE, GROUPS, requirementListEntries } = require("./requirementLists");
-const { pyprojectConfigEntries, UV_REQUIREMENT_LISTS, uvRequirementEntries, uvRequirementFound } = require("./pythonConfig");
+const { pyprojectConfigEntries, UV_REQUIREMENT_LISTS, uvRequirementFound } = require("./pythonConfig");
 
 const NAMED_INDEX = Object.freeze({ expected: false, kind: "host", address: null, text: "an index it cannot resolve" });
 
@@ -265,11 +265,4 @@ function readPyproject(text, folder = "") {
   return [...entries, ...pyprojectConfigEntries(values, folder)];
 }
 
-// pyproject.toml read, for a target with a uv or Poetry lockfile, only for its settings that name where packages come from and
-// uv's lists that apply to every install.
-function readPyprojectConfig(text, folder = "") {
-  const values = tomlValues(withoutBom(text));
-  return [...uvRequirementEntries(values, ["tool", "uv"], folder), ...pyprojectConfigEntries(values, folder)];
-}
-
-module.exports = { readPyproject, readPyprojectConfig };
+module.exports = { readPyproject };

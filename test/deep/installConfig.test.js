@@ -461,12 +461,12 @@ test("a config file or manifest left out of the file list is reported as not che
 
 const NO_PACKAGES_LOCK = JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" } } });
 
-test("a left-out package.json beside an npm lockfile read in its folder is not listed, since it would not have been read; one elsewhere is", () => {
+test("a left-out package.json is listed whatever lockfile is beside it, since it may name a source", () => {
   const leftOut = [{ path: "package.json", reason: "larger than 5 MB" }, { path: "a/package.json", reason: "larger than 5 MB" }];
-  assert.deepEqual(read([["package-lock.json", NO_PACKAGES_LOCK]], leftOut).couldNotRead, [{ file: "a/package.json", reason: "larger than 5 MB, not checked" }]);
-  assert.deepEqual(read([["docs/demo/package-lock.json", NO_PACKAGES_LOCK]], leftOut).couldNotRead.map((c) => c.file), ["package.json", "a/package.json"]);
+  for (const files of [[["package-lock.json", NO_PACKAGES_LOCK]], [["docs/demo/package-lock.json", NO_PACKAGES_LOCK]], [["requirements.txt", "x==1.0\n"]]]) {
+    assert.deepEqual(read(files, leftOut).couldNotRead.map((c) => c.file), ["package.json", "a/package.json"], files[0][0]);
+  }
   assert.deepEqual(read([["package-lock.json", "{"]], leftOut).couldNotRead.map((c) => c.file), ["package-lock.json", "package.json", "a/package.json"]);
-  assert.deepEqual(read([["requirements.txt", "x==1.0\n"]], leftOut).couldNotRead.map((c) => c.file), ["package.json", "a/package.json"]);
 });
 
 test("a left-out pyproject.toml is listed even beside a lockfile that was read, since its install settings are read then too", () => {
