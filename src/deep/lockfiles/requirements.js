@@ -4,7 +4,7 @@
 
 const { OBJECT_ID } = require("../util");
 const { classifySource, UNREADABLE } = require("../packageSources");
-const { found, isPackageArchive, linesOf, OUTSIDE_PROJECT, pathFrom, Unreadable, UNREADABLE_ENTRY } = require("./shared");
+const { found, isPackageArchive, linesOf, OUTSIDE_PROJECT, pathFrom, Unreadable, UNREADABLE_ENTRY, withoutBom } = require("./shared");
 const { pythonAddress } = require("./python");
 
 // pip ends a line at each of these as well as at \n and \r\n (Python's splitlines), so
@@ -78,8 +78,6 @@ function withoutEndBackslashes(text) {
   while (end > start && text[end - 1] === "\\") end--;
   return text.slice(start, end);
 }
-
-const withoutBom = (text) => (text.startsWith("\uFEFF") ? text.slice(1) : text);
 
 // A file whose first or second line, starting with `#`, names an encoding other than UTF-8, and that has no BOM: pip decodes it
 // with that encoding, so its lines are not the ones read here.

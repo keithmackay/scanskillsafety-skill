@@ -5,6 +5,7 @@
 const { isObject } = require("../util");
 const { classifyManifestValue, UNREADABLE } = require("../packageSources");
 const {
+  append,
   jsonMembers,
   localPathVerdict,
   manifestEntries,
@@ -13,6 +14,7 @@ const {
   SEMVER,
   unnamedEntry,
   unreadableNamed,
+  withoutBom,
   workspaceEntries,
 } = require("./shared");
 
@@ -187,7 +189,7 @@ function packageExtensionsFound(extensions, member, members, folder) {
       }
       for (const dependency of sectionValues(section, members, fieldMember?.object, false)) {
         if (dependency.value === null) found.push({ entry: unreadableNamed(dependency.name, dependency.line), checked: false });
-        else found.push(...dependencyFound(dependency.name, dependency, { checked: false, overrides: false }, folder));
+        else append(found, dependencyFound(dependency.name, dependency, { checked: false, overrides: false }, folder));
       }
     }
   }
@@ -197,7 +199,7 @@ function packageExtensionsFound(extensions, member, members, folder) {
 // package.json's dependencies in every section that can name a source, and the overrides in `pnpm.overrides` and package
 // extensions in `pnpm.packageExtensions`. A section that is not an object is one it cannot read.
 function readPackageJson(text, folder = "") {
-  const unmarked = text.startsWith("\uFEFF") ? text.slice(1) : text;
+  const unmarked = withoutBom(text);
   const json = parseJson(unmarked);
   if (!isObject(json)) return [];
   const members = jsonMembers(unmarked);
@@ -213,7 +215,7 @@ function readPackageJson(text, folder = "") {
       }
       if (Object.hasOwn(value, "packageExtensions")) {
         const extensions = members(member?.object, "packageExtensions");
-        found.push(...packageExtensionsFound(value.packageExtensions, extensions, members, folder));
+        append(found, packageExtensionsFound(value.packageExtensions, extensions, members, folder));
       }
     }
   }
@@ -232,4 +234,4 @@ function readPackageJson(text, folder = "") {
   return manifestEntries(found, (name) => name);
 }
 
-module.exports = { readPackageJson, dependencyFound, overrideTarget };
+module.exports = { readPackageJson, dependencyFound, EXTENSION_META, EXTENSION_SECTIONS, overrideTarget };

@@ -1,156 +1,18 @@
 // ABOUTME: Reads a pyproject.toml: with no uv or Poetry lockfile, the names sent to OSV and every dependency, source and workspace
-// ABOUTME: member from outside the registry or the repository; always, its uv, Poetry, PDM and Rye index settings; fails closed.
+// ABOUTME: member from outside the registry or the repository; always, its tools' index settings and uv's install-wide lists.
 "use strict";
 
 const { OBJECT_ID } = require("../util");
 const { EXPECTED, LOCAL, UNREADABLE } = require("../packageSources");
-const { certificateChecksOff, configEntry, manifestEntries, normalisePyPI, unnamedEntry, unreadableNamed, workspaceEntries } = require("./shared");
-const { tomlStatements } = require("./toml");
+const { manifestEntries, normalisePyPI, unnamedEntry, withoutBom, workspaceEntries } = require("./shared");
+const { after, arrayTables, stringOf, tableFields, tomlValues } = require("./toml");
 const { pythonAddress } = require("./python");
-const { addressEntries, ENV_INDEX, specifierEntries, splitName } = require("./requirements");
+const { BUILD, EDITABLE, GROUPS, requirementListEntries } = require("./requirementLists");
+const { pyprojectConfigEntries, uvRequirementEntries, uvRequirementFound } = require("./pythonConfig");
 
 const NAMED_INDEX = Object.freeze({ expected: false, kind: "host", address: null, text: "a named index" });
 
-const TOML_LAYOUT = "not TOML it can read";
-const withoutBom = (text) => (text.startsWith("\uFEFF") ? text.slice(1) : text);
-const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
-const WHITESPACE = /\s/;
-
-// The text of a one-line string, basic or literal; null for any other value.
-const stringOf = (value) => {
-  const oneLine = value.kind === "string" || value.kind === "literal";
-  return oneLine && value.text !== undefined ? value.text : null;
-};
 const isTrue = (value) => value.kind === "scalar" && value.text === "true";
-
-// The most parts of a key path kept: more than any section that names a source has. One part past it is kept, so a longer path
-// still reads as deeper than every section, without a long path being copied for each value under it.
-const MAX_PATH = 10;
-const cappedPath = (path, more) => path.concat(more.slice(0, MAX_PATH + 1)).slice(0, MAX_PATH + 1);
-
-// The path of a table header (at most MAX_PATH parts and one more), each array of tables in it followed by the number of its
-// element: a new one for an `[[…]]` header's own array, the last one for an array it names on the way, as TOML reads
-// `[index.cache-control]` after `[[index]]` as a table of that index. `elements` holds each array's last element by its path.
-function headerPath(statement, elements) {
-  const parts = statement.header.slice(0, MAX_PATH + 1);
-  const own = statement.array && statement.header.length === parts.length;
-  const path = [];
-  parts.forEach((part, k) => {
-    path.push(part);
-    const id = JSON.stringify(path);
-    if (own && k === parts.length - 1) {
-      const element = (elements.get(id) ?? -1) + 1;
-      elements.set(id, element);
-      path.push(element);
-    } else if (elements.has(id)) path.push(elements.get(id));
-  });
-  return cappedPath([], path);
-}
-
-// Every value of a TOML file with its key path (at most MAX_PATH parts and one more): the table it is in, its own dotted key and,
-// for an inline table, each of its entries in turn; an array of tables adds the number of its element to the path, so it never
-// reads as a name.
-function tomlValues(text) {
-  const values = [];
-  let table = [];
-  const elements = new Map();
-  for (const statement of tomlStatements(text, TOML_LAYOUT, { anyLayout: true })) {
-    if (statement.header) {
-      table = headerPath(statement, elements);
-      continue;
-    }
-    const stack = [{ path: cappedPath(table, statement.path), value: statement.value }];
-    while (stack.length > 0) {
-      const { path, value } = stack.pop();
-      if (value.kind !== "table") values.push({ path, value });
-      else {
-        for (let k = value.entries.length - 1; k >= 0; k--) {
-          stack.push({ path: cappedPath(path, value.entries[k].path), value: value.entries[k].value });
-        }
-      }
-    }
-  }
-  return values;
-}
-
-// The path after `prefix`, or null when the path does not start with it.
-function after(path, prefix) {
-  if (path.length < prefix.length || prefix.some((part, k) => path[k] !== part)) return null;
-  return path.slice(prefix.length);
-}
-
-// The project's own folder as PDM (`file:///${PROJECT_ROOT}`) and Hatch (`{root:uri}`) write it in a dependency's URL.
-const PROJECT_ROOTS = ["file:///${PROJECT_ROOT}", "{root:uri}"];
-
-// An address with the project's folder written as PDM or Hatch write it, as a path from the pyproject's folder; any other
-// unchanged.
-function projectRelative(address) {
-  for (const root of PROJECT_ROOTS) {
-    if (address === root) return ".";
-    if (address.startsWith(`${root}/`)) return `./${address.slice(root.length + 1)}`;
-  }
-  return address;
-}
-
-// The entries of one address a requirement installs from (`name` null when it gives none), a local one kept so its name is held
-// back from OSV.
-function requirementAddressEntries(address, name, line, folder) {
-  const entries = addressEntries(projectRelative(address), name, line, folder);
-  return entries.length > 0 ? entries : [{ name, version: null, line, classified: LOCAL }];
-}
-
-// A PEP 508 requirement: `name [extras] @ url ; marker`, or `name [extras] specifiers ; marker`. A URL ends at whitespace, after
-// which only a marker may follow. One that is not a requirement it can read keeps its name when it has one; a bare URL has none.
-function requirementEntries(text, line, folder) {
-  const requirement = text.trim();
-  const parts = SCHEME.test(requirement) ? null : splitName(requirement);
-  if (parts === null) return [unnamedEntry(line)];
-  if (parts.rest.startsWith("@")) {
-    const address = parts.rest.slice(1).trimStart();
-    const end = address.search(WHITESPACE);
-    const marker = end < 0 ? "" : address.slice(end).trim();
-    if (marker !== "" && !marker.startsWith(";")) return [unreadableNamed(parts.name, line)];
-    return requirementAddressEntries(end < 0 ? address : address.slice(0, end), parts.name, line, folder);
-  }
-  const specified = specifierEntries({ name: parts.name, rest: parts.rest.split(";", 1)[0] }, line);
-  if (specified !== null && specified[0].classified !== undefined) return specified;
-  return [{ name: parts.name, version: null, line }];
-}
-
-// How a list's items may be written besides PEP 508 strings: a dependency group's `{ include-group = "name" }`, which names no
-// source; uv's extra build dependency `{ requirement = "…", match-runtime = … }`; PDM's editable `-e <address>`.
-const GROUPS = "groups";
-const BUILD = "build";
-const EDITABLE = "editable";
-
-// The requirement in a uv extra build dependency table, or null when the table is not one.
-function buildRequirement(item) {
-  const fields = tableFields(item);
-  if (fields === null || [...fields.keys()].some((field) => field !== "requirement" && field !== "match-runtime")) return null;
-  return fields.has("requirement") ? stringOf(fields.get("requirement")) : null;
-}
-
-const isIncludeGroup = (item) => {
-  const fields = tableFields(item);
-  return fields !== null && fields.size === 1 && fields.has("include-group") && stringOf(fields.get("include-group")) !== null;
-};
-
-// An array of PEP 508 strings, with the other items its `form` allows; any other item is one it cannot read.
-function requirementListEntries(value, folder, form) {
-  if (value.kind !== "array") return [unnamedEntry(value.line)];
-  return value.items.flatMap((item) => {
-    // A multi-line string has no text, so like any other item it does not know it is one it cannot read.
-    const text = stringOf(item);
-    if (text !== null && form === EDITABLE && /^-e\s/.test(`${text.trim()} `)) {
-      const address = text.trim().slice(2).trim();
-      return address === "" ? [unnamedEntry(item.line)] : requirementAddressEntries(address, null, item.line, folder);
-    }
-    if (text !== null) return requirementEntries(text, item.line, folder);
-    if (form === GROUPS && isIncludeGroup(item)) return [];
-    const requirement = form === BUILD ? buildRequirement(item) : null;
-    return requirement === null ? [unnamedEntry(item.line)] : requirementEntries(requirement, item.line, folder);
-  });
-}
 
 // An index a dependency names, found by name among the file's indexes (the first of a name wins, as uv and Poetry take it; names
 // compared by `sameName`): its address as an index, or a find-links page for a flat one; `builtIn` when no index has the name and
@@ -190,17 +52,6 @@ function tableVerdict(fields, folder, { kinds, known, required, namedIndex }) {
   return INDEX_FIELDS.has(kind) ? namedIndex(address) : addressVerdict(kind, address, rev, folder);
 }
 
-// The fields of an inline table whose keys are single names, given once; null when it is not one.
-function tableFields(value) {
-  if (value.kind !== "table") return null;
-  const fields = new Map();
-  for (const entry of value.entries) {
-    if (entry.path.length !== 1 || fields.has(entry.path[0])) return null;
-    fields.set(entry.path[0], entry.value);
-  }
-  return fields;
-}
-
 const UV_KINDS = ["git", "url", "path", "index", "workspace"];
 const UV_FIELDS = new Set([
   ...UV_KINDS, "rev", "tag", "branch", "subdirectory", "lfs", "editable", "package", "marker", "extra", "group",
@@ -236,27 +87,6 @@ const poetryVerdict = (fields, folder, indexes) =>
     },
   });
 
-// The tables of an array of tables at `prefix`, written as `[[…]]` tables or as an array of inline tables: each its fields by name
-// (null for an item that is not an inline table of single names), the line it starts on, and the names of fields with values
-// nested below them. `badLine` is the line of the first value at the prefix in any other shape, or null.
-function arrayTables(values, prefix) {
-  const tables = new Map();
-  let badLine = null;
-  for (const { path, value } of values) {
-    const rest = after(path, prefix);
-    if (rest === null) continue;
-    if (rest.length === 0 && value.kind === "array") {
-      value.items.forEach((item, k) => tables.set(`item${k}`, { fields: tableFields(item), line: item.line, nested: new Set() }));
-    } else if (rest.length >= 2 && typeof rest[0] === "number" && typeof rest[1] === "string") {
-      if (!tables.has(rest[0])) tables.set(rest[0], { fields: new Map(), line: value.line, nested: new Set() });
-      const table = tables.get(rest[0]);
-      if (rest.length > 2) table.nested.add(rest[1]);
-      else table.fields.set(rest[1], value);
-    } else badLine ??= value.line;
-  }
-  return { tables: [...tables.values()], badLine };
-}
-
 // The indexes a file names by name, `[[tool.uv.index]]` or `[[tool.poetry.source]]`, as tables or as an array of inline tables.
 function namedIndexes(values, prefix) {
   return arrayTables(values, prefix).tables.map(({ fields: given }) => {
@@ -268,166 +98,6 @@ function namedIndexes(values, prefix) {
     };
   });
 }
-
-// Config settings that name where packages come from.
-
-// An index or find-links address a setting names, `role` saying which: one set from an environment variable is said to be so;
-// PDM's and Hatch's project folder is read as a path; a path inside the repository is a folder of archives; PyPI's index gives
-// nothing.
-function configAddressEntries(address, line, folder, role) {
-  const relative = projectRelative(address);
-  if (relative.includes("${")) return [configEntry(line, ENV_INDEX)];
-  const verdict = pythonAddress(relative, folder, { pathField: true, role });
-  return verdict.expected ? [] : [configEntry(line, verdict)];
-}
-
-// uv's allow-insecure-host, whatever hosts it names.
-const INSECURE_HOSTS = certificateChecksOff("allow-insecure-host");
-const SSL_UNVERIFIED = certificateChecksOff("verify_ssl = false");
-
-// A source's verify_ssl: false is reported, true gives nothing, and any other value is one it cannot read.
-function verifySslEntries(value) {
-  const flag = value.kind === "scalar" ? value.text : null;
-  if (flag === "false") return [configEntry(value.line, SSL_UNVERIFIED)];
-  return flag === "true" ? [] : [configEntry(value.line, UNREADABLE)];
-}
-
-// uv's settings that name an index or a find-links page: one address, or a list of them.
-const UV_ADDRESS_SETTINGS = new Map([
-  ["index-url", { role: "index", list: false }],
-  ["extra-index-url", { role: "index", list: true }],
-  ["find-links", { role: "find-links", list: true }],
-]);
-
-// uv's index-url, extra-index-url and find-links at `prefix` (the top of uv.toml, [tool.uv] in pyproject.toml); a setting that is
-// not a string, or a list of strings where uv takes one, is one it cannot read.
-function uvSettingEntries(values, prefix, folder) {
-  const out = [];
-  for (const { path, value } of values) {
-    const rest = after(path, prefix);
-    if (rest !== null && rest[0] === "allow-insecure-host") out.push(configEntry(value.line, INSECURE_HOSTS));
-    if (rest === null || !UV_ADDRESS_SETTINGS.has(rest[0])) continue;
-    const { role, list } = UV_ADDRESS_SETTINGS.get(rest[0]);
-    const items = list && value.kind === "array" ? value.items : [value];
-    const addresses = items.map(stringOf);
-    const shaped = rest.length === 1 && list === (value.kind === "array") && addresses.every((address) => address !== null);
-    if (!shaped) out.push(configEntry(value.line, UNREADABLE));
-    else items.forEach((item, k) => out.push(...configAddressEntries(addresses[k], item.line, folder, role)));
-  }
-  return out;
-}
-
-// The url of each table at `prefix` (uv's indexes, Poetry's, PDM's and Rye's sources), read as what the table says it is (`roleOf`:
-// an index or a find-links page, or null for a kind the tool does not take), and its verify_ssl where the tool has one
-// (`verifiesSsl`). A table with no url is one it cannot read unless the tool needs none for it (`urlOptional`); a malformed section
-// is one it cannot read, once.
-function sourceTableEntries(values, prefix, folder, { roleOf, urlOptional = () => false, verifiesSsl = false }) {
-  const { tables, badLine } = arrayTables(values, prefix);
-  const out = badLine === null ? [] : [configEntry(badLine, UNREADABLE)];
-  for (const { fields, line, nested } of tables) {
-    const url = fields?.get("url");
-    const urlLine = url?.line ?? line;
-    if (fields === null || nested.has("url")) out.push(configEntry(urlLine, UNREADABLE));
-    else if (url === undefined) {
-      if (!urlOptional(fields)) out.push(configEntry(line, UNREADABLE));
-    } else {
-      const role = roleOf(fields);
-      const address = stringOf(url);
-      if (role === null || address === null) out.push(configEntry(urlLine, UNREADABLE));
-      else out.push(...configAddressEntries(address, urlLine, folder, role));
-    }
-    if (verifiesSsl && fields?.has("verify_ssl")) out.push(...verifySslEntries(fields.get("verify_ssl")));
-  }
-  return out;
-}
-
-// What a table's field names it as, by its value: `kinds` maps each value the tool takes to a role; with no field, `absent`.
-const roleByField = (field, kinds, absent) => (fields) => {
-  if (!fields.has(field)) return absent;
-  return kinds.get(stringOf(fields.get(field))) ?? null;
-};
-
-const UV_INDEX_ROLE = roleByField("format", new Map([["simple", "index"], ["flat", "find-links"]]), "index");
-const PDM_SOURCE_ROLE = roleByField("type", new Map([["index", "index"], ["find_links", "find-links"]]), "index");
-
-const RYE_SOURCE_ROLE = roleByField("type", new Map([["index", "index"], ["find-links", "find-links"]]), "index");
-
-// uv's settings and indexes at `prefix` (the top of uv.toml, or [tool.uv] in pyproject.toml), and its settings for `uv pip` below
-// it in [pip].
-const uvConfigEntries = (values, prefix, folder) => [
-  ...uvSettingEntries(values, prefix, folder),
-  ...uvSettingEntries(values, [...prefix, "pip"], folder),
-  ...sourceTableEntries(values, [...prefix, "index"], folder, { roleOf: UV_INDEX_ROLE }),
-];
-
-// uv's lists of PEP 508 strings that apply to every install, read whether or not a lockfile is present.
-const UV_REQUIREMENT_LISTS = ["override-dependencies", "constraint-dependencies"];
-
-// uv's override and constraint lists and each `dependency-metadata` table's `requires-dist` at `prefix` (the top of uv.toml, or
-// [tool.uv] in pyproject.toml), as a manifest's found entries whose names are never sent to OSV; a list or table in any other
-// shape is one it cannot read.
-function uvRequirementFound(values, prefix, folder) {
-  const entries = [];
-  for (const { path, value } of values) {
-    const rest = after(path, prefix);
-    if (rest === null || !UV_REQUIREMENT_LISTS.includes(rest[0])) continue;
-    if (rest.length === 1) for (const entry of requirementListEntries(value, folder)) entries.push(entry);
-    else entries.push(unnamedEntry(value.line));
-  }
-  const { tables, badLine } = arrayTables(values, [...prefix, "dependency-metadata"]);
-  if (badLine !== null) entries.push(unnamedEntry(badLine));
-  for (const { fields, line, nested } of tables) {
-    if (fields === null || nested.has("requires-dist")) entries.push(unnamedEntry(line));
-    else if (fields.has("requires-dist")) for (const entry of requirementListEntries(fields.get("requires-dist"), folder)) entries.push(entry);
-  }
-  return entries.map((entry) => ({ entry, checked: false }));
-}
-
-// Those lists as entries, without a manifest's other lists: only the packages from outside the registry.
-const uvRequirementEntries = (values, prefix, folder) =>
-  manifestEntries(uvRequirementFound(values, prefix, folder), (name) => (name === null ? null : normalisePyPI(name)));
-
-// pdm.toml's indexes: [pypi] url, PyPI's replacement, an index; and [pypi.<name>] url, an index or, with `type = "find_links"`, a
-// find-links page; and each one's verify_ssl. A url in any other place under [pypi], one that is not a string, or a type PDM does
-// not take is one it cannot read.
-function pdmTomlEntries(values, folder) {
-  const types = new Map();
-  for (const { path, value } of values) {
-    if (path.length === 3 && path[0] === "pypi" && typeof path[1] === "string" && path[2] === "type") types.set(path[1], value);
-  }
-  const roleOf = (name) => (name === null ? "index" : PDM_SOURCE_ROLE(types.has(name) ? new Map([["type", types.get(name)]]) : new Map()));
-  const out = [];
-  for (const { path, value } of values) {
-    if (path[0] !== "pypi") continue;
-    const rest = path.slice(1);
-    const ownSetting = rest.length === 1 || (rest.length === 2 && typeof rest[0] === "string");
-    if (ownSetting && rest[rest.length - 1] === "verify_ssl") {
-      out.push(...verifySslEntries(value));
-      continue;
-    }
-    const named = rest.length === 2 && typeof rest[0] === "string" && rest[1] === "url";
-    const atUrl = (rest.length === 1 && rest[0] === "url") || named;
-    const address = atUrl ? stringOf(value) : null;
-    const role = atUrl ? roleOf(named ? rest[0] : null) : null;
-    const misplaced = rest.length === 0 || typeof rest[0] !== "string" || rest.slice(0, 2).includes("url");
-    if (address !== null && role !== null) out.push(...configAddressEntries(address, value.line, folder, role));
-    else if (atUrl || misplaced) out.push(configEntry(value.line, UNREADABLE));
-  }
-  return out;
-}
-
-// pyproject.toml's settings that name where packages come from: uv's, Poetry's sources (one named PyPI needs no url), PDM's and
-// Rye's.
-const pyprojectConfigEntries = (values, folder) => [
-  ...uvConfigEntries(values, ["tool", "uv"], folder),
-  ...sourceTableEntries(values, ["tool", "poetry", "source"], folder, {
-    roleOf: () => "index",
-    urlOptional: (fields) => fields.has("name") && stringOf(fields.get("name"))?.toLowerCase() === "pypi",
-    verifiesSsl: true,
-  }),
-  ...sourceTableEntries(values, ["tool", "pdm", "source"], folder, { roleOf: PDM_SOURCE_ROLE, verifiesSsl: true }),
-  ...sourceTableEntries(values, ["tool", "rye", "sources"], folder, { roleOf: RYE_SOURCE_ROLE }),
-];
 
 const PROJECT_DEPENDENCIES = ["project", "dependencies"];
 const OPTIONAL_DEPENDENCIES = ["project", "optional-dependencies"];
@@ -601,4 +271,4 @@ function readPyprojectConfig(text, folder = "") {
   return [...uvRequirementEntries(values, ["tool", "uv"], folder), ...pyprojectConfigEntries(values, folder)];
 }
 
-module.exports = { readPyproject, readPyprojectConfig, tomlValues, uvConfigEntries, uvRequirementEntries, pdmTomlEntries };
+module.exports = { readPyproject, readPyprojectConfig };

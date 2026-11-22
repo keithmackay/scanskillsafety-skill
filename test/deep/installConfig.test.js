@@ -1059,3 +1059,14 @@ test("a certificate setting it cannot read is one it cannot read, and does not c
     assert.equal(read([[".yarnrc.yml", text]]).sourced.length, expected, text);
   }
 });
+
+test("a registry key or value in .yarnrc.yml or pnpm-workspace.yaml that is no address is one it cannot read, covering a lockfile", () => {
+  for (const [file, text, line] of [
+    [".yarnrc.yml", "npmRegistries:\n  not-an-address:\n    npmAlwaysAuth: true", 2],
+    ["pnpm-workspace.yaml", "namedRegistries:\n  corp: not an address", 2],
+    ["pnpm-workspace.yaml", "registries:\n  https://:\n    scopes: ['@']", 2],
+  ]) {
+    assertUnreadableAt("npm", file, text, line);
+  }
+  assert.deepEqual(read([["yarn.lock", BERRY], [".yarnrc.yml", "npmRegistries:\n  not-an-address:\n    npmAlwaysAuth: true"]]).notRecorded, []);
+});

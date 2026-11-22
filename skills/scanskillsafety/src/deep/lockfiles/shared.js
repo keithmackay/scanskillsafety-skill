@@ -6,6 +6,11 @@ const { OBJECT_ID } = require("../util");
 const { NAME_SEGMENT, UNREADABLE } = require("../packageSources");
 
 const unquote = (s) => s.replace(/^["']|["']$/g, "");
+const withoutBom = (text) => (text.startsWith("\uFEFF") ? text.slice(1) : text);
+// Adds items to the end of a list one by one, so a long list is never passed as arguments.
+const append = (target, items) => {
+  for (const item of items) target.push(item);
+};
 const linesOf = (text) => text.split(/\r?\n/);
 const leadingSpaces = (line) => {
   let n = 0;
@@ -250,16 +255,6 @@ function localPathVerdict(source, folder, local) {
   return isPackageArchive(path) ? bundled(pathFrom(folder, path)) : local;
 }
 
-// A config setting that names where packages come from, as a reader read it: `covers` lists the scopes whose registry for installs
-// it names (null for the unscoped registry), so a lockfile that records no host is known to be covered by it; `scope` is the one
-// scope a scoped setting names, shown with it.
-const configEntry = (line, classified, extra = {}) => ({ line, from: "config", classified, ...extra });
-
-// A setting that turns off certificate checks, so what is downloaded can be changed on the way: reported as plain http is, with
-// the setting named.
-const certificateChecksOff = (setting) =>
-  Object.freeze({ expected: false, kind: "http", address: null, text: `${setting} turns off certificate checks` });
-
 // An entry whose source a reader could not make out, whatever the classifier would say.
 const UNREADABLE_ENTRY = Object.freeze({ classified: UNREADABLE });
 // An entry it cannot even name: reported as a source it could not read, with nothing from it kept, so it is never left out.
@@ -322,8 +317,8 @@ function workspaceEntries(patterns, line, folder) {
 }
 
 module.exports = {
-  certificateChecksOff,
-  configEntry,
+  append,
+  withoutBom,
   OUTSIDE_PROJECT,
   pathFrom,
   staysInside,

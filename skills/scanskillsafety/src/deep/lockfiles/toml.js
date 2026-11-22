@@ -308,4 +308,102 @@ function tomlStatements(text, layout, { anyLayout = false } = {}) {
   return statements;
 }
 
-module.exports = { tomlStatements };
+// Values as read in any layout, by their whole key path.
+
+const TOML_LAYOUT = "not TOML it can read";
+
+// The text of a one-line string, basic or literal; null for any other value.
+const stringOf = (value) => {
+  const oneLine = value.kind === "string" || value.kind === "literal";
+  return oneLine && value.text !== undefined ? value.text : null;
+};
+
+// The most parts of a key path kept: more than any section that names a source has. One part past it is kept, so a longer path
+// still reads as deeper than every section, without a long path being copied for each value under it.
+const MAX_PATH = 10;
+const cappedPath = (path, more) => path.concat(more.slice(0, MAX_PATH + 1)).slice(0, MAX_PATH + 1);
+
+// The path of a table header (at most MAX_PATH parts and one more), each array of tables in it followed by the number of its
+// element: a new one for an `[[…]]` header's own array, the last one for an array it names on the way, as TOML reads
+// `[index.cache-control]` after `[[index]]` as a table of that index. `elements` holds each array's last element by its path.
+function headerPath(statement, elements) {
+  const parts = statement.header.slice(0, MAX_PATH + 1);
+  const own = statement.array && statement.header.length === parts.length;
+  const path = [];
+  parts.forEach((part, k) => {
+    path.push(part);
+    const id = JSON.stringify(path);
+    if (own && k === parts.length - 1) {
+      const element = (elements.get(id) ?? -1) + 1;
+      elements.set(id, element);
+      path.push(element);
+    } else if (elements.has(id)) path.push(elements.get(id));
+  });
+  return cappedPath([], path);
+}
+
+// Every value of a TOML file with its key path (at most MAX_PATH parts and one more): the table it is in, its own dotted key and,
+// for an inline table, each of its entries in turn; an array of tables adds the number of its element to the path, so it never
+// reads as a name.
+function tomlValues(text) {
+  const values = [];
+  let table = [];
+  const elements = new Map();
+  for (const statement of tomlStatements(text, TOML_LAYOUT, { anyLayout: true })) {
+    if (statement.header) {
+      table = headerPath(statement, elements);
+      continue;
+    }
+    const stack = [{ path: cappedPath(table, statement.path), value: statement.value }];
+    while (stack.length > 0) {
+      const { path, value } = stack.pop();
+      if (value.kind !== "table") values.push({ path, value });
+      else {
+        for (let k = value.entries.length - 1; k >= 0; k--) {
+          stack.push({ path: cappedPath(path, value.entries[k].path), value: value.entries[k].value });
+        }
+      }
+    }
+  }
+  return values;
+}
+
+// The path after `prefix`, or null when the path does not start with it.
+function after(path, prefix) {
+  if (path.length < prefix.length || prefix.some((part, k) => path[k] !== part)) return null;
+  return path.slice(prefix.length);
+}
+
+// The fields of an inline table whose keys are single names, given once; null when it is not one.
+function tableFields(value) {
+  if (value.kind !== "table") return null;
+  const fields = new Map();
+  for (const entry of value.entries) {
+    if (entry.path.length !== 1 || fields.has(entry.path[0])) return null;
+    fields.set(entry.path[0], entry.value);
+  }
+  return fields;
+}
+
+// The tables of an array of tables at `prefix`, written as `[[…]]` tables or as an array of inline tables: each its fields by name
+// (null for an item that is not an inline table of single names), the line it starts on, and the names of fields with values
+// nested below them. `badLine` is the line of the first value at the prefix in any other shape, or null.
+function arrayTables(values, prefix) {
+  const tables = new Map();
+  let badLine = null;
+  for (const { path, value } of values) {
+    const rest = after(path, prefix);
+    if (rest === null) continue;
+    if (rest.length === 0 && value.kind === "array") {
+      value.items.forEach((item, k) => tables.set(`item${k}`, { fields: tableFields(item), line: item.line, nested: new Set() }));
+    } else if (rest.length >= 2 && typeof rest[0] === "number" && typeof rest[1] === "string") {
+      if (!tables.has(rest[0])) tables.set(rest[0], { fields: new Map(), line: value.line, nested: new Set() });
+      const table = tables.get(rest[0]);
+      if (rest.length > 2) table.nested.add(rest[1]);
+      else table.fields.set(rest[1], value);
+    } else badLine ??= value.line;
+  }
+  return { tables: [...tables.values()], badLine };
+}
+
+module.exports = { tomlStatements, tomlValues, after, arrayTables, stringOf, tableFields };
