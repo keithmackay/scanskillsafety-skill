@@ -2,7 +2,7 @@
 // ABOUTME: to OSV: registry packages, and a manifest's names but those a covering lockfile sent; what it cannot read is listed.
 "use strict";
 
-const { baseName, isVendored } = require("../util");
+const { baseName, folderOf, isVendored } = require("../util");
 const { classifySource } = require("../packageSources");
 const { append, isPep440, localPathVerdict, normalisePep440, normalisePyPI, pathFrom, SEMVER, staysInside, Unreadable, UNREADABLE_ENTRY } = require("./shared");
 const { readNpmLock } = require("./npm");
@@ -69,9 +69,6 @@ const COVERING_CONFIG = new Map([
 
 // A file read by a reader other than the requirements reader: a lockfile or a manifest.
 const isOtherFormat = (p) => (lockfileKind(p) !== null && lockfileKind(p) !== REQUIREMENTS) || MANIFESTS.has(baseName(p));
-
-// The folder a file is in, relative to the repository root ("" at the root).
-const folderOf = (filePath) => filePath.slice(0, Math.max(0, filePath.lastIndexOf("/")));
 
 // What a reader makes of a file, given its text and its folder, or why it could not; input nested past what the reader can follow
 // is said to be so.

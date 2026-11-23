@@ -14,7 +14,8 @@ const {
   opensUnclosed,
   OUTSIDE_PROJECT,
   pathFrom,
-  PLAIN_NAME,
+  SCHEME,
+  YAML_PLAIN_KEY,
   SEMVER,
   startsWithAny,
   staysInside,
@@ -29,7 +30,7 @@ const PNPM_VERSIONS = ["6.0", "6.1", "9.0"];
 
 // A `name: value` field with a plain name and a value that starts like a plain scalar.
 const plainField = (field) =>
-  field !== null && PLAIN_NAME.test(field.key) && field.value !== "" && !ODD_VALUE_START.includes(field.value[0]);
+  field !== null && YAML_PLAIN_KEY.test(field.key) && field.value !== "" && !ODD_VALUE_START.includes(field.value[0]);
 
 // The fields of a one-line flow map as pnpm writes one (`{integrity: sha512-…, tarball: https://…}`), split at every comma as
 // YAML splits plain values; null when a key is not a plain name, a value does not start like a plain scalar, a name is given
@@ -56,7 +57,6 @@ const ODD_VALUE_START = "{[&*|>!#'\"%@`";
 // How a top-level value never starts; a quoted scalar (`lockfileVersion: '9.0'`) is allowed.
 const ODD_TOP_VALUE_START = "{[&*|>!#%@`";
 // A URL scheme at the start of a key's version (`git+ssh:`, `https:`, `file:`): one class, so it cannot backtrack.
-const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 
 // A version 6 `github.com/u/r/<sha>` key: a GitHub repository at that commit; null for any other key.
 function pnpmGithubKey(depPath) {
@@ -154,7 +154,7 @@ function readResolution(entry, value) {
 function readPnpmField(entry, text) {
   const field = fieldOf(text);
   entry.inResolution = false;
-  entry.field = field && PLAIN_NAME.test(field.key) ? field.key : null;
+  entry.field = field && YAML_PLAIN_KEY.test(field.key) ? field.key : null;
   if (entry.field === null || startsWithAny(field.value, "&*")) entry.unreadable = true;
   else if (entry.field === "resolution") {
     if (entry.resolutionSeen) entry.unreadable = true;
@@ -184,7 +184,7 @@ function pnpmTopLevelName(line) {
   const field = fieldOf(line);
   const value = field ? field.value : "";
   const plainValue = value === "{}" || value === "[]" || !startsWithAny(value, ODD_TOP_VALUE_START);
-  if (!field || !PLAIN_NAME.test(field.key) || !plainValue || (field.key === "packages" && value !== "")) {
+  if (!field || !YAML_PLAIN_KEY.test(field.key) || !plainValue || (field.key === "packages" && value !== "")) {
     throw new Unreadable(PNPM_LAYOUT);
   }
   return field.key;

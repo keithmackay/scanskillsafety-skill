@@ -2,9 +2,9 @@
 // ABOUTME: requirements, sources, index options and the -r and -c files it names; a line it cannot read is reported, never ignored.
 "use strict";
 
-const { OBJECT_ID } = require("../util");
+const { baseName, OBJECT_ID } = require("../util");
 const { classifySource, ALLOWS_HTTP, FIND_LINKS, INDEX, UNREADABLE } = require("../packageSources");
-const { found, isPackageArchive, linesOf, OUTSIDE_PROJECT, pathFrom, Unreadable, UNREADABLE_ENTRY, withoutBom } = require("./shared");
+const { found, isPackageArchive, linesOf, OUTSIDE_PROJECT, pathFrom, SCHEME, Unreadable, UNREADABLE_ENTRY, withoutBom } = require("./shared");
 const { pythonAddress } = require("./python");
 
 // pip ends a line at each of these as well as at \n and \r\n (Python's splitlines), so
@@ -18,7 +18,6 @@ const CODING = /coding[:=][ \t\n\r\f\v]*([-\w.]+)/;
 const UTF8_NAMES = new Set(["utf-8", "utf8", "utf_8", "u8", "utf-8-sig"]);
 // Whitespace other than a space: pip splits a line into words at spaces only.
 const OTHER_WHITESPACE = /[^\S ]/;
-const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 const REQUIREMENT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*/;
 const EGG_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const EXTRAS = /^\[[A-Za-z0-9._,\s-]*\]$/;
@@ -193,7 +192,7 @@ const SDIST = /\.(?:zip|tar(?:\.(?:gz|bz2|xz|lz|lzma))?)$/i;
 // the text either side of its last `-`. null when the file is neither or the name is not one.
 function archiveNameAndVersion(address) {
   const path = address.split("#", 1)[0].split("?", 1)[0];
-  const file = path.slice(path.lastIndexOf("/") + 1);
+  const file = baseName(path);
   let parts = null;
   if (WHEEL.test(file)) {
     const fields = file.slice(0, -".whl".length).split("-");
@@ -360,4 +359,4 @@ function readRequirements(text, folder = "") {
 // file of ranges) gives nothing to check rather than a file it could not read.
 const readNamedRequirements = (text, folder = "") => requirementsFile(text, folder).entries;
 
-module.exports = { readRequirements, readNamedRequirements, addressEntries, envAddress, keptRole, ENV_FIND_LINKS, ENV_INDEX, NO_PINS_REASON, specifierEntries, splitName };
+module.exports = { readRequirements, readNamedRequirements, addressEntries, envAddress, keptRole, EDITABLE, ENV_FIND_LINKS, ENV_INDEX, NO_PINS_REASON, specifierEntries, splitName };

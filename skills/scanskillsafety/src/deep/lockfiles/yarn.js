@@ -10,7 +10,7 @@ const {
   LONE_CR_OR_TAB,
   opensUnclosed,
   pathFrom,
-  PLAIN_NAME,
+  YAML_PLAIN_KEY,
   startsWithAny,
   staysInside,
   unnamedEntry,
@@ -114,7 +114,7 @@ function readBerryLine(entry, line) {
   }
   const text = line.slice(indent);
   const field = indent === 2 ? fieldOf(text) : null;
-  const shaped = field && PLAIN_NAME.test(field.key) && text.startsWith(`${field.key}:`);
+  const shaped = field && YAML_PLAIN_KEY.test(field.key) && text.startsWith(`${field.key}:`);
   if (!shaped || text.includes("\\") || startsWithAny(field.value, YAML_NODE_PROPERTY)) {
     entry.unreadable = true;
     return;

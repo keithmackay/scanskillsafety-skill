@@ -21,7 +21,9 @@ const leadingSpaces = (line) => {
 // A carriage return that does not end a line, or a tab: YAML reads either differently from a reader that goes line by line.
 const LONE_CR_OR_TAB = /\t|\r(?!\n)/;
 // A name as pnpm and Yarn write their YAML fields: no quotes, escapes, tags, anchors or merge keys.
-const PLAIN_NAME = /^[A-Za-z]+$/;
+const YAML_PLAIN_KEY = /^[A-Za-z]+$/;
+// A URL scheme and its colon at the start of a text (`https:`, `git+ssh:`, `file:`).
+const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 
 // A `key: value` or `key:` line's key, as written, and its value, both trimmed; null for any other text.
 function fieldOf(text) {
@@ -356,7 +358,6 @@ module.exports = {
   isPackageArchive,
   bundled,
   localPathVerdict,
-  workspaceOutside,
   manifestEntries,
   unreadableNamed,
   workspaceEntries,
@@ -364,7 +365,8 @@ module.exports = {
   linesOf,
   leadingSpaces,
   LONE_CR_OR_TAB,
-  PLAIN_NAME,
+  YAML_PLAIN_KEY,
+  SCHEME,
   fieldOf,
   startsWithAny,
   opensUnclosed,

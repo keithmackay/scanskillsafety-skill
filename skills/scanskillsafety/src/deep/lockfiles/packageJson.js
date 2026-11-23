@@ -1,5 +1,5 @@
-// ABOUTME: Reads a package.json for a target with no npm lockfile: the names sent to OSV, and every dependency, override and
-// ABOUTME: workspace from outside the registry or the repository, with its line; a shape it cannot read is reported.
+// ABOUTME: Reads every package.json: its names for OSV (a covering lockfile only keeps from OSV the names it sent), and every
+// ABOUTME: dependency, override and workspace from outside the registry or the repository, with its line; a shape it cannot read is reported.
 "use strict";
 
 const { isObject } = require("../util");

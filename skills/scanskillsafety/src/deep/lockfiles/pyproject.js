@@ -1,5 +1,5 @@
-// ABOUTME: Reads a pyproject.toml: with no uv or Poetry lockfile, the names sent to OSV and every dependency, source and workspace
-// ABOUTME: member from outside the registry or the repository; always, its tools' index settings and uv's install-wide lists.
+// ABOUTME: Reads every pyproject.toml: its names for OSV (a covering lockfile only keeps from OSV the names it sent), every dependency,
+// ABOUTME: source and workspace member from outside the registry or the repository, its tools' index settings and uv's install-wide lists.
 "use strict";
 
 const { OBJECT_ID } = require("../util");

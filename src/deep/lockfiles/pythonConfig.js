@@ -185,4 +185,4 @@ function readUvToml(text, folder = "") {
 // pdm.toml: PDM's index settings.
 const readPdmToml = (text, folder = "") => pdmTomlEntries(tomlValues(withoutBom(text)), folder);
 
-module.exports = { pyprojectConfigEntries, readPdmToml, readUvToml, UV_REQUIREMENT_LISTS, uvRequirementEntries, uvRequirementFound };
+module.exports = { pyprojectConfigEntries, readPdmToml, readUvToml, UV_REQUIREMENT_LISTS, uvRequirementFound };

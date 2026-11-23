@@ -3,11 +3,10 @@
 "use strict";
 
 const { LOCAL } = require("../packageSources");
-const { isPep440, unnamedEntry, unreadableNamed } = require("./shared");
+const { isPep440, SCHEME, unnamedEntry, unreadableNamed } = require("./shared");
 const { stringOf, tableFields } = require("./toml");
-const { addressEntries, specifierEntries, splitName } = require("./requirements");
+const { addressEntries, EDITABLE, specifierEntries, splitName } = require("./requirements");
 
-const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 const WHITESPACE = /\s/;
 
 // The project's own folder as PDM (`file:///${PROJECT_ROOT}`) and Hatch (`{root:uri}`) write it in a dependency's URL.
@@ -54,7 +53,6 @@ function requirementEntries(text, line, folder) {
 // source; uv's extra build dependency `{ requirement = "…", match-runtime = … }`; PDM's editable `-e <address>`.
 const GROUPS = "groups";
 const BUILD = "build";
-const EDITABLE = "editable";
 
 // The requirement in a uv extra build dependency table, or null when the table is not one.
 function buildRequirement(item) {
