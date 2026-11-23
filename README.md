@@ -306,7 +306,8 @@ At most 100 entries are listed, in file and line order. Setting and index lines 
 With `--json`, these are in `deep.packages`:
 
 - `offRegistry`: one entry per source in each file (all the packages a file fetches from one host are one entry), with `ecosystem` (`npm` or `PyPI`), `kind` (`host`, `http`, `git`, `url`, `bundled` or `unreadable`), `address` (null when there is none to show, with `text` saying what it is), `file`, `line`, `commit` (git only, when pinned), `from` (`config` or `requirements`, for a setting or index line), `scope` (the npm scope a setting covers), `role` (`find-links` for a find-links page, `allows-http` for a setting that allows plain http), `packages` (the first five, each with `name`, `version` and `line`; empty for a setting) and `total` (the packages from that source in that file).
-- `offRegistryMore`: `{ packages, lines }`, the packages and setting lines past the 100 entries kept.
+- `offRegistryMore`: `{ packages, lines }`, the packages and setting lines past the 100 entries kept; the text output mentions them when either count is above zero.
+- `couldNotRead`: the files it could not read, with their reasons, given with OSV off too (`status` `off`).
 - `notRecorded`: `[{ file, ecosystem }]`, the lockfiles that record no registry.
 - `notSentToOsv`: how many packages were kept from OSV because of their source, each counted once however many files name it.
 

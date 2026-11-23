@@ -16,12 +16,12 @@ All notable changes to this project are documented here. The format follows
 - This part needs no network: it runs with `--no-osv` too, and when OSV can't be reached.
 - A lockfile that does not record where its packages come from, with no config in the target naming a registry for it, gets a note under `Packages:` (not a finding).
 - Bun lockfiles (`bun.lock`, `bun.lockb`) are listed as not checked, as `Cargo.lock`, `go.sum` and `Gemfile.lock` are.
-- `--json`: `deep.packages` has `offRegistry` (the entries, at most 100), `offRegistryMore` (`{ packages, lines }` past those 100), `notRecorded` and `notSentToOsv`.
+- `--json`: `deep.packages` has `offRegistry` (the entries, at most 100), `offRegistryMore` (`{ packages, lines }` past those 100), `notRecorded` and `notSentToOsv`; with OSV off (`status` `off`) it still has these and `couldNotRead`.
 
 ### Changed
 
 - A file that can install packages but could not be read (a lockfile, requirements file, manifest or install config with invalid JSON or TOML, a format version or layout it doesn't read, or too large to read) is a warning, so the rating is at least yellow: any source in it is unknown. A requirements file with no pinned versions is not, since it installs from PyPI.
-- Every `package.json` and `pyproject.toml` is read, not only those with no lockfile. A manifest's names are sent to OSV unless a lockfile or requirements file covering its folder already sent them with a version, and an exact pin (`"1.2.3"` in `package.json`, `==1.2.3` in `pyproject.toml`) is sent with its version.
+- Every `package.json` and `pyproject.toml` is read, not only those with no lockfile, and the `Packages:` line naming them reads "Read from manifests (versions not fixed by a lockfile)" in place of "Names only (no lockfile, so any version may be installed)". A manifest's names are sent to OSV unless a lockfile or requirements file covering its folder already sent them with a version, and an exact pin (`"1.2.3"` in `package.json`, `==1.2.3` in `pyproject.toml`) is sent with its version.
 
 ### Fixed
 
