@@ -6,6 +6,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 const { runDeep } = require("../../src/deep/runDeep");
+const { readPackages } = require("../../src/deep/lockfiles");
 const { makeTree, fakeFetch, inSmallHeap } = require("../helpers");
 
 const LOCKFILES_MODULE = require.resolve("../../src/deep/lockfiles");
@@ -15,7 +16,7 @@ const OSV_BATCH = "https://api.osv.dev/v1/querybatch";
 const MB = 1024 * 1024;
 
 // The deep scan of a folder, OSV off or answered by a stand-in that finds nothing, which must finish within 5 s; with the
-// packages sent to OSV, as "ecosystem:name".
+// packages sent to OSV, as "ecosystem:name@version" (a version left out of the query shown as "any").
 async function deepScan(files, { osv = false } = {}) {
   const fetchImpl = fakeFetch({ [OSV_BATCH]: (init) => ({ body: { results: JSON.parse(init.body).queries.map(() => ({})) } }) });
   const start = Date.now();
@@ -23,7 +24,7 @@ async function deepScan(files, { osv = false } = {}) {
   const took = Date.now() - start;
   assert.ok(took < 5000, `took ${took} ms`);
   const sent = fetchImpl.calls.flatMap((url, k) =>
-    url === OSV_BATCH ? JSON.parse(fetchImpl.options[k].body).queries.map((q) => `${q.package.ecosystem}:${q.package.name}`) : []);
+    url === OSV_BATCH ? JSON.parse(fetchImpl.options[k].body).queries.map((q) => `${q.package.ecosystem}:${q.package.name}@${q.version ?? "any"}`) : []);
   return { result, sent };
 }
 
@@ -65,44 +66,73 @@ test("JSON nested 100,000 levels deep is too deeply nested or a layout it cannot
   assert.equal(result.rating, "yellow");
 });
 
-test("__proto__, constructor and prototype as package names and as config keys are plain names, in every format", async () => {
-  const names = ["__proto__", "constructor", "prototype"];
-  const npmLock = { lockfileVersion: 3, packages: { "": {} } };
-  for (const name of names) npmLock.packages[`node_modules/${name}`] = { version: "1.0.0", resolved: `https://registry.npmjs.org/${name}/-/${name}-1.0.0.tgz` };
-  const pythonNames = ["constructor", "prototype"];
+const PROTOTYPE_NAMES = ["__proto__", "constructor", "prototype"];
+// Each lockfile format listing a package by each name a plain object holds on its prototype, from the registry.
+function prototypeNamedLockfiles() {
+  const names = PROTOTYPE_NAMES;
+  const tarball = (n) => `https://registry.npmjs.org/${n}/-/${n}-1.0.0.tgz`;
+  const each = (entry, separator = "\n") => names.map(entry).join(separator);
+  return {
+    "v1/package-lock.json": `{"lockfileVersion":1,"dependencies":{${each((n) => `"${n}":{"version":"1.0.0","resolved":"${tarball(n)}"}`, ",")}}}`,
+    "v3/package-lock.json": `{"lockfileVersion":3,"packages":{"":{},${each((n) => `"node_modules/${n}":{"version":"1.0.0","resolved":"${tarball(n)}"}`, ",")}}}`,
+    "yarn/yarn.lock": `# yarn lockfile v1\n\n${each((n) => `${n}@^1:\n  version "1.0.0"\n  resolved "${tarball(n)}"\n`)}`,
+    "berry/yarn.lock": `__metadata:\n  version: 8\n\n${each((n) => `"${n}@npm:^1":\n  version: 1.0.0\n  resolution: "${n}@npm:1.0.0"\n`)}`,
+    "pnpm/pnpm-lock.yaml": `lockfileVersion: '9.0'\n\npackages:\n\n${each((n) => `  ${n}@1.0.0:\n    resolution: {integrity: sha512-x}\n`)}`,
+    "poetry/poetry.lock": each((n) => `[[package]]\nname = "${n}"\nversion = "1.0.0"\n`),
+    "uv/uv.lock": `version = 1\n\n${each((n) => `[[package]]\nname = "${n}"\nversion = "1.0.0"\nsource = { registry = "https://pypi.org/simple" }\n`)}`,
+    "req/requirements.txt": each((n) => `${n}==1.0.0`),
+  };
+}
+
+test("__proto__, constructor and prototype as package names in every lockfile format are plain names", () => {
+  const files = prototypeNamedLockfiles();
+  const namesIn = (file) => {
+    const read = readPackages([{ path: file, text: files[file] }]);
+    return { names: read.packages.map((p) => p.name), unreadable: read.sourced.map((s) => `${s.line} ${s.kind}`) };
+  };
+  for (const file of ["v1/package-lock.json", "v3/package-lock.json", "yarn/yarn.lock", "berry/yarn.lock", "pnpm/pnpm-lock.yaml"]) {
+    assert.deepEqual(namesIn(file), { names: PROTOTYPE_NAMES, unreadable: [] }, file);
+  }
+  // PyPI names are sent in their normal form, where a run of `_` is one `-`; a requirements line naming no valid project is one it
+  // cannot read.
+  for (const file of ["poetry/poetry.lock", "uv/uv.lock"]) {
+    assert.deepEqual(namesIn(file), { names: ["-proto-", "constructor", "prototype"], unreadable: [] }, file);
+  }
+  assert.deepEqual(namesIn("req/requirements.txt"), { names: ["constructor", "prototype"], unreadable: ["1 unreadable"] });
+});
+
+test("prototype names as package names and config keys pass through the deep scan as plain names, changing no built-in prototype", async () => {
+  const builtIns = () => [Object.prototype, Array.prototype, Map.prototype, Function.prototype].map((proto) => Object.getOwnPropertyNames(proto).sort());
+  const before = builtIns();
   const { result, sent } = await deepScan({
     "SKILL.md": "Formats tables.",
-    "npm/package-lock.json": JSON.stringify(npmLock, null, 2),
-    "npm/package.json": `{"dependencies":${JSON.stringify(Object.fromEntries(names.map((n) => [n, "^1"])))},"overrides":{"__proto__":"github:u/p","constructor":"github:u/c"}}`,
-    "yarn/yarn.lock": `# yarn lockfile v1\n\n${names.map((n) => `${n}@^1:\n  version "1.0.0"\n  resolved "https://registry.yarnpkg.com/${n}/-/${n}-1.0.0.tgz"\n`).join("\n")}`,
-    "pnpm/pnpm-lock.yaml": `lockfileVersion: '9.0'\n\npackages:\n\n${names.map((n) => `  ${n}@1.0.0:\n    resolution: {integrity: sha512-x}\n`).join("\n")}`,
+    ...prototypeNamedLockfiles(),
+    "npm/package.json": `{"dependencies":{"__proto__":"^1","constructor":"^1","prototype":"^1"},"overrides":{"__proto__":"github:u/p","constructor":"github:u/c"}}`,
     "pnpm/.npmrc": "__proto__=https://x.example\nconstructor:registry=https://x.example\n@prototype:registry=https://p.example/\n",
     "pnpm/pnpm-workspace.yaml": "catalog:\n  __proto__: 1.0.0\n  constructor: github:u/c\n",
     "berry/.yarnrc.yml": "__proto__:\n  npmRegistryServer: https://x.example\nnpmScopes:\n  constructor:\n    npmRegistryServer: https://c.example\n",
-    "poetry/poetry.lock": pythonNames.map((n) => `[[package]]\nname = "${n}"\nversion = "1.0.0"\n`).join("\n"),
-    "uv/uv.lock": `version = 1\n\n${pythonNames.map((n) => `[[package]]\nname = "${n}"\nversion = "1.0.0"\nsource = { registry = "https://pypi.org/simple" }\n`).join("\n")}`,
     "uv/uv.toml": '[__proto__]\nindex-url = "https://x.example/simple"\n\n[constructor]\nx = 1\n',
-    "req/requirements.txt": pythonNames.map((n) => `${n}==1.0.0\n`).join(""),
     "pdm/pdm.toml": '[pypi.__proto__]\nurl = "https://p.example/simple"\n\n[pypi.constructor]\nurl = "https://c.example/simple"\n',
     "py/pyproject.toml": '[project]\ndependencies = ["constructor==1.0", "prototype>=1"]\n\n[tool.uv.sources]\nconstructor = { git = "https://g.example/c" }\n',
   }, { osv: true });
-  assert.equal({}.polluted, undefined);
-  assert.ok(!Object.prototype.hasOwnProperty.call(Object.prototype, "version"));
-  for (const name of names) assert.ok(sent.includes(`npm:${name}`), name);
-  for (const name of pythonNames) assert.ok(sent.includes(`PyPI:${name}`), name);
-  const reported = result.deep.packages.offRegistry.map((e) => `${e.file} ${e.address}`);
-  for (const expected of [
-    "npm/package.json https://github.com/u/p",
-    "npm/package.json https://github.com/u/c",
-    "pnpm/.npmrc https://p.example",
-    "pnpm/pnpm-workspace.yaml https://github.com/u/c",
-    "berry/.yarnrc.yml https://c.example",
-    "pdm/pdm.toml https://p.example",
-    "pdm/pdm.toml https://c.example",
-    "py/pyproject.toml https://g.example/c",
-  ]) {
-    assert.ok(reported.includes(expected), `${expected} in ${reported.join("\n")}`);
-  }
+  assert.deepEqual(builtIns(), before);
+  // package.json's and pyproject.toml's ranges are sent by name; their names from git are not sent.
+  assert.deepEqual(sent.sort(), [
+    "PyPI:-proto-@1.0.0", "PyPI:constructor@1.0.0", "PyPI:prototype@1.0.0", "PyPI:prototype@any",
+    "npm:__proto__@1.0.0", "npm:constructor@1.0.0", "npm:prototype@1.0.0", "npm:prototype@any",
+  ]);
+  assert.deepEqual(result.deep.packages.offRegistry.map((e) => `${e.file}:${e.line} ${e.kind} ${e.address}`), [
+    "berry/.yarnrc.yml:5 host https://c.example",
+    "npm/package.json:1 git https://github.com/u/p",
+    "npm/package.json:1 git https://github.com/u/c",
+    "pdm/pdm.toml:2 host https://p.example",
+    "pdm/pdm.toml:5 host https://c.example",
+    "pnpm/.npmrc:2 unreadable null",
+    "pnpm/.npmrc:3 host https://p.example",
+    "pnpm/pnpm-workspace.yaml:3 git https://github.com/u/c",
+    "py/pyproject.toml:5 git https://g.example/c",
+    "req/requirements.txt:1 unreadable null",
+  ]);
 });
 
 // Every fixture format and a config file of each kind, as written and with Windows line endings.
@@ -140,13 +170,16 @@ test("every fixture format and config file reads the same with Windows line endi
 });
 
 // Memory: what a reader stores must not grow faster than the file. Each case builds its files inside a child process with a 256
-// MB heap, where running out of memory aborts the process; it must read them, or list a file it could not read.
+// MB heap, where running out of memory aborts the process; it must read them all, or list a file it could not read, so the counts
+// each case gives are pinned: a reader that gave up early would give fewer.
+
+// Runs `body` (code that calls readPackages and prints JSON) in a small-heap child and returns what it printed.
+const readInSmallHeap = (body) => inSmallHeap(`const { readPackages } = require(${JSON.stringify(LOCKFILES_MODULE)}); ${body}`);
 
 // Runs each case (a self-contained function returning the files) through readPackages in one small-heap child, and returns for
 // each how many packages, sources and notes it read and the reasons it could not read a file.
 function readEachInSmallHeap(cases) {
-  const script = [
-    `const { readPackages } = require(${JSON.stringify(LOCKFILES_MODULE)});`,
+  return readInSmallHeap([
     `const cases = [${Object.entries(cases).map(([name, build]) => `[${JSON.stringify(name)}, ${build.toString()}]`).join(",\n")}];`,
     "const out = {};",
     "for (const [name, build] of cases) {",
@@ -154,16 +187,11 @@ function readEachInSmallHeap(cases) {
     "  out[name] = { read: read.packages.length + read.sourced.length + read.notRecorded.length, couldNotRead: read.couldNotRead.map((c) => c.reason) };",
     "}",
     "process.stdout.write(JSON.stringify(out));",
-  ].join("\n");
-  const out = inSmallHeap(script);
-  for (const [name, { read, couldNotRead }] of Object.entries(out)) assert.ok(read > 0 || couldNotRead.length > 0, name);
-  return out;
+  ].join("\n"));
 }
 
-const readInSmallHeap = (body) => inSmallHeap(`const { readPackages } = require(${JSON.stringify(LOCKFILES_MODULE)}); ${body}`);
-
 test("npm lockfiles: long keys per entry, deep node_modules chains, a deep version 1 tree and entries sharing one long path stay within a small heap", () => {
-  readEachInSmallHeap({
+  assert.deepEqual(readEachInSmallHeap({
     "long keys": () => {
       const packages = { "": {} };
       for (let i = 0; i < 2000; i++) packages[`node_modules/${"k".repeat(2400)}${i}`] = { version: "1.0.0", resolved: `https://m.example/${"r".repeat(100)}.tgz` };
@@ -185,19 +213,26 @@ test("npm lockfiles: long keys per entry, deep node_modules chains, a deep versi
       for (let i = 0; i < 60000; i++) packages[`node_modules/p${i}`] = { version: "1.0.0", resolved: "https://m.example/p.tgz" };
       return [{ path: `${folder}/package-lock.json`, text: JSON.stringify({ lockfileVersion: 3, packages }) }];
     },
+  }), {
+    "long keys": { read: 2000, couldNotRead: [] },
+    "deep node_modules chains": { read: 800, couldNotRead: [] },
+    "deep version 1 tree": { read: 60000, couldNotRead: [] },
+    "entries sharing one long path": { read: 60000, couldNotRead: [] },
   });
 });
 
 test("yarn.lock and pnpm-lock.yaml: keys of many specs, wide inline maps, long keys and 200,000 lines stay within a small heap", () => {
-  readEachInSmallHeap({
+  assert.deepEqual(readEachInSmallHeap({
     "classic keys of many specs": () => {
       const specs = Array.from({ length: 2000 }, (_, k) => `a@^${k}`).join(", ");
       const blocks = Array.from({ length: 200 }, () => `${specs}:\n  version "1.0.0"\n  resolved "https://m.example/a.tgz"\n`);
       return [{ path: "yarn.lock", text: `# yarn lockfile v1\n\n${blocks.join("\n")}` }];
     },
     "berry keys of many specs": () => {
-      const specs = Array.from({ length: 2000 }, (_, k) => `a@npm:^${k}`).join(", ");
-      const blocks = Array.from({ length: 150 }, () => `"${specs}":\n  version: 1.0.0\n  resolution: "a@npm:1.0.0"\n`);
+      const blocks = Array.from({ length: 150 }, (_, b) => {
+        const specs = Array.from({ length: 2000 }, (_, k) => `p${b}@npm:^${k}`).join(", ");
+        return `"${specs}":\n  version: 1.0.0\n  resolution: "p${b}@npm:1.0.0"\n`;
+      });
       return [{ path: "yarn.lock", text: `__metadata:\n  version: 8\n\n${blocks.join("\n")}` }];
     },
     "pnpm wide inline maps": () => {
@@ -212,11 +247,17 @@ test("yarn.lock and pnpm-lock.yaml: keys of many specs, wide inline maps, long k
       const blocks = Array.from({ length: 50000 }, (_, k) => `  p${k}@1.0.0:\n    resolution: {integrity: sha512-x}\n`);
       return [{ path: "pnpm-lock.yaml", text: `lockfileVersion: '9.0'\n\npackages:\n\n${blocks.join("\n")}` }];
     },
+  }), {
+    "classic keys of many specs": { read: 200, couldNotRead: [] },
+    "berry keys of many specs": { read: 151, couldNotRead: [] },
+    "pnpm wide inline maps": { read: 1, couldNotRead: ["a package source it could not read"] },
+    "pnpm long keys": { read: 1500, couldNotRead: [] },
+    "pnpm 200,000 lines": { read: 50001, couldNotRead: [] },
   });
 });
 
 test("Python lockfiles and requirements: many tables with long dotted keys, wide inline tables, many wheels and many -r files stay within a small heap", () => {
-  readEachInSmallHeap({
+  assert.deepEqual(readEachInSmallHeap({
     "poetry long dotted keys": () => {
       const key = Array(400).fill("k").join(".");
       const blocks = Array.from({ length: 2000 }, (_, k) => `[[package]]\nname = "p${k}"\nversion = "1.0.0"\n\n[package.extras]\n${key} = ["x"]\n`);
@@ -228,13 +269,13 @@ test("Python lockfiles and requirements: many tables with long dotted keys, wide
     },
     "uv many wheels from one mirror": () => {
       const wheels = Array.from({ length: 30000 }, (_, k) => `  { url = "https://m.example/${"w".repeat(60)}/a-${k}.whl", hash = "sha256:x" },`).join("\n");
-      return [{ path: "uv.lock", text: `version = 1\n\n[[package]]\nname = "a"\nversion = "1.0.0"\nsource = { registry = "https://m.example/simple" }\nwheels = [\n${wheels}\n]\n` }];
+      return [{ path: "uv.lock", text: `version = 1\n\n[[package]]\nname = "a"\nversion = "1.0.0"\nsource = { registry = "https://m.example/simple" }\nwheels = [\n${wheels}\n]\n\n[[package]]\nname = "b"\nversion = "1.0.0"\nsource = { registry = "https://pypi.org/simple" }\n` }];
     },
     "many -r files, each naming every other": () => {
       const files = [];
       for (let i = 0; i < 500; i++) {
         const lines = Array.from({ length: 500 }, (_, k) => `-r requirements-${k}.txt`);
-        files.push({ path: `requirements-${i}.txt`, text: `${lines.join("\n")}\nidna==3.10\n` });
+        files.push({ path: `requirements-${i}.txt`, text: `${lines.join("\n")}\np${i}==1.0\n` });
       }
       return files;
     },
@@ -242,11 +283,17 @@ test("Python lockfiles and requirements: many tables with long dotted keys, wide
       const folder = Array(2000).fill("dd").join("/");
       return Array.from({ length: 5000 }, (_, i) => ({ path: `${folder}/requirements-${i}.txt`, text: `-r requirements-${i + 1}.txt\n-i https://m.example/simple\nidna==3.10\n` }));
     },
+  }), {
+    "poetry long dotted keys": { read: 2000, couldNotRead: [] },
+    "uv wide inline tables": { read: 1, couldNotRead: ["a package source it could not read"] },
+    "uv many wheels from one mirror": { read: 2, couldNotRead: [] },
+    "many -r files, each naming every other": { read: 500, couldNotRead: [] },
+    "a long chain of -r files deep in folders": { read: 5002, couldNotRead: ["a package source it could not read"] },
   });
 });
 
 test("manifests: package.json with long keys and wide overrides, pyproject.toml with headers of thousands of parts per table, stay within a small heap", () => {
-  readEachInSmallHeap({
+  assert.deepEqual(readEachInSmallHeap({
     "package.json long keys": () => {
       const dependencies = {};
       for (let i = 0; i < 2000; i++) dependencies[`${"k".repeat(2400)}${i}`] = "github:u/r";
@@ -254,13 +301,13 @@ test("manifests: package.json with long keys and wide overrides, pyproject.toml 
     },
     "package.json wide nested overrides": () => {
       const overrides = {};
-      for (let i = 0; i < 2000; i++) overrides[`p${i}`] = Object.fromEntries(Array.from({ length: 50 }, (_, k) => [`q${k}`, "npm:evil@1"]));
+      for (let i = 0; i < 2000; i++) overrides[`p${i}`] = Object.fromEntries(Array.from({ length: 50 }, (_, k) => [`q${k}`, `npm:evil${i}-${k}@1`]));
       return [{ path: "package.json", text: JSON.stringify({ overrides }) }];
     },
     "pyproject headers of 20,000 parts": () => {
       const header = Array(20000).fill("a").join(".");
       const tables = Array.from({ length: 100 }, (_, k) => `[${header}.t${k}]\nk = "v"\n`).join("\n");
-      return [{ path: "pyproject.toml", text: `[project]\ndependencies = ["a @ https://e.example/a.zip"]\n\n${tables}` }];
+      return [{ path: "pyproject.toml", text: `${tables}\n[project]\ndependencies = ["a @ https://e.example/a.zip"]\n` }];
     },
     "pyproject dotted keys of 2,000 parts": () => {
       const key = Array(2000).fill("a").join(".");
@@ -268,13 +315,19 @@ test("manifests: package.json with long keys and wide overrides, pyproject.toml 
     },
     "pyproject many array tables": () => {
       const header = Array(500).fill("a").join(".");
-      return [{ path: "pyproject.toml", text: `[project]\ndependencies = ["a @ https://e.example/a.zip"]\n${Array.from({ length: 4000 }, () => `[[${header}]]`).join("\n")}\n` }];
+      return [{ path: "pyproject.toml", text: `${Array.from({ length: 4000 }, () => `[[${header}]]`).join("\n")}\n[project]\ndependencies = ["a @ https://e.example/a.zip"]\n` }];
     },
+  }), {
+    "package.json long keys": { read: 2000, couldNotRead: [] },
+    "package.json wide nested overrides": { read: 100000, couldNotRead: [] },
+    "pyproject headers of 20,000 parts": { read: 1, couldNotRead: [] },
+    "pyproject dotted keys of 2,000 parts": { read: 1, couldNotRead: ["a package source it could not read"] },
+    "pyproject many array tables": { read: 1, couldNotRead: [] },
   });
 });
 
 test("config files: many scopes, 200,000-line YAML, huge catalogs, many [[index]] tables and many pdm sources stay within a small heap", () => {
-  readEachInSmallHeap({
+  assert.deepEqual(readEachInSmallHeap({
     ".npmrc many scopes": () => [{ path: ".npmrc", text: Array.from({ length: 150000 }, (_, k) => `@s${k}:registry=https://m.example/`).join("\n") }],
     ".yarnrc many lines": () => [{ path: ".yarnrc", text: Array.from({ length: 150000 }, (_, k) => `"@s${k}:registry" "https://m.example/"`).join("\n") }],
     ".yarnrc.yml 200,000 lines": () => {
@@ -290,6 +343,13 @@ test("config files: many scopes, 200,000-line YAML, huge catalogs, many [[index]
     },
     "uv.toml many [[index]] tables": () => [{ path: "uv.toml", text: Array.from({ length: 60000 }, (_, k) => `[[index]]\nname = "i${k}"\nurl = "https://m${k}.example/simple"\n`).join("\n") }],
     "pdm.toml many sources": () => [{ path: "pdm.toml", text: Array.from({ length: 60000 }, (_, k) => `[pypi.s${k}]\nurl = "https://m${k}.example/simple"\n`).join("\n") }],
+  }), {
+    ".npmrc many scopes": { read: 150000, couldNotRead: [] },
+    ".yarnrc many lines": { read: 150000, couldNotRead: [] },
+    ".yarnrc.yml 200,000 lines": { read: 100000, couldNotRead: [] },
+    "pnpm-workspace.yaml huge catalogs beside many manifests": { read: 20, couldNotRead: [] },
+    "uv.toml many [[index]] tables": { read: 60000, couldNotRead: [] },
+    "pdm.toml many sources": { read: 60000, couldNotRead: [] },
   });
 });
 

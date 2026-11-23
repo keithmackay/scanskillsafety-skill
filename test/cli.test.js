@@ -328,6 +328,11 @@ const CREDENTIAL_CASES = [
   ["a token in a -r path", "requirements.txt", `-r ${TOKEN}/requirements-dev.txt\n-c constraints-${TOKEN}.txt\nidna==3.10\n`],
   ["a ${…} value", "requirements.txt", `--index-url https://__token__:${TOKEN}@\${HOST}/simple\n-i \${MIRROR}/${TOKEN}/simple\nidna==3.10\n`],
   ["a ${…} value in config", ".npmrc", `registry=https://u:${TOKEN}@\${REGISTRY}/\n@s:registry=\${S_REGISTRY}/${TOKEN}/\n`],
+  ["a yarn.lock (classic) resolved address", "yarn.lock", `# yarn lockfile v1\n\nx@^1:\n  version "1.0.0"\n  resolved "https://user:${TOKEN}@npm.example.com/x/-/x-1.0.0.tgz#${TOKEN}"\n\ny@^1:\n  version "1.0.0"\n  resolved "https://npm.example.com/${TOKEN}/y/-/y-1.0.0.tgz?t=${TOKEN}"\n`],
+  ["a yarn.lock (Berry) resolution", "yarn.lock", `__metadata:\n  version: 8\n\n"x@https://npm.example.com/${TOKEN}/x-1.0.0.tgz":\n  version: 1.0.0\n  resolution: "x@https://user:${TOKEN}@npm.example.com/${TOKEN}/x-1.0.0.tgz?t=${TOKEN}"\n  languageName: node\n  linkType: hard\n`],
+  ["a pnpm-lock.yaml tarball", "pnpm-lock.yaml", `lockfileVersion: '9.0'\n\npackages:\n\n  x@1.0.0:\n    resolution: {tarball: https://user:${TOKEN}@npm.example.com/${TOKEN}/x-1.0.0.tgz?t=${TOKEN}}\n`],
+  ["a uv.lock registry and archives", "uv.lock", `version = 1\n\n[[package]]\nname = "x"\nversion = "1.0.0"\nsource = { registry = "https://user:${TOKEN}@uv.example.com/simple" }\nsdist = { url = "https://uv.example.com/${TOKEN}/x-1.0.0.tar.gz?t=${TOKEN}", hash = "sha256:x" }\n`],
+  ["a poetry.lock source", "poetry.lock", `[[package]]\nname = "x"\nversion = "1.0.0"\n\n[package.source]\ntype = "legacy"\nurl = "https://user:${TOKEN}@poetry.example.com/${TOKEN}/simple?t=${TOKEN}"\nreference = "corp"\n`],
 ];
 
 test("no credential in a package source or install config reaches the deep scan's text or JSON output, on stdout or stderr", () => {
@@ -339,7 +344,8 @@ test("no credential in a package source or install config reaches the deep scan'
   const json = run("--json", ...args);
   for (const out of [text, json]) {
     assert.equal(out.status, 1, out.stderr);
-    assert.ok(!out.stdout.includes(TOKEN) && !out.stderr.includes(TOKEN), `${out.stdout}${out.stderr}`);
+    // Any part of the token, as a cut that kept its start or its end would show it.
+    for (const part of [TOKEN, TOKEN.slice(0, 6), TOKEN.slice(-6)]) assert.ok(!out.stdout.includes(part) && !out.stderr.includes(part), `${part}:\n${out.stdout}${out.stderr}`);
   }
   const { packages } = JSON.parse(json.stdout).deep;
   const listed = new Set([...packages.offRegistry, ...packages.couldNotRead].map((entry) => entry.file));
