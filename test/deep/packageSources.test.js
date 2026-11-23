@@ -4,7 +4,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { performance } = require("node:perf_hooks");
-const { spawnSync } = require("child_process");
+const { inSmallHeap } = require("../helpers");
 const path = require("path");
 const { classifySource, classifyManifestValue, commitFrom, groupSources, MAX_SOURCE_ENTRIES, OFFICIAL_HOSTS } = require("../../src/deep/packageSources");
 
@@ -505,9 +505,7 @@ test("grouping keeps memory bounded by the entries kept, however many addresses 
     const after = process.memoryUsage().heapUsed;
     process.stdout.write(JSON.stringify({ entries: grouped.entries.length, more: grouped.more, grownMb: (after - before) / 1048576 }));
   `;
-  const run = spawnSync(process.execPath, ["--max-old-space-size=256", "--expose-gc", "-e", script], { encoding: "utf-8" });
-  assert.equal(run.status, 0, run.stderr);
-  const { entries, more, grownMb } = JSON.parse(run.stdout);
+  const { entries, more, grownMb } = inSmallHeap(script, { flags: ["--expose-gc"] });
   assert.equal(entries, 100);
   assert.deepEqual(more, { packages: 1000000 - 100 * 5, lines: 0 });
   assert.ok(grownMb < 8, `grew by ${grownMb} MB`);

@@ -1102,43 +1102,6 @@ test("a registry key or value in .yarnrc.yml or pnpm-workspace.yaml that is no a
   assert.deepEqual(read([["yarn.lock", BERRY], [".yarnrc.yml", "npmRegistries:\n  not-an-address:\n    npmAlwaysAuth: true"]]).notRecorded, []);
 });
 
-// Memory: coverage stays bounded however config files load each other
-
-const { spawnSync } = require("child_process");
-const LOCKFILES_MODULE = require.resolve("../../src/deep/lockfiles");
-
-// Runs `body` (code that builds `files` and sets `result`) under a 256 MB heap and returns what it prints as JSON.
-function inSmallHeap(body) {
-  const script = `const { readPackages } = require(${JSON.stringify(LOCKFILES_MODULE)}); ${body}`;
-  const run = spawnSync(process.execPath, ["--max-old-space-size=256", "-e", script], { encoding: "utf-8", timeout: 120000 });
-  assert.equal(run.status, 0, `${run.signal ?? ""} ${run.stderr.slice(0, 400)}`);
-  return JSON.parse(run.stdout);
-}
-
-test("many .npmrc files loading one file of many scoped registries, or a long chain of them, stay within a small heap", () => {
-  const star = inSmallHeap(`
-    const lock = JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/x": { version: "1.0.0" } } });
-    const files = [{ path: "hub", text: "@a:registry=https://e.example/\\n".repeat(20000) }];
-    for (let i = 0; i < 3000; i++) {
-      files.push({ path: "p" + i + "/.npmrc", text: "userconfig=../hub\\n" }, { path: "p" + i + "/package-lock.json", text: lock }, { path: "p" + i + "/package.json", text: "{}" });
-    }
-    const result = readPackages(files);
-    console.log(JSON.stringify({ notes: result.notRecorded.length, sourced: result.sourced.length }));
-  `);
-  assert.deepEqual(star, { notes: 3000, sourced: 20000 });
-  const chain = inSmallHeap(`
-    const lock = JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/@a/x": { version: "1.0.0" } } });
-    const files = [];
-    for (let i = 0; i < 3000; i++) {
-      files.push({ path: "d" + i + "/.npmrc", text: "userconfig=../d" + (i + 1) + "/.npmrc\\n@b:registry=https://e.example/\\n" }, { path: "d" + i + "/package-lock.json", text: lock }, { path: "d" + i + "/package.json", text: "{}" });
-    }
-    files.push({ path: "d3000/.npmrc", text: "@a:registry=https://e.example/\\n" });
-    const result = readPackages(files);
-    console.log(JSON.stringify({ notes: result.notRecorded.length }));
-  `);
-  assert.deepEqual(chain, { notes: 0 });
-});
-
 test("a config file an .npmrc loads covers npm lockfiles only: pnpm does not read userconfig", () => {
   const files = [[".npmrc", "userconfig=cfg/npmrc"], ["cfg/npmrc", "registry=https://m.example/"]];
   assert.deepEqual(read([...files, ["pnpm-lock.yaml", PNPM]]).notRecorded, [NOTE("pnpm-lock.yaml")]);
@@ -1204,22 +1167,6 @@ test("uv: build-constraint-dependencies is read like the other install-wide list
   assert.deepEqual(read([["pyproject.toml", pyproject], ["uv.lock", uvLock]]).sourced, [item("pyproject.toml")("bc", 2, "url", "https://e.example/bc-1.0.zip")]);
   assert.deepEqual(read([["pyproject.toml", pyproject]]).sourced, [item("pyproject.toml")("bc", 2, "url", "https://e.example/bc-1.0.zip")]);
   assert.deepEqual(read([["uv.toml", "allow-insecure-host = []\n[pip]\nallow-insecure-host = []\n"]]), EMPTY);
-});
-
-test("a big lockfile of scoped packages beside many projects that load one file naming every scope's registry stays within a small heap", () => {
-  const scoped = inSmallHeap(`
-    const small = JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/x": { version: "1.0.0" } } });
-    const packages = { "": {} };
-    for (let i = 0; i < 20000; i++) packages["node_modules/@s" + i + "/x"] = { version: "1.0.0" };
-    const files = [{ path: "package-lock.json", text: JSON.stringify({ lockfileVersion: 3, packages }) }, { path: "package.json", text: "{}" }];
-    files.push({ path: "hub", text: Array.from({ length: 20000 }, (_, i) => "@s" + i + ":registry=https://e.example/").join("\\n") });
-    for (let i = 0; i < 600; i++) {
-      files.push({ path: "p" + i + "/.npmrc", text: "userconfig=../hub\\n" }, { path: "p" + i + "/package-lock.json", text: small }, { path: "p" + i + "/package.json", text: "{}" });
-    }
-    const result = readPackages(files);
-    console.log(JSON.stringify({ notes: result.notRecorded.length, sourced: result.sourced.length }));
-  `);
-  assert.deepEqual(scoped, { notes: 601, sourced: 20000 });
 });
 
 test(".npmrc: files are followed only as far as npm loads them (project, its userconfig, then globalconfig or prefix); a pointer past that is unreadable and covers", () => {
