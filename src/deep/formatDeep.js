@@ -1,11 +1,12 @@
 // ABOUTME: The deep scan's text output: the plain scan's text, then the commit, the files read and left out, what runs at
-// ABOUTME: install and start-up, the package check, how the commit relates to what findsafeskills scanned, findings in test files
+// ABOUTME: install and start-up, the package check and packages from outside the registry, how the commit relates to what findsafeskills scanned, findings in test files
 // ABOUTME: nothing launches and Claude's reading (its plan, or what it found); and the services line.
 "use strict";
 
 const { formatText, pushFinding } = require("../scanTarget");
 const { printable, printableCut, printableLines } = require("../printable");
 const { n } = require("./util");
+const { packageSource, lineText } = require("./sourceText");
 
 const COMMAND_MAX = 300;
 const SITE_TEXT_MAX = 300;
@@ -24,10 +25,13 @@ function commitLine(deep) {
   return `Commit: ${deep.commit}`;
 }
 
+const couldNotReadLines = (packages) => (packages.couldNotRead ?? []).map((c) => `  Could not read: ${printable(c.file)}: ${c.reason}`);
+
 function packageLines(packages, findings) {
-  if (packages.status === "off") return ["Packages: not checked (--no-osv)"];
+  if (packages.status === "off") return ["Packages: not checked (--no-osv)", ...couldNotReadLines(packages)];
   const lines = ["Packages:"];
   if (packages.status === "not-run") lines.push(`  The package check did not run (${packages.reason})`);
+  else if (packages.checked === 0 && packages.notSentToOsv > 0) lines.push("  No package was sent to OSV: every one comes from outside the registry.");
   else if (packages.checked === 0) lines.push("  No package found in a lockfile or manifest.");
   else lines.push(`  Checked ${packages.checked} package(s) against OSV.`);
   const malicious = findings.filter((f) => f.source === "osv" && f.category === "malicious-package");
@@ -41,9 +45,50 @@ function packageLines(packages, findings) {
   if (packages.detailsLeft > 0) {
     lines.push(`  ${packages.detailsLeft} more advisory id(s) are listed without severity: OSV's details were fetched for the first 200 only.`);
   }
-  if (packages.namesOnly.length > 0) lines.push(`  Names only (no lockfile, so any version may be installed): ${pathList(packages.namesOnly)}`);
-  for (const c of packages.couldNotRead) lines.push(`  Could not read: ${printable(c.file)}: ${c.reason}`);
+  if (packages.namesOnly.length > 0) lines.push(`  Read from manifests (versions not fixed by a lockfile): ${pathList(packages.namesOnly)}`);
+  lines.push(...couldNotReadLines(packages));
   if (packages.notChecked.length > 0) lines.push(`  Not checked (no support for these lockfiles): ${pathList(packages.notChecked)}`);
+  return lines;
+}
+
+const count = (x, one, many) => `${n(x)} ${x === 1 ? one : many}`;
+
+// A package as listed under its source: its name (or that it has none), its version when known, and its line.
+const listedPackage = (p) => `${p.name ?? "a package"}${p.version === null ? "" : ` ${p.version}`} (line ${p.line})`;
+
+// One source's lines. A mirror, a plain-http host or a source it could not read is said once for all the packages of its file
+// from there, a mirror's or http host's first five listed below it; a git, url or bundled source names its one package; a setting
+// or index line says what it does.
+function sourceEntryLines(entry) {
+  const file = printable(entry.file);
+  if (entry.from) return [`  ${file}:${entry.line} ${lineText(entry)}`];
+  const several = entry.total !== 1;
+  const who = `${count(entry.total, "package", "packages")} in ${file}`;
+  if (entry.kind === "unreadable") return [`  ${who} ${several ? "have" : "has"} a source it could not read (not checked against OSV)`];
+  if (entry.kind === "host" || entry.kind === "http" || several) {
+    const left = entry.total - entry.packages.length;
+    const listed = [...entry.packages.map(listedPackage), ...(left > 0 ? [`… and ${n(left)} more`] : [])];
+    return [`  ${who} ${several ? "come" : "comes"} from ${packageSource(entry)} (not checked against OSV):`, `    ${listed.join(", ")}`];
+  }
+  const [only] = entry.packages;
+  const where = `${file}:${entry.line}`;
+  return [`  ${only.name === null ? where : `${only.name} in ${where}`} comes from ${packageSource(entry)}`];
+}
+
+// The packages and settings from outside the registry (each also a finding), those past the entries kept counted, and each
+// lockfile that records no registry; nothing when there are none, or when the result has no such fields.
+function sourceLines(packages) {
+  const { offRegistry = [], offRegistryMore = { packages: 0, lines: 0 }, notRecorded = [] } = packages;
+  const more = [
+    ...(offRegistryMore.packages > 0 ? [count(offRegistryMore.packages, "more package", "more packages")] : []),
+    ...(offRegistryMore.lines > 0 ? [count(offRegistryMore.lines, "more setting", "more settings")] : []),
+  ];
+  if (offRegistry.length === 0 && more.length === 0 && notRecorded.length === 0) return [];
+  const lines = ["Packages from outside the registry (also in the findings above):", ...offRegistry.flatMap(sourceEntryLines)];
+  if (more.length > 0) lines.push(`  and ${more.join(" and ")} from other sources`);
+  for (const note of notRecorded) {
+    lines.push(`  ${printable(note.file)} does not record where its packages come from; no config in the target names a registry, so they come from whatever registry the installing machine uses`);
+  }
   return lines;
 }
 
@@ -142,7 +187,7 @@ function formatDeep(result) {
   lines.push("What runs at install and start-up:");
   if (deep.installTime.length === 0) lines.push("  nothing found");
   for (const e of deep.installTime) lines.push(`  ${printable(e.file)}: ${printable(e.when)}: ${printableCut(e.command, COMMAND_MAX)}`);
-  lines.push(...packageLines(deep.packages, result.findings));
+  lines.push(...packageLines(deep.packages, result.findings), ...sourceLines(deep.packages));
   lines.push(...siteLines(deep.site));
   if (deep.launchedTests.length > 0) lines.push(`Test files the target runs (counted in the rating): ${pathList(deep.launchedTests)}`);
   if (deep.testFindings.length > 0) {

@@ -46,7 +46,7 @@ test("pypi.org is official only as the index at /simple: another path, a package
   assert.deepEqual(classifySource("PyPI", "https://pypi.org/simple/"), pypi);
   assert.deepEqual(classifySource("PyPI", "https://pypi.org/simple/requests/", { role: "index" }), pypi);
   assert.deepEqual(classifySource("PyPI", "https://pypi.org/project/requests/", { role: "index" }), pypi);
-  assert.deepEqual(classifySource("PyPI", "https://pypi.org/packages/x-1.0.whl", { direct: true }), offRegistry("url", "https://pypi.org/x-1.0.whl"));
+  assert.deepEqual(classifySource("PyPI", "https://pypi.org/packages/x-1.0.whl", { direct: true }), offRegistry("url", "https://pypi.org/…/x-1.0.whl"));
   assert.deepEqual(classifySource("PyPI", "https://files.pythonhosted.org/simple", { role: "index" }), files);
   assert.deepEqual(classifySource("PyPI", "https://pypi.org/simple", { role: "find-links" }), pypi);
   assert.deepEqual(classifySource("PyPI", "https://files.pythonhosted.org/packages/", { role: "find-links" }), files);
@@ -94,9 +94,9 @@ test("a host address drops user info, the path, the query and the fragment", () 
   for (const secret of ["user", "tok", "SECRET", "token", "Q", "frag"]) assert.ok(!json.includes(secret), secret);
 });
 
-test("a direct archive on another host is kind url, shown with only its file name from the path", () => {
+test("a direct archive on another host is kind url, shown with only its file name from the path and the cut marked", () => {
   const result = classifySource("npm", "https://user:tok@npm-proxy.fury.io/SECRET/u/x.tgz?token=Q#frag", { direct: true });
-  assert.deepEqual(result, offRegistry("url", "https://npm-proxy.fury.io/x.tgz"));
+  assert.deepEqual(result, offRegistry("url", "https://npm-proxy.fury.io/…/x.tgz"));
   const json = JSON.stringify(result);
   for (const secret of ["user", "tok", "SECRET", "token", "Q", "frag"]) assert.ok(!json.includes(secret), secret);
 });
@@ -213,6 +213,14 @@ test("package.json: exec: is a url with no address and a fixed text", () => {
     address: null,
     text: "a script that produces the package",
   });
+});
+
+test("a direct archive's address marks a cut path with …; one at the top of its host's path is shown whole", () => {
+  assert.deepEqual(
+    classifySource("PyPI", "https://github.com/KittenML/KittenTTS/releases/download/0.8.1/kittentts-0.8.1-py3-none-any.whl", { direct: true }),
+    offRegistry("url", "https://github.com/…/kittentts-0.8.1-py3-none-any.whl"),
+  );
+  assert.deepEqual(classifySource("PyPI", "https://files.example.com/x-1.0.whl", { direct: true }), offRegistry("url", "https://files.example.com/x-1.0.whl"));
 });
 
 test("package.json: an https tarball is a url, an http one http", () => {
@@ -338,13 +346,13 @@ test("package.json: an http(s) URL naming a repository on GitHub, GitLab or Bitb
     ["http://github.com/u/r", offRegistry("git", "http://github.com/u/r")],
     ["https://gitlab.com/g/sub/r", offRegistry("git", "https://gitlab.com/g/sub/r")],
     ["https://bitbucket.org/u/r.git", offRegistry("git", "https://bitbucket.org/u/r.git")],
-    ["https://github.com/u/r/archive/v1.tar.gz", offRegistry("url", "https://github.com/v1.tar.gz")],
-    ["https://gitlab.com/g/r/-/archive/v1/r-v1.tar.gz", offRegistry("url", "https://gitlab.com/r-v1.tar.gz")],
-    ["https://bitbucket.org/u/r/get/v1.tar.gz", offRegistry("url", "https://bitbucket.org/v1.tar.gz")],
-    ["https://codeload.github.com/u/r/tar.gz/main", offRegistry("url", "https://codeload.github.com/main")],
+    ["https://github.com/u/r/archive/v1.tar.gz", offRegistry("url", "https://github.com/…/v1.tar.gz")],
+    ["https://gitlab.com/g/r/-/archive/v1/r-v1.tar.gz", offRegistry("url", "https://gitlab.com/…/r-v1.tar.gz")],
+    ["https://bitbucket.org/u/r/get/v1.tar.gz", offRegistry("url", "https://bitbucket.org/…/v1.tar.gz")],
+    ["https://codeload.github.com/u/r/tar.gz/main", offRegistry("url", "https://codeload.github.com/…/main")],
     ["https://gist.github.com/u/abc123", offRegistry("git", "https://gist.github.com/abc123")],
     [`https://gist.github.com/abc123#${SHA1}`, offRegistry("git", "https://gist.github.com/abc123", { commit: SHA1 })],
-    ["https://gist.github.com/u/abc123/raw/x.tgz", offRegistry("url", "https://gist.github.com/x.tgz")],
+    ["https://gist.github.com/u/abc123/raw/x.tgz", offRegistry("url", "https://gist.github.com/…/x.tgz")],
   ];
   for (const [value, expected] of cases) assert.deepEqual(classifyManifestValue("npm", value), expected, value);
 });
@@ -353,7 +361,7 @@ test("package.json: sourcehut shorthand and git.sr.ht URLs are git", () => {
   assert.deepEqual(classifyManifestValue("npm", "sourcehut:~u/r"), offRegistry("git", "https://git.sr.ht/~u/r"));
   assert.deepEqual(classifyManifestValue("npm", "https://git.sr.ht/~u/r"), offRegistry("git", "https://git.sr.ht/~u/r"));
   assert.deepEqual(classifyManifestValue("npm", `https://git.sr.ht/~u/r#${SHA1}`), offRegistry("git", "https://git.sr.ht/~u/r", { commit: SHA1 }));
-  assert.deepEqual(classifyManifestValue("npm", "https://git.sr.ht/~u/r/archive/v1.tar.gz"), offRegistry("url", "https://git.sr.ht/v1.tar.gz"));
+  assert.deepEqual(classifyManifestValue("npm", "https://git.sr.ht/~u/r/archive/v1.tar.gz"), offRegistry("url", "https://git.sr.ht/…/v1.tar.gz"));
 });
 
 test("package.json: a backslash is a path separator to npm, so such a value is a path", () => {

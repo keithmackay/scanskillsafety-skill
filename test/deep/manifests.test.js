@@ -67,7 +67,7 @@ test("package.json: each kind of dependency value, with the line of its value; t
       sourced("gitdep", 6, "git", "https://github.com/u/r.git", { commit: SHA1 }),
       sourced("short", 7, "git", "https://github.com/u/r"),
       sourced("scp", 8, "git", "git@github.com:u/r.git"),
-      sourced("tarball", 9, "url", "https://files.example.com/p-1.0.0.tgz"),
+      sourced("tarball", 9, "url", "https://files.example.com/…/p-1.0.0.tgz"),
       sourced("plain", 10, "http", "http://files.example.com"),
       sourced("deno", 11, "host", "https://npm.jsr.io"),
       sourced("script", 12, "url", null, EXEC),
@@ -500,7 +500,7 @@ test("pyproject.toml: PEP 508 requirements, uv sources resolved through [[tool.u
     namesOnly: [file],
     sourced: [
       sourced("left-pad", 5, "git", "https://github.com/u/left-pad.git", { commit: SHA1 }),
-      sourced("spaced-name", 6, "url", "https://files.example.com/spaced-1.0-py3-none-any.whl"),
+      sourced("spaced-name", 6, "url", "https://files.example.com/…/spaced-1.0-py3-none-any.whl"),
       sourced("outside", 8, "url", null, OUTSIDE),
       sourced("bundled", 9, "bundled", "dist/bundled-1.0-py3-none-any.whl", BUNDLED),
       sourced("theme", 16, "url", "https://files.example.com/theme-1.0.tar.gz"),

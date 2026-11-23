@@ -765,7 +765,7 @@ test("the text output's Packages section: how many were checked, the malicious o
     "    npm minimist@1\\.2\\.0: 2, highest HIGH: GHSA-a, GHSA-b",
     "    PyPI requests@2\\.0\\.0: 1, severity not known: PYSEC-1",
     "  4 more advisory id\\(s\\) are listed without severity: OSV's details were fetched for the first 200 only\\.",
-    "  Names only \\(no lockfile, so any version may be installed\\): tools/package\\.json",
+    "  Read from manifests \\(versions not fixed by a lockfile\\): tools/package\\.json",
     "  Could not read: pnpm-lock\\.yaml: a lockfileVersion it cannot read",
     "  Not checked \\(no support for these lockfiles\\): Cargo\\.lock, go\\.sum",
   ].join("\n")));
@@ -779,6 +779,163 @@ test("a lockfile over 5 MB is listed as not checked in the Packages section", as
   const result = await runDeep(root, { ...ALL_OFF, osv: true }, { fetchImpl: fakeFetch({}) });
   assert.deepEqual(result.deep.packages.couldNotRead, [{ file: "package-lock.json", reason: "larger than 5 MB, not checked" }]);
   assert.match(formatDeep(result), /Could not read: package-lock\.json: larger than 5 MB, not checked/);
+});
+
+// A deep result with no findings and the given packages, for the text output's package sections.
+function withPackages(packages, findings = []) {
+  const base = { target: "x", rating: "yellow", scannedFiles: [], notices: [], errors: [], nonGoals: [], findings };
+  const deep = { read: true, commit: SHA, changed: false, changesChecked: true, note: null, leftOut: [], fetchedSeparately: [], route: null, installTime: [], testFindings: [], launchedTests: [], site: { status: "off" }, claude: { status: "off" } };
+  return { ...base, deep: { ...deep, packages } };
+}
+const NO_SOURCES = { offRegistry: [], offRegistryMore: { packages: 0, lines: 0 }, notRecorded: [], notSentToOsv: 0 };
+const OSV_DONE = { status: "done", checked: 2, namesOnly: [], couldNotRead: [], notChecked: [], vulnerabilities: [], detailsLeft: 0, reason: null };
+const SOURCES_HEADING = "Packages from outside the registry (also in the findings above):";
+const pkg = (name, version, line) => ({ name, version, line });
+const group = (fields, packages, total = packages.length) => ({ ecosystem: "npm", line: packages[0]?.line ?? 1, ...fields, packages, total });
+const setting = (fields) => ({ ecosystem: "npm", ...fields, packages: [], total: 0 });
+// The lines of the section on packages from outside the registry, from its heading to the next line that is not indented.
+function sourcesSection(out) {
+  const lines = out.split("\n");
+  const start = lines.indexOf(SOURCES_HEADING);
+  if (start < 0) return null;
+  const end = lines.findIndex((line, k) => k > start && !line.startsWith("  "));
+  return lines.slice(start, end < 0 ? lines.length : end);
+}
+
+test("the text output lists packages from outside the registry: a host's group with its first five packages and how many more", () => {
+  const packages = [pkg("lodash", "4.17.21", 40), pkg("react", "19.2.0", 112), pkg("a", "1.0.0", 120), pkg("b", null, 130), pkg(null, "2.0.0", 140)];
+  const offRegistry = [
+    group({ kind: "host", address: "https://registry.npmmirror.com", file: "package-lock.json" }, packages, 1234),
+    group({ kind: "http", address: "http://pkgs.example", file: "yarn.lock" }, [pkg("d", "2.0.0", 3)]),
+  ];
+  const out = formatDeep(withPackages({ ...OSV_DONE, ...NO_SOURCES, offRegistry, notSentToOsv: 1235 }));
+  assert.deepEqual(sourcesSection(out), [
+    SOURCES_HEADING,
+    "  1,234 packages in package-lock.json come from https://registry.npmmirror.com (not checked against OSV):",
+    "    lodash 4.17.21 (line 40), react 19.2.0 (line 112), a 1.0.0 (line 120), b (line 130), a package 2.0.0 (line 140), … and 1,229 more",
+    "  1 package in yarn.lock comes from http://pkgs.example (not checked against OSV):",
+    "    d 2.0.0 (line 3)",
+  ]);
+});
+
+test("the text output lists git, url, bundled and unreadable sources, one line each, a git commit in full", () => {
+  const offRegistry = [
+    group({ kind: "git", address: "https://github.com/someone/left-pad", file: "package.json", commit: SHA }, [pkg("left-pad", null, 12)]),
+    group({ kind: "git", address: "https://github.com/u/r", file: "package.json" }, [pkg("r", null, 13)]),
+    group({ kind: "url", address: null, text: "a script that produces the package", file: "package.json" }, [pkg("a", null, 14)]),
+    group({ kind: "bundled", address: "vendor/local-thing-1.0.0.tgz", text: "a bundled package file the scan cannot read", file: "package-lock.json" }, [pkg("local-thing", "1.0.0", 35)]),
+    group({ kind: "unreadable", address: null, file: "pnpm-lock.yaml" }, [pkg("x", "1.0.0", 7), pkg("y", "1.0.0", 9)]),
+    group({ kind: "unreadable", address: null, file: "yarn.lock" }, [pkg("z", "1.0.0", 4)]),
+    group({ ecosystem: "PyPI", kind: "git", address: "https://github.com/u/tool", file: "requirements.txt" }, [pkg(null, null, 4)]),
+    group({ ecosystem: "PyPI", kind: "url", address: "https://github.com/…/kittentts-0.8.1-py3-none-any.whl", file: "requirements.txt" }, [pkg("kittentts", null, 5)]),
+    group({ ecosystem: "PyPI", kind: "url", address: "https://files.example.com/x-1.0.whl", file: "requirements.txt" }, [pkg(null, null, 6)]),
+  ];
+  const out = formatDeep(withPackages({ ...OSV_DONE, ...NO_SOURCES, offRegistry, notSentToOsv: 10 }));
+  assert.deepEqual(sourcesSection(out), [
+    SOURCES_HEADING,
+    `  left-pad in package.json:12 comes from git https://github.com/someone/left-pad (commit ${SHA})`,
+    "  r in package.json:13 comes from git https://github.com/u/r",
+    "  a in package.json:14 comes from a script that produces the package",
+    "  local-thing in package-lock.json:35 comes from vendor/local-thing-1.0.0.tgz, a bundled package file the scan cannot read",
+    "  2 packages in pnpm-lock.yaml have a source it could not read (not checked against OSV)",
+    "  1 package in yarn.lock has a source it could not read (not checked against OSV)",
+    "  requirements.txt:4 comes from git https://github.com/u/tool",
+    "  kittentts in requirements.txt:5 comes from https://github.com/…/kittentts-0.8.1-py3-none-any.whl",
+    "  requirements.txt:6 comes from https://files.example.com/x-1.0.whl",
+  ]);
+});
+
+test("the text output lists settings and index lines: a registry, with its scope, plain http, an index, one from an environment variable, TLS settings", () => {
+  const offRegistry = [
+    setting({ kind: "host", address: "https://npm.example.com", file: ".npmrc", line: 1, from: "config" }),
+    setting({ kind: "host", address: "https://npm.example.com", file: ".npmrc", line: 2, from: "config", scope: "@myco" }),
+    setting({ kind: "host", address: null, text: "strict-ssl=false turns off certificate checks", file: ".npmrc", line: 3, from: "config" }),
+    setting({ kind: "unreadable", address: null, file: ".npmrc", line: 4, from: "config" }),
+    setting({ kind: "http", address: "http://npm.example.com", file: ".yarnrc.yml", line: 2, from: "config" }),
+    setting({ ecosystem: "PyPI", kind: "host", address: "https://pypi.example.com", file: "requirements.txt", line: 1, from: "requirements" }),
+    setting({ ecosystem: "PyPI", kind: "host", address: null, text: "an index set from an environment variable", file: "requirements.txt", line: 2, from: "requirements" }),
+    setting({ ecosystem: "PyPI", kind: "http", address: "http://pypi.example.com", file: "requirements.txt", line: 3, from: "requirements" }),
+  ];
+  const out = formatDeep(withPackages({ ...OSV_DONE, ...NO_SOURCES, offRegistry }));
+  assert.deepEqual(sourcesSection(out), [
+    SOURCES_HEADING,
+    "  .npmrc:1 names the npm registry https://npm.example.com for installs in this folder",
+    "  .npmrc:2 names the npm registry https://npm.example.com for @myco installs in this folder",
+    "  .npmrc:3 strict-ssl=false turns off certificate checks",
+    "  .npmrc:4 names a source it could not read",
+    "  .yarnrc.yml:2 allows plain http from http://npm.example.com",
+    "  requirements.txt:1 names the package index https://pypi.example.com",
+    "  requirements.txt:2 names an index set from an environment variable",
+    "  requirements.txt:3 allows plain http from http://pypi.example.com",
+  ]);
+});
+
+test("the text output says how many packages and settings past the first 100 sources it leaves out, a zero count left out, and each lockfile that records no registry", () => {
+  const note = "  package-lock.json does not record where its packages come from; no config in the target names a registry, so they come from whatever registry the installing machine uses";
+  const notRecorded = [{ file: "package-lock.json", ecosystem: "npm" }];
+  const section = (more) => sourcesSection(formatDeep(withPackages({ ...OSV_DONE, ...NO_SOURCES, offRegistryMore: more, notRecorded })));
+  assert.deepEqual(section({ packages: 1500, lines: 3 }), [SOURCES_HEADING, "  and 1,500 more packages and 3 more settings from other sources", note]);
+  assert.deepEqual(section({ packages: 50, lines: 0 }), [SOURCES_HEADING, "  and 50 more packages from other sources", note]);
+  assert.deepEqual(section({ packages: 0, lines: 1 }), [SOURCES_HEADING, "  and 1 more setting from other sources", note]);
+  assert.deepEqual(section({ packages: 1, lines: 0 }), [SOURCES_HEADING, "  and 1 more package from other sources", note]);
+  assert.deepEqual(section({ packages: 0, lines: 0 }), [SOURCES_HEADING, note]);
+});
+
+test("the section on packages from outside the registry is left out when there is nothing in it or its fields are absent", () => {
+  for (const packages of [{ ...OSV_DONE, ...NO_SOURCES }, OSV_DONE, { status: "off" }, { status: "off", ...NO_SOURCES, couldNotRead: [] }]) {
+    const out = formatDeep(withPackages(packages));
+    assert.doesNotMatch(out, /outside the registry/, JSON.stringify(packages));
+  }
+});
+
+test("with OSV off, the text output says the packages were not checked, then what it could not read, then the packages from outside the registry", () => {
+  const offRegistry = [group({ kind: "host", address: "https://registry.npmmirror.com", file: "package-lock.json" }, [pkg("lodash", "4.17.21", 40)])];
+  const couldNotRead = [{ file: "pnpm-lock.yaml", reason: "a lockfileVersion it cannot read" }];
+  const out = formatDeep(withPackages({ status: "off", ...NO_SOURCES, offRegistry, notSentToOsv: 1, couldNotRead }));
+  assert.ok(out.includes([
+    "Packages: not checked (--no-osv)",
+    "  Could not read: pnpm-lock.yaml: a lockfileVersion it cannot read",
+    SOURCES_HEADING,
+    "  1 package in package-lock.json comes from https://registry.npmmirror.com (not checked against OSV):",
+    "    lodash 4.17.21 (line 40)",
+    "findsafeskills: not compared (--no-site)",
+  ].join("\n")), out);
+});
+
+test("when every package found comes from outside the registry, the text output says none was sent to OSV", () => {
+  const offRegistry = [group({ kind: "host", address: "https://registry.npmmirror.com", file: "package-lock.json" }, [pkg("lodash", "4.17.21", 40)])];
+  const out = formatDeep(withPackages({ ...OSV_DONE, checked: 0, ...NO_SOURCES, offRegistry, notSentToOsv: 1 }));
+  assert.match(out, /\nPackages:\n {2}No package was sent to OSV: every one comes from outside the registry\.\n/);
+  assert.doesNotMatch(out, /No package found/);
+});
+
+test("a deep run on a lockfile with packages from outside the registry prints them, with OSV off", async () => {
+  const root = makeTree({ "SKILL.md": "Formats tables.", "package-lock.json": SOURCES_LOCK });
+  const section = sourcesSection(formatDeep(await runDeep(root, ALL_OFF, { fetchImpl: fakeFetch({}) })));
+  assert.deepEqual(section, [
+    SOURCES_HEADING,
+    "  left-pad in package-lock.json:31 comes from git ssh://github.com/someone/left-pad.git (commit 3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a)",
+    "  local-thing in package-lock.json:35 comes from vendor/local-thing-1.0.0.tgz, a bundled package file the scan cannot read",
+    "  1 package in package-lock.json comes from https://registry.npmmirror.com (not checked against OSV):",
+    "    lodash 4.17.21 (line 40)",
+    "  package-lock.json does not record where its packages come from; no config in the target names a registry, so they come from whatever registry the installing machine uses",
+  ]);
+});
+
+test("terminal escapes in a package name, an address or a file are made printable in the section on packages from outside the registry", () => {
+  const esc = "\u001b[2J\u001b]0;owned\u0007";
+  const offRegistry = [
+    group({ kind: "host", address: `https://m${esc}.example`, file: `a${esc}/package-lock.json` }, [pkg(`x${esc}`, `1${esc}`, 4)]),
+    group({ kind: "git", address: "https://github.com/u/r", file: "package.json" }, [pkg(`y${esc}`, null, 5)]),
+  ];
+  const notRecorded = [{ file: `b${esc}/yarn.lock`, ecosystem: "npm" }];
+  const out = formatDeep(withPackages({ ...OSV_DONE, ...NO_SOURCES, offRegistry, notRecorded }));
+  assert.doesNotMatch(out.replace(/\n/g, ""), /[\p{Cc}\p{Cf}]/u);
+  assert.deepEqual(sourcesSection(out).slice(1, 4), [
+    "  1 package in a?[2J?]0;owned?/package-lock.json comes from https://m?[2J?]0;owned?.example (not checked against OSV):",
+    "    x?[2J?]0;owned? 1?[2J?]0;owned? (line 4)",
+    "  y?[2J?]0;owned? in package.json:5 comes from git https://github.com/u/r",
+  ]);
 });
 
 const FAKE = process.platform === "win32" ? null : makeFakeClaude();
@@ -1116,7 +1273,7 @@ test("every path in the text output is shown with control and format characters 
   assert.match(out, /\n {2}o\?d\?\/package\.json: npm postinstall: node setup\.js/);
   assert.match(out, /\n {2}tests\/fixtures\/o\?d\?\.sh:1 \[warning\]/);
   assert.match(out, /\n {4}o\?d\?\/package-lock\.json:3 x is listed/);
-  assert.match(out, /Names only \(no lockfile, so any version may be installed\): o\?d\?\/package\.json/);
+  assert.match(out, /Read from manifests \(versions not fixed by a lockfile\): o\?d\?\/package\.json/);
   assert.match(out, /Could not read: o\?d\?\/pnpm-lock\.yaml: unreadable/);
   assert.match(out, /Not checked \(no support for these lockfiles\): o\?d\?\/Cargo\.lock/);
 });

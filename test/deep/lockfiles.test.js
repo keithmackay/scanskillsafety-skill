@@ -398,7 +398,7 @@ test("package-lock.json version 1: a file: version is local; a tarball URL as th
   }, null, 2);
   assert.deepEqual(readPackages([{ path: "app/package-lock.json", text }]), {
     ...EMPTY,
-    sourced: [sourced("tiny", null, "app/package-lock.json", 7, "url", "https://files.example.com/tiny-1.0.0.tgz")],
+    sourced: [sourced("tiny", null, "app/package-lock.json", 7, "url", "https://files.example.com/…/tiny-1.0.0.tgz")],
   });
 });
 
@@ -581,7 +581,7 @@ test("yarn.lock, Berry: a patch of a git repository or an https tarball is class
     sourced("x", "1.0.0", "yarn.lock", 4, "git", "https://github.com/u/r.git", { commit: SHA1 }),
   ]);
   assert.deepEqual(berrySourced("patch:x@https%3A//files.example.com/a/x-1.0.0.tgz#./p.patch"), [
-    sourced("x", "1.0.0", "yarn.lock", 4, "url", "https://files.example.com/x-1.0.0.tgz"),
+    sourced("x", "1.0.0", "yarn.lock", 4, "url", "https://files.example.com/…/x-1.0.0.tgz"),
   ]);
 });
 
@@ -592,7 +592,7 @@ test("pnpm-lock.yaml version 9 sources: integrity alone is checked; a mirror tar
     packages: [npm("js-tokens", "4.0.0", file, 39)],
     notRecorded: notRecorded(file),
     sourced: [
-      sourced("@scope/thing", "2.0.0", file, 35, "url", "https://files.example.com/thing-2.0.0.tgz"),
+      sourced("@scope/thing", "2.0.0", file, 35, "url", "https://files.example.com/…/thing-2.0.0.tgz"),
       sourced("left-pad", "1.3.0", file, 42, "git", "git@github.com:someone/left-pad.git", { commit: SHA1 }),
       sourced("lodash", "4.17.21", file, 46, "host", "https://registry.npmmirror.com"),
       sourced("other", "2.1.0", file, 56, "git", "https://gitlab.com/someone/other.git", { commit: SHA1 }),
@@ -1141,7 +1141,7 @@ test("uv.lock sources: git with its commit and a direct URL are reported; a mirr
       pypiSourced("idna", "3.10", file, 18, "host", "https://mirror.example.com"),
       pypiSourced("left-pad", "1.3.0", file, 28, "git", "https://github.com/someone/left-pad", { commit: SHA1 }),
       pypiSourced("local-tool", "0.1.0", file, 33, "bundled", "dist/local_tool-0.1.0.tar.gz", { text: "a bundled package file the scan cannot read" }),
-      pypiSourced("sniffio", "1.3.1", file, 39, "url", "https://files.example.com/sniffio-1.3.1.tar.gz"),
+      pypiSourced("sniffio", "1.3.1", file, 39, "url", "https://files.example.com/…/sniffio-1.3.1.tar.gz"),
     ],
   });
 });
@@ -1211,7 +1211,7 @@ test("poetry.lock: url, file and git sources; a commit that is not a commit id i
     ...EMPTY,
     packages: [pypi("e", "1.0.0", "poetry.lock", 36)],
     sourced: [
-      pypiSourced("a", "1.0.0", "poetry.lock", 2, "url", "https://files.example.com/a-1.0.0.tar.gz"),
+      pypiSourced("a", "1.0.0", "poetry.lock", 2, "url", "https://files.example.com/…/a-1.0.0.tar.gz"),
       pypiSourced("b", "1.0.0", "poetry.lock", 10, "git", "git@github.com:u/b.git"),
       pypiSourced("c", "1.0.0", "poetry.lock", 20, "bundled", "dist/c-1.0.0.tar.gz", { text: "a bundled package file the scan cannot read" }),
       pypiSourced("d", "1.0.0", "poetry.lock", 28, "url", null, { text: "a path outside the project" }),
@@ -1556,8 +1556,8 @@ test("requirements*.txt: index options in every form, --trusted-host, VCS lines,
       pypiSourced("left-pad", null, file, 13, "git", "https://github.com/someone/left-pad.git", { commit: SHA1 }),
       pypiSourced("tool", null, file, 14, "git", "ssh://github.com/someone/tool.git"),
       pypiSourced("hgpkg", null, file, 15, "git", "hg+https://hg.example.com/repo"),
-      pypiSourced("named", null, file, 16, "url", "https://files.example.com/named-1.0-py3-none-any.whl"),
-      pypiSourced(null, null, file, 17, "url", "https://files.example.com/bare-1.0.tar.gz"),
+      pypiSourced("named", null, file, 16, "url", "https://files.example.com/…/named-1.0-py3-none-any.whl"),
+      pypiSourced(null, null, file, 17, "url", "https://files.example.com/…/bare-1.0.tar.gz"),
       pypiSourced("local", null, file, 18, "url", null, OUTSIDE_TEXT),
     ],
   });
@@ -1608,12 +1608,12 @@ test("requirements*.txt: shapes pip accepts that hold no source, or a pin, read 
       requirementsLine(2, "host", "https://pypi.org"),
       requirementsLine(3, "host", "https://pypi.org"),
       requirementsLine(4, "host", "https://files.pythonhosted.org"),
-      pypiSourced("x", null, "requirements.txt", 5, "url", "https://pypi.org/x-1.0.whl"),
+      pypiSourced("x", null, "requirements.txt", 5, "url", "https://pypi.org/…/x-1.0.whl"),
     ]],
     ["--pre\n--no-index\n--prefer-binary\n--require-hashes\n--only-binary :all:\n--no-binary=:none:\n--use-feature=truststore\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 8)], []],
     ["-f wheels\n-e .[dev]\n-e.\n--editable=./x\n-c constraints.txt\n-rrequirements-dev.txt\n.\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 8)], [requirementsLine(1, "bundled", "wheels", { text: "a bundled package file the scan cannot read" })]],
     ["https://files.example.com/x-1.0.whl#egg=xpkg", [], [pypiSourced("xpkg", null, "requirements.txt", 1, "url", "https://files.example.com/x-1.0.whl")]],
-    ["https://user:SECRET@files.example.com/TOKEN/x-1.0.whl", [], [pypiSourced(null, null, "requirements.txt", 1, "url", "https://files.example.com/x-1.0.whl")]],
+    ["https://user:SECRET@files.example.com/TOKEN/x-1.0.whl", [], [pypiSourced(null, null, "requirements.txt", 1, "url", "https://files.example.com/…/x-1.0.whl")]],
     ["x @ https://files.pythonhosted.org/packages/x-1.0.whl", [pypi("x", null, "requirements.txt", 1)], []],
     ["https://files.pythonhosted.org/packages/ab/cd/requests-2.32.3-py3-none-any.whl", [pypi("requests", "2.32.3", "requirements.txt", 1)], []],
     ["https://files.pythonhosted.org/packages/ab/cd/charset_normalizer-3.3.2.tar.gz#sha256=abc", [pypi("charset-normalizer", "3.3.2", "requirements.txt", 1)], []],

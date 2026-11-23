@@ -1,5 +1,5 @@
 // ABOUTME: Decides whether a package's source is its ecosystem's official registry and, if not, its kind and address: host and http
-// ABOUTME: keep scheme and host, url the host and file name, git the whole path without user info, query or fragment; and groups
+// ABOUTME: keep scheme and host, url the host and file name (`…/` marking a cut path), git the whole path without user info, query or fragment; and groups
 // ABOUTME: the packages and settings from elsewhere into the entries shown, at most 100.
 "use strict";
 
@@ -129,7 +129,8 @@ function isOfficial(ecosystem, text, url, role) {
   return url.hostname === PYPI_FILE_HOST;
 }
 
-// An http(s) address: the official registry, a mirror (host), plain http, or one archive on another host (url).
+// An http(s) address: the official registry, a mirror (host), plain http, or one archive on another host (url), shown by its host
+// and file name, with `…/` between them when the path held more.
 function webUrl(ecosystem, text, direct, role) {
   if (!prefixOf(text, ["https:", "http:"])) return null;
   const url = parseUrl(text);
@@ -138,7 +139,8 @@ function webUrl(ecosystem, text, direct, role) {
   if (url.protocol === "http:") return { expected: false, kind: "http", address: origin };
   if (isOfficial(ecosystem, text, url, role)) return EXPECTED;
   if (!direct) return { expected: false, kind: "host", address: origin };
-  return { expected: false, kind: "url", address: `${origin}/${url.pathname.slice(url.pathname.lastIndexOf("/") + 1)}` };
+  const fileStart = url.pathname.lastIndexOf("/") + 1;
+  return { expected: false, kind: "url", address: `${origin}/${fileStart > 1 ? "…/" : ""}${url.pathname.slice(fileStart)}` };
 }
 
 // scp-form git, `user@host:path`, split by hand at the first `@` and the first `:` after it; shown as `git@host:path`, with any

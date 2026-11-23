@@ -211,6 +211,17 @@ test("--deep --json puts the deep results and the services under deep, and print
   assert.equal(out.status, 0);
 });
 
+test("--deep --json carries the packages from outside the registry", () => {
+  const lock = JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/lodash": { version: "4.17.21", resolved: "https://registry.npmmirror.com/lodash/-/lodash-4.17.21.tgz" } } }, null, 2);
+  const out = run("--deep", "--json", "--no-osv", "--no-claude", makeTree({ "SKILL.md": "formats markdown tables", "package-lock.json": lock }));
+  const parsed = JSON.parse(out.stdout);
+  assert.deepEqual(parsed.deep.packages.offRegistry, [
+    { ecosystem: "npm", kind: "host", address: "https://registry.npmmirror.com", file: "package-lock.json", line: 5, packages: [{ name: "lodash", version: "4.17.21", line: 5 }], total: 1 },
+  ]);
+  assert.equal(parsed.deep.packages.notSentToOsv, 1);
+  assert.equal(parsed.rating, "yellow");
+});
+
 test("a deep-scan option without --deep is refused with the usage line, exit 3", () => {
   const out = run("--ref", "main", ".");
   assert.equal(out.status, 3);
