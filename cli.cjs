@@ -29,7 +29,8 @@ Target:
 Options:
   --json         print the result as JSON instead of text
   --deep         check the exact commit a person would install: every file, what runs at
-                 install and start-up; names each service it will contact before any request
+                 install and start-up, where its packages come from (outside the official
+                 registries is a warning); names each service it will contact before any request
   -h, --help     print this help and exit
   -V, --version  print the version and exit
 
