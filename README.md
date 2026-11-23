@@ -300,7 +300,7 @@ Packages from outside the registry (each also a finding, above or under test fil
   requirements.txt:3 names wheels, a bundled package folder the scan cannot read
 ```
 
-At most 100 entries are listed, in file and line order; the rest are counted ("and N more packages and M more settings from other sources") and add no findings, since the 100 listed already make the rating yellow.
+At most 100 entries are listed, in file and line order. Setting and index lines are kept first, so a redirect is never only counted, then packages; the rest are counted ("and N more packages and M more settings from other sources") and add no findings, since the 100 listed already make the rating yellow.
 
 With `--json`, these are in `deep.packages`:
 

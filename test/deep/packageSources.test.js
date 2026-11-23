@@ -478,7 +478,7 @@ test("entries are in file and line order whatever order the items come in, each 
   assert.deepEqual(entries[0].packages, [{ name: "z", version: "1.0.0", line: 7 }, { name: "y", version: "1.0.0", line: 30 }]);
 });
 
-test("past 100 entries, the packages and the setting lines of the entries left out are counted, the first 100 in file and line order kept", () => {
+test("past 100 entries, setting and index lines are kept first, then packages in file and line order; the packages left out are counted", () => {
   const sourced = Array.from({ length: 150 }, (_, k) => gitItem("package.json", 150 - k, `g${150 - k}`, `https://github.com/u/r${150 - k}`)).concat([
     gitItem("package.json", 200, "again", "https://github.com/u/r150"),
     { ecosystem: "npm", file: "package.json", line: 300, from: "config", kind: "host", address: "https://npm.example.com" },
@@ -486,8 +486,20 @@ test("past 100 entries, the packages and the setting lines of the entries left o
   ]);
   const { entries, more } = groupSources(sourced);
   assert.equal(entries.length, 100);
+  assert.deepEqual(entries.map((e) => [e.file, e.line]), [
+    ...Array.from({ length: 98 }, (_, k) => ["package.json", k + 1]),
+    ["package.json", 300],
+    ["requirements.txt", 1],
+  ]);
+  assert.deepEqual(more, { packages: 53, lines: 0 });
+});
+
+test("past 100 entries of setting and index lines, the lines left out are counted and every package too", () => {
+  const sourced = Array.from({ length: 102 }, (_, k) => ({ ecosystem: "npm", file: ".npmrc", line: k + 1, from: "config", kind: "host", address: "https://npm.example.com" }))
+    .concat([gitItem("a/package.json", 1, "g", "https://github.com/u/r")]);
+  const { entries, more } = groupSources(sourced);
   assert.deepEqual(entries.map((e) => e.line), Array.from({ length: 100 }, (_, k) => k + 1));
-  assert.deepEqual(more, { packages: 51, lines: 2 });
+  assert.deepEqual(more, { packages: 1, lines: 2 });
 });
 
 test("grouping keeps memory bounded by the entries kept, however many addresses the items hold", () => {

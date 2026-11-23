@@ -323,14 +323,17 @@ function startEntry(item) {
 
 // sourced: the packages and settings readPackages found coming from outside the registry, in any order. The packages of one file
 // from one source (kind, address, and a git commit or a fixed text when there is one) are one entry, at its first line, naming its
-// first five packages (a name longer than npm allows cut); each setting or index line is its own entry. Entries are in file and
-// line order, the first 100 kept; once that many exist, a package or line of any other source is only counted in `more`, so memory
-// stays bounded however many sources there are.
+// first five packages (a name longer than npm allows cut); each setting or index line is its own entry. At most 100 entries are
+// kept: setting and index lines first, so a redirect is never only counted, then packages, each in file and line order; once that
+// many exist, a package or line of any other source is only counted in `more`, so memory stays bounded however many sources there
+// are. The entries kept are returned in file and line order.
 function groupSources(sourced) {
   const groups = new Map();
   const more = { packages: 0, lines: 0 };
   let lineItems = 0;
-  for (const item of [...sourced].sort(byFileThenLine)) {
+  const lines = sourced.filter((item) => item.from).sort(byFileThenLine);
+  const packages = sourced.filter((item) => !item.from).sort(byFileThenLine);
+  for (const item of [...lines, ...packages]) {
     const key = item.from ? `line ${lineItems++}` : JSON.stringify([item.file, item.kind, item.address, item.commit ?? null, item.text ?? null]);
     let entry = groups.get(key);
     if (entry === undefined) {
@@ -346,7 +349,7 @@ function groupSources(sourced) {
     entry.total++;
     if (entry.packages.length < PACKAGES_SHOWN) entry.packages.push({ name: cutName(item.name), version: item.version, line: item.line });
   }
-  return { entries: [...groups.values()], more };
+  return { entries: [...groups.values()].sort(byFileThenLine), more };
 }
 
 module.exports = {
