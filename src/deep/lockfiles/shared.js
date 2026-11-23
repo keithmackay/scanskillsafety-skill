@@ -253,8 +253,14 @@ const isPackageArchive = (path) => PACKAGE_ARCHIVE.test(path.split("#", 1)[0].sp
 // Package files kept in the repository (an archive, or a folder used as an index), shown by their repository path: no stage of
 // the scan reads binary files, so what they hold is never checked. Judging by the name may over-report (a folder named like an
 // archive, query text in a path), which only adds a warning the reader can see past.
-const bundled = (repositoryPath) =>
-  Object.freeze({ expected: false, kind: "bundled", address: repositoryPath === "" ? "." : repositoryPath, text: "a bundled package file the scan cannot read" });
+// A folder used as an index or find-links is named as a folder, an archive as a file.
+const bundled = (repositoryPath, { folder = false } = {}) =>
+  Object.freeze({
+    expected: false,
+    kind: "bundled",
+    address: repositoryPath === "" ? "." : repositoryPath,
+    text: `a bundled package ${folder ? "folder" : "file"} the scan cannot read`,
+  });
 
 // A brace or bracket in a workspace pattern, which can name any folder (`{a,../ext}`, `[.][.]/ext`).
 const BRACE_OR_BRACKET = /[{[]/;

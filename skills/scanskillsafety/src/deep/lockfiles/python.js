@@ -36,7 +36,8 @@ function pythonAddress(address, folder, { pathField = false, git = false, direct
   if (named || (pathField && !address.includes(":"))) {
     if (!staysInside(folder, address)) return OUTSIDE_PROJECT;
     const repositoryPath = pathFrom(folder, address);
-    return role !== undefined || isPackageArchive(repositoryPath) ? bundled(repositoryPath) : LOCAL;
+    if (isPackageArchive(repositoryPath)) return bundled(repositoryPath);
+    return role !== undefined ? bundled(repositoryPath, { folder: true }) : LOCAL;
   }
   return classifySource("PyPI", git ? gitRepositorySource(address, "").source : address, { direct, role });
 }

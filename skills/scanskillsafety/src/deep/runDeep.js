@@ -205,7 +205,7 @@ const sourceFinding = (entry) =>
 // PyPI, so nothing about its sources is unknown.
 const REASONS_ADDING_NO_WARNING = new Set([UNREADABLE_SOURCE_REASON, NO_PINS_REASON]);
 const unreadFinding = ({ file, reason }) =>
-  ({ severity: "warning", category: "package-source", source: "deep", file, line: null, detail: `${file} could not be read: ${reason}` });
+  ({ severity: "warning", category: "package-source", source: "deep", file, line: null, detail: `could not be read: ${reason}` });
 
 // How many distinct packages (ecosystem, name and version) were kept from OSV for their source; a setting or index line is no
 // package, one package named in several files or lines counts once, and each package with no name found counts on its own.

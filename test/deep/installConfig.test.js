@@ -283,7 +283,7 @@ test("uv.toml: index-url, extra-index-url, find-links and [[index]] urls; PyPI's
     sourced: [
       at(1, "host", "https://uv.example.com"),
       at(2, "host", "https://extra.example.com"),
-      at(4, "bundled", "svc/wheels", { ...BUNDLED, ...FIND_LINKS }),
+      at(4, "bundled", "svc/wheels", { ...BUNDLED_FOLDER, ...FIND_LINKS }),
       at(5, "host", "https://pypi.org", FIND_LINKS),
       at(10, "host", "https://download.pytorch.org"),
       at(14, "host", "https://flat.example.com", FIND_LINKS),
@@ -361,10 +361,10 @@ test("pyproject.toml: [tool.uv], [[tool.uv.index]], [[tool.poetry.source]] and [
     packages: [{ ecosystem: "PyPI", name: "httpx", version: "0.27.0", file: "uv.lock", line: 4 }],
     sourced: [
       at(6, "host", "https://uv.example.com"),
-      at(7, "bundled", "wheels", { ...BUNDLED, ...FIND_LINKS }),
+      at(7, "bundled", "wheels", { ...BUNDLED_FOLDER, ...FIND_LINKS }),
       at(11, "host", "https://download.pytorch.org"),
       at(19, "host", "https://poetry.example.com"),
-      at(24, "bundled", "dist", { ...BUNDLED, ...FIND_LINKS }),
+      at(24, "bundled", "dist", { ...BUNDLED_FOLDER, ...FIND_LINKS }),
       at(29, "host", "https://pdm.example.com"),
     ],
   });
@@ -601,6 +601,7 @@ test("keys named like built-in object properties are plain names", () => {
 
 const OUTSIDE = { text: "a path outside the project" };
 const BUNDLED = { text: "a bundled package file the scan cannot read" };
+const BUNDLED_FOLDER = { text: "a bundled package folder the scan cannot read" };
 const pkg = (file) => (name, line, kind, address, extra = {}) => ({ ecosystem: "npm", file, line, name, version: null, kind, address, ...extra });
 
 test("auth settings are known by the setting after the last colon, so a scope named like one is still read", () => {
@@ -739,7 +740,7 @@ test("uv's [pip] settings in uv.toml and [tool.uv.pip] in pyproject.toml are rea
   assert.deepEqual(read([["uv.toml", uv]]).sourced, [
     at(2, "host", "https://pip.example.com"),
     at(3, "host", "https://e.example.com"),
-    at(4, "bundled", "w", { ...BUNDLED, ...FIND_LINKS }),
+    at(4, "bundled", "w", { ...BUNDLED_FOLDER, ...FIND_LINKS }),
   ]);
   const pyproject = '[tool.uv.pip]\nindex-url = "https://pip.example.com/simple"\n';
   assert.deepEqual(read([["pyproject.toml", pyproject]]).sourced, [pypiConfig("pyproject.toml")(2, "host", "https://pip.example.com")]);

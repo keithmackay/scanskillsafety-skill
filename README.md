@@ -248,9 +248,9 @@ OSV knows a package by its name on the official registry. A package fetched from
 **Anything else is a warning** (category `package-source`), so the rating is at least yellow (one in a test folder is listed with the test-file findings and doesn't count); none of it makes the rating red. Those packages are not sent to OSV, since their name may not mean what OSV's record means. Reported:
 
 - packages from another registry host or a mirror, or over plain `http://`;
-- git dependencies, pinned to a commit or not (the commit is shown when there is one);
+- git dependencies, pinned to a commit or not (the commit is shown when there is one), and Mercurial, Subversion and Bazaar ones (`hg+`, `svn+`, `bzr+`);
 - direct download URLs;
-- package archives inside the repository (`.whl`, `.tar.gz`, `.tgz`, `.tar.bz2`, `.tar.xz`, `.zip`, `.egg` and the like), and a folder in it used as an index or find-links page. `--deep` doesn't read binary files, so nothing checks what they hold; the output calls each one "a bundled package file the scan cannot read". A local source folder (a path to a project folder, `editable = "."`) is not reported: its files are scanned;
+- package archives inside the repository (`.whl`, `.tar.gz`, `.tgz`, `.tar.bz2`, `.tar.xz`, `.zip`, `.egg` and the like), and a folder in it used as an index or find-links page. `--deep` doesn't read binary files, so nothing checks what they hold; the output calls each one "a bundled package file the scan cannot read", or "a bundled package folder" for a folder. A local source folder (a path to a project folder, `editable = "."`) is not reported: its files are scanned;
 - paths that leave the repository;
 - config settings and index options that send installs in their folder to another registry or index;
 - settings that turn off certificate checks (`.npmrc` `strict-ssl=false`, `.yarnrc.yml` `enableStrictSsl: false`, `pnpm-workspace.yaml` `strictSsl: false`, uv `allow-insecure-host`, Poetry and PDM `verify_ssl = false`), settings that allow plain http from a host (`--trusted-host`, `.yarnrc.yml` `unsafeHttpWhitelist`), and a certificate authority the repository supplies (`.npmrc` `ca` and `cafile`, `.yarnrc.yml` `caFilePath` and `httpsCaFilePath`, `pnpm-workspace.yaml` `ca` and `cafile`), which lets a proxy present any certificate;
@@ -297,7 +297,7 @@ Packages from outside the registry (each also a finding, above or under test fil
   left-pad in package-lock.json:16 comes from git ssh://github.com/someone/left-pad.git (commit 3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a)
   left-pad in package.json:6 comes from git https://github.com/someone/left-pad (commit 3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a)
   requirements.txt:1 names the package index https://pypi.python.org
-  requirements.txt:3 names wheels, a bundled package file the scan cannot read
+  requirements.txt:3 names wheels, a bundled package folder the scan cannot read
 ```
 
 At most 100 entries are listed, in file and line order; the rest are counted ("and N more packages and M more settings from other sources") and add no findings, since the 100 listed already make the rating yellow.

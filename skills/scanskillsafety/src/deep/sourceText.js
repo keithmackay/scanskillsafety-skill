@@ -24,12 +24,15 @@ function packageName(name) {
   return PLAIN_NAME.test(name) ? name : JSON.stringify(name);
 }
 
-// What packages come from, after "comes from": the address (git with its commit), a bundled file with what it is, or the fixed
-// text a source with no address has.
+// Version control other than git, whose addresses keep the `hg+`, `svn+` or `bzr+` that names it.
+const OTHER_VCS = /^(?:hg|svn|bzr)\+/i;
+
+// What packages come from, after "comes from": the address (a git one after the word git, with its commit), a bundled file with
+// what it is, or the fixed text a source with no address has.
 function packageSource({ kind, address, commit, text }) {
   if (address === null) return text;
   const shown = cut(address, FIELD_MAX, "…");
-  if (kind === "git") return `git ${shown}${commit ? ` (commit ${commit})` : ""}`;
+  if (kind === "git") return `${OTHER_VCS.test(address) ? "" : "git "}${shown}${commit ? ` (commit ${commit})` : ""}`;
   if (kind === "bundled") return `${shown}, ${text}`;
   return shown;
 }

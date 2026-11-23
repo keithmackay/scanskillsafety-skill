@@ -1212,7 +1212,7 @@ test("uv.lock: the first address that is not the registry among source, sdist an
 test("uv.lock: a registry that is a folder in the repository is a bundled package file; one that is neither a folder nor an address it can read is a source it could not read", () => {
   assert.deepEqual(readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "wheels" }') }]), {
     ...EMPTY,
-    sourced: [pypiSourced("a", "1.0.0", "uv.lock", 5, "bundled", "wheels", { text: "a bundled package file the scan cannot read" })],
+    sourced: [pypiSourced("a", "1.0.0", "uv.lock", 5, "bundled", "wheels", { text: "a bundled package folder the scan cannot read" })],
   });
   const read = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "weird:SECRET" }') }]);
   assert.deepEqual(read, {
@@ -1475,7 +1475,7 @@ test("uv.lock: every local path, a registry folder, an sdist or wheel path or a 
   outside('source = { url = "file:///home/someone/a-1.0.0.tar.gz" }');
   outside('source = { directory = "packages/a" }', 'sdist = { path = "../../a-1.0.0.tar.gz" }');
   const bundledFirst = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "wheels" }', 'sdist = { path = "../../a-1.0.0.tar.gz" }') }]);
-  assert.deepEqual(bundledFirst.sourced, [pypiSourced("a", "1.0.0", "uv.lock", 5, "bundled", "wheels", { text: "a bundled package file the scan cannot read" })]);
+  assert.deepEqual(bundledFirst.sourced, [pypiSourced("a", "1.0.0", "uv.lock", 5, "bundled", "wheels", { text: "a bundled package folder the scan cannot read" })]);
 });
 
 test("uv.lock: a package is judged by its first address that is not the registry; an archive path inside the project is a bundled package file, after the source", () => {
@@ -1545,12 +1545,12 @@ test("Python lockfiles: a path is measured from the repository root, so one into
   ];
   for (const [file, text] of inside) assert.deepEqual(verdictFor(file, text), "local", `${file} ${text}`);
   const bundledInside = [
-    ["api/uv.lock", uvLock('source = { url = "./dist/a-1.0.0.tar.gz" }'), "api/dist/a-1.0.0.tar.gz"],
-    ["api/uv.lock", uvLock('source = { registry = "../wheels" }'), "wheels"],
-    ["api/uv.lock", uvLock('source = { path = "../dist/a-1.0.0.tar.gz" }', 'sdist = { path = "../dist/a-1.0.0.tar.gz" }'), "dist/a-1.0.0.tar.gz"],
+    ["api/uv.lock", uvLock('source = { url = "./dist/a-1.0.0.tar.gz" }'), "api/dist/a-1.0.0.tar.gz", "file"],
+    ["api/uv.lock", uvLock('source = { registry = "../wheels" }'), "wheels", "folder"],
+    ["api/uv.lock", uvLock('source = { path = "../dist/a-1.0.0.tar.gz" }', 'sdist = { path = "../dist/a-1.0.0.tar.gz" }'), "dist/a-1.0.0.tar.gz", "file"],
   ];
-  for (const [file, text, address] of bundledInside) {
-    assert.deepEqual(verdictFor(file, text), { kind: "bundled", address, ...{ text: "a bundled package file the scan cannot read" } }, `${file} ${text}`);
+  for (const [file, text, address, what] of bundledInside) {
+    assert.deepEqual(verdictFor(file, text), { kind: "bundled", address, text: `a bundled package ${what} the scan cannot read` }, `${file} ${text}`);
   }
   const outside = [
     ["uv.lock", uvLock('source = { directory = "../pipeline" }')],
@@ -1597,7 +1597,7 @@ test("a uv.lock or poetry.lock with no [[package]] block at all could not be rea
 const requirementsLine = (line, kind, address, extra = {}) => ({ ecosystem: "PyPI", file: "requirements.txt", line, from: "requirements", kind, address, ...extra });
 const ENV_INDEX = { text: "an index set from an environment variable" };
 const OUTSIDE_TEXT = { text: "a path outside the project" };
-const BUNDLED_TEXT = { text: "a bundled package file the scan cannot read" };
+const BUNDLED_FOLDER_TEXT = { text: "a bundled package folder the scan cannot read" };
 // What a line names where its kind alone does not say: a setting permitting plain http, or a find-links page.
 const ALLOWS_HTTP = { role: "allows-http" };
 const FIND_LINKS = { role: "find-links" };
@@ -1616,7 +1616,7 @@ test("requirements*.txt: index options in every form, --trusted-host, VCS lines,
       requirementsLine(2, "host", "https://mirror.example.com"),
       requirementsLine(3, "host", "https://extra.example.com"),
       requirementsLine(5, "host", "https://other.example.com"),
-      requirementsLine(6, "bundled", "wheels", { ...BUNDLED_TEXT, ...FIND_LINKS }),
+      requirementsLine(6, "bundled", "wheels", { ...BUNDLED_FOLDER_TEXT, ...FIND_LINKS }),
       requirementsLine(7, "url", null, { ...OUTSIDE_TEXT, ...FIND_LINKS }),
       requirementsLine(8, "http", "http://mirror.example.com", ALLOWS_HTTP),
       requirementsLine(9, "host", null, ENV_INDEX),
@@ -1646,7 +1646,7 @@ test("requirements*.txt: a file with only name @ url lines and no == pin is read
 test("requirements*.txt: a path is local inside the repository and outside the project when it leaves it, measured from the repository root", () => {
   const read = (file, text) => readPackages([{ path: file, text: `${text}\nidna==3.10\n` }, { path: "requirements-base.txt", text: "" }]).sourced;
   assert.deepEqual(read("api/requirements.txt", "-e ../packages/x\n-r ../requirements-base.txt"), []);
-  assert.deepEqual(read("api/requirements.txt", "-f ../wheels"), [{ ...requirementsLine(1, "bundled", "wheels", { ...BUNDLED_TEXT, ...FIND_LINKS }), file: "api/requirements.txt" }]);
+  assert.deepEqual(read("api/requirements.txt", "-f ../wheels"), [{ ...requirementsLine(1, "bundled", "wheels", { ...BUNDLED_FOLDER_TEXT, ...FIND_LINKS }), file: "api/requirements.txt" }]);
   const outside = ["-f ../../wheels", "-e ../../x", "../../x", "-f file:///opt/wheels", "-e /opt/x", "-r ../../base.txt", "y @ file:./y"];
   for (const line of outside) {
     const file = "api/requirements.txt";
@@ -1678,7 +1678,7 @@ test("requirements*.txt: shapes pip accepts that hold no source, or a pin, read 
       pypiSourced("x", null, "requirements.txt", 5, "url", "https://pypi.org/…/x-1.0.whl"),
     ]],
     ["--pre\n--no-index\n--prefer-binary\n--require-hashes\n--only-binary :all:\n--no-binary=:none:\n--use-feature=truststore\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 8)], []],
-    ["-f wheels\n-e .[dev]\n-e.\n--editable=./x\n-c constraints.txt\n-rrequirements-dev.txt\n.\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 8)], [requirementsLine(1, "bundled", "wheels", { ...BUNDLED_TEXT, ...FIND_LINKS })]],
+    ["-f wheels\n-e .[dev]\n-e.\n--editable=./x\n-c constraints.txt\n-rrequirements-dev.txt\n.\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 8)], [requirementsLine(1, "bundled", "wheels", { ...BUNDLED_FOLDER_TEXT, ...FIND_LINKS })]],
     ["https://files.example.com/x-1.0.whl#egg=xpkg", [], [pypiSourced("xpkg", null, "requirements.txt", 1, "url", "https://files.example.com/x-1.0.whl")]],
     ["https://user:SECRET@files.example.com/TOKEN/x-1.0.whl", [], [pypiSourced(null, null, "requirements.txt", 1, "url", "https://files.example.com/…/x-1.0.whl")]],
     ["x @ https://files.pythonhosted.org/packages/x-1.0.whl", [pypi("x", null, "requirements.txt", 1)], []],
@@ -1886,6 +1886,7 @@ test("Python lockfiles: pypi.org is expected only as the index at /simple; a pac
 });
 
 const BUNDLED = "a bundled package file the scan cannot read";
+const BUNDLED_FOLDER = "a bundled package folder the scan cannot read";
 const bundledItem = (ecosystem, name, version, file, line, address) => ({ ecosystem, file, line, name, version, kind: "bundled", address, text: BUNDLED });
 
 test("bundled archives: an npm, Yarn or pnpm package from an archive inside the repository is bundled, shown by its repository path; a folder stays local; an archive outside is a path outside the project", () => {
@@ -1912,13 +1913,13 @@ test("bundled archives: a Python package from an archive, or a folder used as an
   assert.deepEqual(readPackages([{ path: "py/poetry.lock", text: poetry }]).sourced, [bundledItem("PyPI", "a", "1.0.0", "py/poetry.lock", 2, "py/dist/a-1.0.0.egg")]);
   const uv = (...lines) => readPackages([{ path: "uv.lock", text: uvLock(...lines) }]).sourced;
   assert.deepEqual(uv('source = { path = "dist/a-1.0.0-py3-none-any.whl" }'), [bundledItem("PyPI", "a", "1.0.0", "uv.lock", 5, "dist/a-1.0.0-py3-none-any.whl")]);
-  assert.deepEqual(uv('source = { registry = "wheels" }'), [bundledItem("PyPI", "a", "1.0.0", "uv.lock", 5, "wheels")]);
+  assert.deepEqual(uv('source = { registry = "wheels" }'), [{ ...bundledItem("PyPI", "a", "1.0.0", "uv.lock", 5, "wheels"), text: BUNDLED_FOLDER }]);
   assert.deepEqual(uv('source = { registry = "https://pypi.org/simple" }', 'sdist = { path = "dist/a-1.0.0.tar.bz2" }'), [bundledItem("PyPI", "a", "1.0.0", "uv.lock", 5, "dist/a-1.0.0.tar.bz2")]);
   assert.deepEqual(uv('source = { directory = "libs/a" }'), []);
   const requirements = readPackages([{ path: "api/requirements.txt", text: [
     "-f ./wheels", "-i ../simple", "-e ./x-1.0.tar.gz", "y @ ./y-1.0-py3-none-any.whl", "dist/z-1.0.tar.xz", "w-1.0.zip", "-e .", "./libs/v", "-f ../wheels", "idna==3.10",
   ].join("\n") }]);
-  const line = (n, address) => ({ ecosystem: "PyPI", file: "api/requirements.txt", line: n, from: "requirements", kind: "bundled", address, text: BUNDLED });
+  const line = (n, address) => ({ ecosystem: "PyPI", file: "api/requirements.txt", line: n, from: "requirements", kind: "bundled", address, text: BUNDLED_FOLDER });
   assert.deepEqual(requirements.sourced, [
     { ...line(1, "api/wheels"), ...FIND_LINKS },
     line(2, "simple"),

@@ -613,7 +613,7 @@ test("a lockfile it could not read makes the rating yellow on its own, with OSV 
     const result = await runDeep(root, options, { fetchImpl: fakeFetch({}) });
     const [{ reason }] = result.deep.packages.couldNotRead;
     assert.equal(result.rating, "yellow");
-    assert.deepEqual(sourceFindings(result), [sourceFinding("pnpm-lock.yaml", null, `pnpm-lock.yaml could not be read: ${reason}`)]);
+    assert.deepEqual(sourceFindings(result), [sourceFinding("pnpm-lock.yaml", null, `could not be read: ${reason}`)]);
   }
 });
 
@@ -630,11 +630,36 @@ test("package sources and unreadable install files in test files nothing launche
   const reason = result.deep.packages.couldNotRead.find((c) => c.file === "tests/fixtures/broken/pnpm-lock.yaml").reason;
   assert.deepEqual(result.deep.testFindings.filter((f) => f.category === "package-source"), [
     sourceFinding("tests/fixtures/requirements.txt", 1, "names the package index https://mirror.example.com"),
-    sourceFinding("tests/fixtures/broken/pnpm-lock.yaml", null, `tests/fixtures/broken/pnpm-lock.yaml could not be read: ${reason}`),
+    sourceFinding("tests/fixtures/broken/pnpm-lock.yaml", null, `could not be read: ${reason}`),
   ]);
   assert.deepEqual(result.deep.packages.offRegistry.map((e) => e.file), ["tests/fixtures/requirements.txt"]);
   const text = formatDeep(result);
   assert.match(text, /Findings in test files nothing launches \(not counted in the rating\):\n(?:.*\n)*.*tests\/fixtures\/requirements\.txt:1 \[warning\] package-source: names the package index https:\/\/mirror\.example\.com/);
+});
+
+test("wording: a bundled folder is named as a folder and an archive as a file; hg, svn and bzr sources are not called git; an unreadable file is not named twice", async () => {
+  const root = makeTree({
+    "SKILL.md": "Formats tables.",
+    "requirements.txt": [
+      "-f ./wheels",
+      "-f ./dist/tool-1.0-py3-none-any.whl",
+      "foo @ hg+https://hg.example.com/foo",
+      "-e svn+https://svn.example.com/bar#egg=bar",
+      "baz @ git+https://github.com/someone/baz",
+      "",
+    ].join("\n"),
+    "pnpm-lock.yaml": "lockfileVersion: '4.0'\n",
+  });
+  const result = await runDeep(root, ALL_OFF, { fetchImpl: fakeFetch({}) });
+  const reason = result.deep.packages.couldNotRead.find((c) => c.file === "pnpm-lock.yaml").reason;
+  assert.deepEqual(sourceFindings(result).map((f) => [f.file, f.line, f.detail]), [
+    ["requirements.txt", 1, "names wheels, a bundled package folder the scan cannot read"],
+    ["requirements.txt", 2, "names dist/tool-1.0-py3-none-any.whl, a bundled package file the scan cannot read"],
+    ["requirements.txt", 3, "foo comes from hg+https://hg.example.com/foo"],
+    ["requirements.txt", 4, "bar comes from svn+https://svn.example.com/bar"],
+    ["requirements.txt", 5, "baz comes from git https://github.com/someone/baz"],
+    ["pnpm-lock.yaml", null, `could not be read: ${reason}`],
+  ]);
 });
 
 test("a requirements file with ranges only installs from PyPI, so it is listed as holding no pins but adds no warning", async () => {
@@ -648,14 +673,14 @@ test("a requirements file with ranges only installs from PyPI, so it is listed a
 test("a secret in a lockfileVersion never reaches the findings or the result", async () => {
   const root = makeTree({ "SKILL.md": "Formats tables.", "package-lock.json": JSON.stringify({ lockfileVersion: "SECRET\u001b[2J", packages: {} }) });
   const result = await runDeep(root, ALL_OFF, { fetchImpl: fakeFetch({}) });
-  assert.deepEqual(sourceFindings(result), [sourceFinding("package-lock.json", null, "package-lock.json could not be read: a lockfileVersion it cannot read")]);
+  assert.deepEqual(sourceFindings(result), [sourceFinding("package-lock.json", null, "could not be read: a lockfileVersion it cannot read")]);
   assert.doesNotMatch(JSON.stringify(result), /SECRET/);
 });
 
 test("a manifest or install config left out of the file list is a file it could not read", async () => {
   const result = await runDeep(makeTree({ "SKILL.md": "Formats tables.", ".npmrc": `#${"x".repeat(5 * 1024 * 1024)}` }), ALL_OFF, { fetchImpl: fakeFetch({}) });
   assert.equal(result.rating, "yellow");
-  assert.deepEqual(sourceFindings(result), [sourceFinding(".npmrc", null, ".npmrc could not be read: larger than 5 MB, not checked")]);
+  assert.deepEqual(sourceFindings(result), [sourceFinding(".npmrc", null, "could not be read: larger than 5 MB, not checked")]);
 });
 
 test("past 100 sources, each kept one is a warning and the packages of the rest are counted", async () => {
