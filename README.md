@@ -278,6 +278,7 @@ Config files apply when someone installs in the cloned folder, which is what you
 
 - `pip.conf`: pip ignores one in a project folder unless `PIP_CONFIG_FILE` points at it.
 - Pixi and Hatch environments.
+- Bun lockfiles (`bun.lock`, `bun.lockb`): listed as not checked. A Bun project's `package.json` is still read.
 - Settings that redirect only interpreter or prebuilt-binary downloads: uv's `python-install-mirror` and `.npmrc` binary-mirror keys.
 - Yarn 1 `.yarnrc` settings other than `registry` and scope registries, such as `ca`, `cafile` and `strict-ssl`.
 
@@ -351,7 +352,7 @@ Notification, SubagentStop and PreCompact hooks were reached by neither run; a c
 - **Files:** a file over 5 MB is listed, not read.
 - **Files left out of the archive** (`.gitattributes` `export-ignore`), when reading from the archive: at most 50 are fetched separately; past that, or when the host's file list is cut short or can't be read, there is no rating (exit `3`). Many projects keep their tests and tooling out of their archives, so without `git` installed a good share of repositories end this way; install `git` to read them.
 - **Git LFS and submodules:** a file stored with Git LFS is read as its pointer text, not the file it points to; submodules are listed, not read.
-- **Lockfiles read:** `package-lock.json` and `npm-shrinkwrap.json` (`lockfileVersion` 1, 2 and 3), `yarn.lock` (classic and Berry), `pnpm-lock.yaml` (`lockfileVersion` 6 and 9), `poetry.lock`, `uv.lock`, and `requirements*.txt` lines pinned with `==` (with the files their `-r` and `-c` lines name). A lockfile it can't parse, or in another format version, is listed as "could not read" and makes the rating yellow. `Cargo.lock`, `go.sum` and `Gemfile.lock` are listed as not checked.
+- **Lockfiles read:** `package-lock.json` and `npm-shrinkwrap.json` (`lockfileVersion` 1, 2 and 3), `yarn.lock` (classic and Berry), `pnpm-lock.yaml` (`lockfileVersion` 6 and 9), `poetry.lock`, `uv.lock`, and `requirements*.txt` lines pinned with `==` (with the files their `-r` and `-c` lines name). A lockfile it can't parse, or in another format version, is listed as "could not read" and makes the rating yellow. `Cargo.lock`, `go.sum`, `Gemfile.lock` and Bun's `bun.lock` and `bun.lockb` are listed as not checked.
 - **Manifests:** the names in `package.json` (`dependencies`, `optionalDependencies`, `peerDependencies`) and `pyproject.toml` are checked by name only, and the output says so, unless a lockfile or requirements file covering their folder already sent them with a version; an exact pin (`"1.2.3"`, `==1.2.3`) is sent with its version. A package checked by name only counts as malicious (critical) only when OSV says every version is; otherwise it is a warning naming the affected versions.
 - **OSV details:** severities are fetched for the first 200 advisory ids; the rest are listed without severity, and the output says so.
 

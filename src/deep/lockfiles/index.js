@@ -26,7 +26,7 @@ const LOCKFILES = new Map([
 ]);
 const REQUIREMENTS = { ecosystem: "PyPI", read: readRequirements };
 const NAMED_REQUIREMENTS = { ecosystem: "PyPI", read: readNamedRequirements };
-const NOT_CHECKED = new Set(["Cargo.lock", "go.sum", "Gemfile.lock"]);
+const NOT_CHECKED = new Set(["Cargo.lock", "go.sum", "Gemfile.lock", "bun.lock", "bun.lockb"]);
 // The files whose packages sent to OSV with a version cover a manifest's names: lockfiles proper and requirements files.
 const COVERING_KINDS = new Set([...LOCKFILES.values(), REQUIREMENTS, NAMED_REQUIREMENTS]);
 

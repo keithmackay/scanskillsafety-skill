@@ -15,6 +15,7 @@ All notable changes to this project are documented here. The format follows
 - Packages from those sources are not sent to OSV, since their name may not mean what OSV's record means. When every package was left out for this reason, the package check says so instead of "No package found".
 - This part needs no network: it runs with `--no-osv` too, and when OSV can't be reached.
 - A lockfile that does not record where its packages come from, with no config in the target naming a registry for it, gets a note under `Packages:` (not a finding).
+- Bun lockfiles (`bun.lock`, `bun.lockb`) are listed as not checked, as `Cargo.lock`, `go.sum` and `Gemfile.lock` are.
 - `--json`: `deep.packages` has `offRegistry` (the entries, at most 100), `offRegistryMore` (`{ packages, lines }` past those 100), `notRecorded` and `notSentToOsv`.
 
 ### Changed

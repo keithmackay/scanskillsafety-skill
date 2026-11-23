@@ -304,6 +304,11 @@ test("a lockfile that truly lists no dependency is read as holding none", () => 
   assert.deepEqual(read, EMPTY);
 });
 
+test("Bun lockfiles are listed as not checked: bun.lock read as text, and bun.lockb left out as binary", () => {
+  const read = readPackages([{ path: "bun.lock", text: "{\n  \"lockfileVersion\": 1,\n}\n" }], [{ path: "app/bun.lockb", reason: "binary" }]);
+  assert.deepEqual(read, { ...EMPTY, notChecked: ["bun.lock", "app/bun.lockb"] });
+});
+
 test("an oversized Cargo, Go or Ruby lockfile is still listed as not checked", () => {
   const read = readPackages([], [{ path: "Cargo.lock", reason: "larger than 5 MB" }, { path: "vendor/go.sum", reason: "larger than 5 MB" }]);
   assert.deepEqual(read, { ...EMPTY, notChecked: ["Cargo.lock"] });
