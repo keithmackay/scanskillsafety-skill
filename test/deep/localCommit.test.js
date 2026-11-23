@@ -124,8 +124,9 @@ test("a git status that stops answering says changes could not be checked, and t
   const savedPath = process.env.PATH;
   t.after(() => (process.env.PATH = savedPath));
   const bin = makeTree({});
-  // Answers as a checkout at commit c…c, and never finishes a status.
-  fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh\nfor a; do case "$a" in status) exec sleep 5;; config) exit 1;; HEAD) echo ${"c".repeat(40)}; exit 0;; esac; done\nexit 0\n`, { mode: 0o755 });
+  // Answers as a checkout at commit c…c, and never finishes a status. The time limit applies to every git call, so it leaves the
+  // quick answers time to start on a busy machine; the status sleeps well past it.
+  fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh\nfor a; do case "$a" in status) exec sleep 30;; config) exit 1;; HEAD) echo ${"c".repeat(40)}; exit 0;; esac; done\nexit 0\n`, { mode: 0o755 });
   process.env.PATH = `${bin}${path.delimiter}${savedPath}`;
-  assert.deepEqual(localCommit(makeTree({}), { timeoutMs: 1000 }), { commit: "c".repeat(40), changed: false, changesChecked: false, note: "could not check for uncommitted changes" });
+  assert.deepEqual(localCommit(makeTree({}), { timeoutMs: 3000 }), { commit: "c".repeat(40), changed: false, changesChecked: false, note: "could not check for uncommitted changes" });
 });

@@ -158,7 +158,7 @@ test("--help prints usage, every option, examples and what each exit code means,
     const out = run(flag);
     assert.equal(out.status, 0);
     assert.equal(out.stderr, "");
-    for (const expected of ["Usage: scanskillsafety", "--json", "--help", "--version", "--deep", "--ref", "--no-site", "--no-osv", "--no-claude", "--claude-ok", "--budget", "--model", "Examples:", "https://github.com/", "0  green", "1  yellow", "2  red", "3  could not scan", "4  ", "deep.claude.status", "a stopped reading that flagged a file still exits 4"]) {
+    for (const expected of ["Usage: scanskillsafety", "--json", "--help", "--version", "--deep", "--ref", "--no-site", "--no-osv", "--no-claude", "--claude-ok", "--budget", "--model", "Examples:", "https://github.com/", "0  green", "1  yellow", "2  red", "3  could not scan", "4  ", "deep.claude.status", "a stopped reading that flagged a file still exits 4", "where its packages come from"]) {
       assert.ok(out.stdout.includes(expected), `${flag} output names ${expected}`);
     }
   }
@@ -204,8 +204,22 @@ test("--deep --json puts the deep results and the services under deep, and print
   assert.equal(out.stderr, "");
   assert.equal(parsed.rating, "green");
   assert.deepEqual(parsed.deep.services, [{ service: "api.osv.dev", receives: OSV_RECEIVES }]);
-  assert.deepEqual(parsed.deep.packages, { status: "done", checked: 0, namesOnly: [], couldNotRead: [], notChecked: [], vulnerabilities: [], detailsLeft: 0, reason: null });
+  assert.deepEqual(parsed.deep.packages, {
+    status: "done", checked: 0, namesOnly: [], couldNotRead: [], notChecked: [], vulnerabilities: [], detailsLeft: 0, reason: null,
+    offRegistry: [], offRegistryMore: { packages: 0, lines: 0 }, notRecorded: [], notSentToOsv: 0,
+  });
   assert.equal(out.status, 0);
+});
+
+test("--deep --json carries the packages from outside the registry", () => {
+  const lock = JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/lodash": { version: "4.17.21", resolved: "https://registry.npmmirror.com/lodash/-/lodash-4.17.21.tgz" } } }, null, 2);
+  const out = run("--deep", "--json", "--no-osv", "--no-claude", makeTree({ "SKILL.md": "formats markdown tables", "package-lock.json": lock }));
+  const parsed = JSON.parse(out.stdout);
+  assert.deepEqual(parsed.deep.packages.offRegistry, [
+    { ecosystem: "npm", kind: "host", address: "https://registry.npmmirror.com", file: "package-lock.json", line: 5, packages: [{ name: "lodash", version: "4.17.21", line: 5 }], total: 1 },
+  ]);
+  assert.equal(parsed.deep.packages.notSentToOsv, 1);
+  assert.equal(parsed.rating, "yellow");
 });
 
 test("a deep-scan option without --deep is refused with the usage line, exit 3", () => {
@@ -293,4 +307,47 @@ test("text from the target (paths, excerpts, install commands) is printed with c
   assert.ok(line.startsWith("node setup.js ?? a"));
   const json = JSON.parse(run("--json", "--deep", "--no-osv", "--no-claude", root).stdout);
   assert.equal(json.deep.installTime.find((e) => e.file === "package.json").command, longCommand.replace(/[‮\u0007]/g, "?"));
+});
+
+// A credential written into a target's package sources, as each reader meets one; the address shown keeps none of it.
+const TOKEN = "s3cr3tT0k3nQz";
+const npmLock = (packages) => JSON.stringify({ lockfileVersion: 3, packages: { "": {}, ...packages } }, null, 2);
+const resolvedAt = (resolved) => npmLock({ "node_modules/x": { version: "1.0.0", resolved } });
+const CREDENTIAL_CASES = [
+  ["user info", "package-lock.json", resolvedAt(`https://user:${TOKEN}@npm.example.com/x/-/x-1.0.0.tgz`)],
+  ["a query token", "package-lock.json", resolvedAt(`https://npm.example.com/x/-/x-1.0.0.tgz?token=${TOKEN}`)],
+  ["a token in a registry's path", "package-lock.json", resolvedAt(`https://npm-proxy.fury.io/${TOKEN}/u/x/-/x-1.0.0.tgz`)],
+  ["a token in a direct archive's path", "requirements.txt", `x @ https://pypi.fury.io/${TOKEN}/u/x-1.0-py3-none-any.whl\n`],
+  ["a token in a github.com release address", "requirements.txt", `x @ https://github.com/o/r/releases/download/${TOKEN}/x-1.0-py3-none-any.whl\ny @ https://${TOKEN}@github.com/o/r/releases/download/v1/y-1.0.whl?t=${TOKEN}\n`],
+  [".npmrc auth settings", ".npmrc", `registry=https://npm.example.com/\n_authToken=${TOKEN}\n_auth=${TOKEN}\n_password=${TOKEN}\n//npm.example.com/:_authToken=${TOKEN}\n`],
+  [".yarnrc.yml auth settings", ".yarnrc.yml", `npmRegistryServer: "https://npm.example.com"\nnpmAuthToken: ${TOKEN}\nnpmAuthIdent: "user:${TOKEN}"\nnpmRegistries:\n  "https://r.example.com":\n    npmAuthToken: ${TOKEN}\n`],
+  ["pdm.toml index addresses with user and password", "pdm.toml", `[pypi]\nurl = "https://user:${TOKEN}@pdm.example.com/simple"\n\n[pypi.extra]\nurl = "https://extra.example.com/simple"\npassword = "${TOKEN}"\n`],
+  ["uv.toml index addresses with user and password", "uv.toml", `index-url = "https://user:${TOKEN}@uv.example.com/simple"\n\n[[index]]\nname = "corp"\nurl = "https://__token__:${TOKEN}@corp.example.com/simple"\n`],
+  ["an unparseable source", "package-lock.json", resolvedAt(`https://${TOKEN}@[bad/x.tgz`)],
+  ["an npm version 1 URL version", "package-lock.json", JSON.stringify({ lockfileVersion: 1, dependencies: { x: { version: `https://user:${TOKEN}@npm.example.com/x.tgz` }, y: { version: `git+https://${TOKEN}@github.com/u/y.git` } } }, null, 2)],
+  ["a token in a -r path", "requirements.txt", `-r ${TOKEN}/requirements-dev.txt\n-c constraints-${TOKEN}.txt\nidna==3.10\n`],
+  ["a ${…} value", "requirements.txt", `--index-url https://__token__:${TOKEN}@\${HOST}/simple\n-i \${MIRROR}/${TOKEN}/simple\nidna==3.10\n`],
+  ["a ${…} value in config", ".npmrc", `registry=https://u:${TOKEN}@\${REGISTRY}/\n@s:registry=\${S_REGISTRY}/${TOKEN}/\n`],
+  ["a yarn.lock (classic) resolved address", "yarn.lock", `# yarn lockfile v1\n\nx@^1:\n  version "1.0.0"\n  resolved "https://user:${TOKEN}@npm.example.com/x/-/x-1.0.0.tgz#${TOKEN}"\n\ny@^1:\n  version "1.0.0"\n  resolved "https://npm.example.com/${TOKEN}/y/-/y-1.0.0.tgz?t=${TOKEN}"\n`],
+  ["a yarn.lock (Berry) resolution", "yarn.lock", `__metadata:\n  version: 8\n\n"x@https://npm.example.com/${TOKEN}/x-1.0.0.tgz":\n  version: 1.0.0\n  resolution: "x@https://user:${TOKEN}@npm.example.com/${TOKEN}/x-1.0.0.tgz?t=${TOKEN}"\n  languageName: node\n  linkType: hard\n`],
+  ["a pnpm-lock.yaml tarball", "pnpm-lock.yaml", `lockfileVersion: '9.0'\n\npackages:\n\n  x@1.0.0:\n    resolution: {tarball: https://user:${TOKEN}@npm.example.com/${TOKEN}/x-1.0.0.tgz?t=${TOKEN}}\n`],
+  ["a uv.lock registry and archives", "uv.lock", `version = 1\n\n[[package]]\nname = "x"\nversion = "1.0.0"\nsource = { registry = "https://user:${TOKEN}@uv.example.com/simple" }\nsdist = { url = "https://uv.example.com/${TOKEN}/x-1.0.0.tar.gz?t=${TOKEN}", hash = "sha256:x" }\n`],
+  ["a poetry.lock source", "poetry.lock", `[[package]]\nname = "x"\nversion = "1.0.0"\n\n[package.source]\ntype = "legacy"\nurl = "https://user:${TOKEN}@poetry.example.com/${TOKEN}/simple?t=${TOKEN}"\nreference = "corp"\n`],
+];
+
+test("no credential in a package source or install config reaches the deep scan's text or JSON output, on stdout or stderr", () => {
+  // Each case in its own folder of one target, so two runs cover them all.
+  const files = { "SKILL.md": "Formats tables." };
+  CREDENTIAL_CASES.forEach(([, file, text], i) => { files[`case${i}/${file}`] = text; });
+  const args = ["--deep", "--no-osv", "--no-site", "--no-claude", makeTree(files)];
+  const text = run(...args);
+  const json = run("--json", ...args);
+  for (const out of [text, json]) {
+    assert.equal(out.status, 1, out.stderr);
+    // Any part of the token, as a cut that kept its start or its end would show it.
+    for (const part of [TOKEN, TOKEN.slice(0, 6), TOKEN.slice(-6)]) assert.ok(!out.stdout.includes(part) && !out.stderr.includes(part), `${part}:\n${out.stdout}${out.stderr}`);
+  }
+  const { packages } = JSON.parse(json.stdout).deep;
+  const listed = new Set([...packages.offRegistry, ...packages.couldNotRead].map((entry) => entry.file));
+  CREDENTIAL_CASES.forEach(([name, file], i) => assert.ok(listed.has(`case${i}/${file}`), `${name}: case${i}/${file} is listed`));
 });

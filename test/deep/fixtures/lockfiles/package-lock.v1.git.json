@@ -1,0 +1,17 @@
+{
+  "name": "table-formatter",
+  "version": "1.0.0",
+  "lockfileVersion": 1,
+  "requires": true,
+  "dependencies": {
+    "ansi-regex": {
+      "version": "5.0.1",
+      "resolved": "https://registry.npmjs.org/ansi-regex/-/ansi-regex-5.0.1.tgz",
+      "integrity": "sha512-quJQXlTSUGL2LH9SUXo8VwsY4soanhgo6LNSm84E1LBcE8s3O0wpdiRzyR9z/ZZJMlMWv37qOOb9pdJlMUEKFQ=="
+    },
+    "left-pad": {
+      "version": "git+https://github.com/someone/left-pad.git#3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a",
+      "from": "git+https://github.com/someone/left-pad.git"
+    }
+  }
+}

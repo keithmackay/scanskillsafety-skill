@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-22
+
+### Added
+
+- `--deep` reports packages that come from anywhere but their ecosystem's official registry (`registry.npmjs.org` and `registry.yarnpkg.com` for npm; the index at `pypi.org/simple` and files on `files.pythonhosted.org` for PyPI), under "Packages from outside the registry", each with its file and line. That covers mirrors and other registry hosts, git dependencies (with their commit when pinned to one), direct download URLs, plain `http://`, find-links pages on any host, package archives bundled in the repository (`.whl`, `.tar.gz`, `.tgz`, `.zip` and the like) or a folder of them used as an index, and paths that leave the repository. It also reports config files that send installs in their folder to another registry or index (`.npmrc`, `.yarnrc`, `.yarnrc.yml`, `pnpm-workspace.yaml`, `uv.toml`, `pdm.toml`, and the uv, Poetry, PDM and Rye settings in `pyproject.toml`), settings that turn off certificate checks (`strict-ssl=false`, `enableStrictSsl: false`, `strictSsl: false`, `allow-insecure-host`, `--trusted-host`, `verify_ssl = false`) and certificate authorities the repository supplies (`ca`, `cafile`, `caFilePath`, `httpsCaFilePath`). The sources are read from every lockfile it already read, from requirements files (including those a `-r` or `-c` line names), and from every `package.json` and `pyproject.toml` whether or not a lockfile sits beside it. See "Where packages come from" in the README.
+- Each of them is a warning (category `package-source`), so the rating is at least yellow. None makes it red. One in a test folder is listed with the test-file findings and doesn't count toward the rating, as other findings there don't, unless an install-time command names its file.
+- Packages from those sources are not sent to OSV, since their name may not mean what OSV's record means. When every package was left out for this reason, the package check says so instead of "No package found".
+- This part needs no network: it runs with `--no-osv` too, and when OSV can't be reached.
+- A lockfile that does not record where its packages come from, with no config in the target naming a registry for it, gets a note under `Packages:` (not a finding).
+- Bun lockfiles (`bun.lock`, `bun.lockb`) are listed as not checked, as `Cargo.lock`, `go.sum` and `Gemfile.lock` are.
+- `--json`: `deep.packages` has `offRegistry` (the entries, at most 100), `offRegistryMore` (`{ packages, lines }` past those 100), `notRecorded` and `notSentToOsv`; with OSV off (`status` `off`) it still has these and `couldNotRead`.
+
+### Changed
+
+- A file that can install packages but could not be read (a lockfile, requirements file, manifest or install config with invalid JSON or TOML, a format version or layout it doesn't read, or too large to read) is a warning, so the rating is at least yellow: any source in it is unknown. A requirements file with no pinned versions is not, since it installs from PyPI.
+- Every `package.json` and `pyproject.toml` is read, not only those with no lockfile, and the `Packages:` line naming them reads "Read from manifests (versions not fixed by a lockfile)" in place of "Names only (no lockfile, so any version may be installed)". A manifest's names are sent to OSV unless a lockfile or requirements file covering its folder already sent them with a version, and an exact pin (`"1.2.3"` in `package.json`, `==1.2.3` in `pyproject.toml`) is sent with its version.
+
+### Fixed
+
+- Claude's reasons, cut to 300 characters, are never cut in the middle of a character outside the Basic Multilingual Plane, such as an emoji (lib from findsafeskills `bcc924c`).
+- The npm lockfile reader: a `package-lock.json` version 1 `version` holding a git URL, tarball URL or `file:` path is read as the package's source and never sent to OSV as a version; an entry with no version, or that is no object, is reported as one it could not read instead of being skipped; and a `lockfileVersion` it doesn't read is reported with a fixed reason that no longer repeats the file's own text.
+
 ## [1.3.0] - 2026-11-16
 
 ### Added

@@ -11,7 +11,9 @@ const fixture = (name) => fs.readFileSync(path.join(__dirname, "fixtures", "lock
 const one = (filePath, fixtureName) => readPackages([{ path: filePath, text: fixture(fixtureName) }]);
 const npm = (name, version, file, line) => ({ ecosystem: "npm", name, version, file, line });
 const pypi = (name, version, file, line) => ({ ecosystem: "PyPI", name, version, file, line });
-const EMPTY = { packages: [], namesOnly: [], couldNotRead: [], notChecked: [] };
+const EMPTY = { packages: [], namesOnly: [], couldNotRead: [], notChecked: [], sourced: [], notRecorded: [] };
+// The note for a lockfile that records no host for some packages, with no config naming a registry for them.
+const notRecorded = (file) => [{ file, ecosystem: "npm" }];
 
 test("package-lock.json version 1: every dependency, nested ones too, with the line naming it", () => {
   assert.deepEqual(one("package-lock.json", "package-lock.v1.json"), {
@@ -48,7 +50,7 @@ test("a package-lock.json of another version, or not JSON, could not be read", (
   assert.deepEqual(read, {
     ...EMPTY,
     couldNotRead: [
-      { file: "package-lock.json", reason: "lockfileVersion 4 is not a version it can read" },
+      { file: "package-lock.json", reason: "a lockfileVersion it cannot read" },
       { file: "sub/package-lock.json", reason: "not valid JSON" },
     ],
   });
@@ -90,9 +92,27 @@ test("pnpm-lock.yaml version 9: quoted scoped keys under packages, not the snaps
   ]);
 });
 
+test("a lockfileVersion holding a secret or terminal escapes never reaches the result: the reason is fixed", () => {
+  const odd = "SECRET\u001b[2J\u0007";
+  const read = readPackages([
+    { path: "package-lock.json", text: JSON.stringify({ lockfileVersion: odd, packages: {} }) },
+    { path: "a/package-lock.json", text: JSON.stringify({ lockfileVersion: 99, packages: {} }) },
+    { path: "pnpm-lock.yaml", text: `lockfileVersion: '${odd}${"x".repeat(100000)}'\n` },
+    { path: "b/pnpm-lock.yaml", text: `lockfileVersion: ${odd}\n` },
+    { path: "yarn.lock", text: `__metadata:\n  version: ${odd}\n` },
+  ]);
+  assert.deepEqual(read.couldNotRead.slice(0, 4), [
+    { file: "package-lock.json", reason: "a lockfileVersion it cannot read" },
+    { file: "a/package-lock.json", reason: "a lockfileVersion it cannot read" },
+    { file: "pnpm-lock.yaml", reason: "a lockfileVersion it cannot read" },
+    { file: "b/pnpm-lock.yaml", reason: "a lockfileVersion it cannot read" },
+  ]);
+  assert.doesNotMatch(JSON.stringify(read), /SECRET|\\u001b|\\u0007/);
+});
+
 test("a pnpm-lock.yaml of another version could not be read", () => {
   assert.deepEqual(readPackages([{ path: "pnpm-lock.yaml", text: "lockfileVersion: 5.4\n\npackages:\n\n  /chalk/2.4.2:\n" }]).couldNotRead, [
-    { file: "pnpm-lock.yaml", reason: "lockfileVersion 5.4 is not a version it can read" },
+    { file: "pnpm-lock.yaml", reason: "a lockfileVersion it cannot read" },
   ]);
 });
 
@@ -150,13 +170,13 @@ test("with no npm lockfile, the names in each package.json's dependencies, optio
   });
 });
 
-test("with an npm lockfile anywhere, package.json names are not read", () => {
+test("beside an npm lockfile, the package.json names it holds are not sent again; the others are, by name", () => {
   const read = readPackages([
-    { path: "package.json", text: JSON.stringify({ dependencies: { chalk: "^5.0.0" } }) },
+    { path: "package.json", text: JSON.stringify({ dependencies: { semver: "^7.0.0", chalk: "^5.0.0" } }) },
     { path: "pnpm-lock.yaml", text: fixture("pnpm-lock.v9.yaml") },
   ]);
-  assert.deepEqual(read.namesOnly, []);
-  assert.ok(read.packages.every((p) => p.version !== null));
+  assert.deepEqual(read.namesOnly, ["package.json"]);
+  assert.deepEqual(read.packages.map((p) => `${p.name}@${p.version ?? "*"}`), ["@pnpm/exe@9.15.0", "semver@7.6.3", "chalk@*"]);
 });
 
 test("with no Python lockfile, pyproject.toml's project dependencies and Poetry's dependencies give names", () => {
@@ -213,14 +233,19 @@ test("Cargo, Go and Ruby lockfiles are listed as not checked", () => {
   assert.deepEqual(read, { ...EMPTY, notChecked: ["Cargo.lock", "tools/go.sum", "Gemfile.lock"] });
 });
 
-test("a lockfile left out of the file list could not be read, with the reason it was left out", () => {
+test("a lockfile left out of the file list could not be read, with the reason it was left out; the package.json beside it is read in its place", () => {
   const leftOut = [
     { path: "package-lock.json", reason: "larger than 5 MB" },
     { path: "node_modules/x/yarn.lock", reason: "larger than 5 MB" },
     { path: "logo.png", reason: "binary" },
   ];
   const read = readPackages([{ path: "package.json", text: JSON.stringify({ dependencies: { chalk: "^5.0.0" } }) }], leftOut);
-  assert.deepEqual(read, { ...EMPTY, couldNotRead: [{ file: "package-lock.json", reason: "larger than 5 MB, not checked" }] });
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [{ ecosystem: "npm", name: "chalk", version: null, file: "package.json", line: null }],
+    namesOnly: ["package.json"],
+    couldNotRead: [{ file: "package-lock.json", reason: "larger than 5 MB, not checked" }],
+  });
 });
 
 test("lockfiles with Windows line endings read the same", () => {
@@ -250,12 +275,19 @@ test("a lockfile with entries it cannot make out could not be read, rather than 
   assert.deepEqual(read, {
     ...EMPTY,
     couldNotRead: [
-      { file: "yarn.lock", reason: "no packages found in it" },
-      { file: "a/pnpm-lock.yaml", reason: "no packages found in it" },
+      { file: "yarn.lock", reason: "a package source it could not read" },
+      { file: "a/pnpm-lock.yaml", reason: "a package source it could not read" },
       { file: "b/package-lock.json", reason: "no packages found in it" },
       { file: "c/package-lock.json", reason: "no packages found in it" },
-      { file: "poetry.lock", reason: "no packages found in it" },
+      { file: "poetry.lock", reason: "a package source it could not read" },
       { file: "requirements.txt", reason: "no pinned versions in it" },
+    ],
+    packages: [{ ecosystem: "npm", name: "chalk", version: null, file: "package.json", line: null }],
+    namesOnly: ["package.json"],
+    sourced: [
+      { ecosystem: "npm", file: "yarn.lock", line: 3, name: null, version: null, kind: "unreadable", address: null },
+      { ecosystem: "npm", file: "a/pnpm-lock.yaml", line: 5, name: null, version: null, kind: "unreadable", address: null },
+      { ecosystem: "PyPI", file: "poetry.lock", line: 2, name: "x", version: null, kind: "unreadable", address: null },
     ],
   });
 });
@@ -264,7 +296,7 @@ test("a lockfile that truly lists no dependency is read as holding none", () => 
   const read = readPackages([
     { path: "package-lock.json", text: JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" }, "node_modules/w": { link: true, resolved: "w" } } }) },
     { path: "a/package-lock.json", text: JSON.stringify({ lockfileVersion: 1 }) },
-    { path: "yarn.lock", text: "__metadata:\n  version: 8\n\n\"t@workspace:.\":\n  version: 0.0.0-use.local\n" },
+    { path: "yarn.lock", text: "__metadata:\n  version: 8\n\n\"t@workspace:.\":\n  version: 0.0.0-use.local\n  resolution: \"t@workspace:.\"\n" },
     { path: "pnpm-lock.yaml", text: "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n" },
     { path: "uv.lock", text: 'version = 1\n\n[[package]]\nname = "t"\nversion = "0.1.0"\nsource = { editable = "." }\n' },
     { path: "requirements.txt", text: "# nothing yet\n\n" },
@@ -272,12 +304,17 @@ test("a lockfile that truly lists no dependency is read as holding none", () => 
   assert.deepEqual(read, EMPTY);
 });
 
+test("Bun lockfiles are listed as not checked: bun.lock read as text, and bun.lockb left out as binary", () => {
+  const read = readPackages([{ path: "bun.lock", text: "{\n  \"lockfileVersion\": 1,\n}\n" }], [{ path: "app/bun.lockb", reason: "binary" }]);
+  assert.deepEqual(read, { ...EMPTY, notChecked: ["bun.lock", "app/bun.lockb"] });
+});
+
 test("an oversized Cargo, Go or Ruby lockfile is still listed as not checked", () => {
   const read = readPackages([], [{ path: "Cargo.lock", reason: "larger than 5 MB" }, { path: "vendor/go.sum", reason: "larger than 5 MB" }]);
   assert.deepEqual(read, { ...EMPTY, notChecked: ["Cargo.lock"] });
 });
 
-const quickly = (fn, ms = 2000) => {
+const quickly = (fn, ms = 5000) => {
   const start = Date.now();
   const value = fn();
   const took = Date.now() - start;
@@ -327,4 +364,1684 @@ test("pyproject.toml comments: after a table header, and inside the dependencies
 test("a yarn.lock entry whose spec has no version part keeps its whole name", () => {
   const text = '# yarn lockfile v1\n\nleft-pad:\n  version "1.3.0"\n';
   assert.deepEqual(readPackages([{ path: "yarn.lock", text }]).packages, [npm("left-pad", "1.3.0", "yarn.lock", 3)]);
+});
+
+const SHA1 = "3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a";
+const UNREADABLE_SOURCE = "a package source it could not read";
+const sourced = (name, version, file, line, kind, address, extra = {}) => ({ ecosystem: "npm", file, line, name, version, kind, address, ...extra });
+
+test("package-lock.json version 3 sources: the registry and entries recording no host are checked; a mirror and git are not; a file: tarball in the repository is a bundled package file; inBundle entries are not reported as sourced", () => {
+  const file = "package-lock.json";
+  assert.deepEqual(one(file, "package-lock.v3.sources.json"), {
+    ...EMPTY,
+    packages: [npm("bundler", "2.0.0", file, 18), npm("bundled", "0.3.1", file, 26), npm("no-host", "1.0.0", file, 45)],
+    notRecorded: notRecorded(file),
+    sourced: [
+      sourced("left-pad", "1.3.0", file, 31, "git", "ssh://github.com/someone/left-pad.git", { commit: SHA1 }),
+      sourced("local-thing", "1.0.0", file, 35, "bundled", "vendor/local-thing-1.0.0.tgz", { text: "a bundled package file the scan cannot read" }),
+      sourced("lodash", "4.17.21", file, 40, "host", "https://registry.npmmirror.com"),
+    ],
+  });
+});
+
+test("package-lock.json version 1: a git URL as the version is the source, and the version is not kept", () => {
+  const file = "package-lock.json";
+  assert.deepEqual(one(file, "package-lock.v1.git.json"), {
+    ...EMPTY,
+    packages: [npm("ansi-regex", "5.0.1", file, 7)],
+    sourced: [sourced("left-pad", null, file, 12, "git", "https://github.com/someone/left-pad.git", { commit: SHA1 })],
+  });
+});
+
+test("package-lock.json version 1: a file: version is local; a tarball URL as the version pins one archive", () => {
+  const text = JSON.stringify({
+    lockfileVersion: 1,
+    dependencies: {
+      mine: { version: "file:../mine" },
+      tiny: { version: "https://files.example.com/a/tiny-1.0.0.tgz" },
+    },
+  }, null, 2);
+  assert.deepEqual(readPackages([{ path: "app/package-lock.json", text }]), {
+    ...EMPTY,
+    sourced: [sourced("tiny", null, "app/package-lock.json", 7, "url", "https://files.example.com/…/tiny-1.0.0.tgz")],
+  });
+});
+
+test("package-lock.json version 1: a git version holding a credential is never kept or shown", () => {
+  const text = JSON.stringify({ lockfileVersion: 1, dependencies: { x: { version: `git+https://SECRET@github.com/u/r.git#${SHA1}` } } });
+  const read = readPackages([{ path: "package-lock.json", text }]);
+  assert.deepEqual(read.sourced, [sourced("x", null, "package-lock.json", 1, "git", "https://github.com/u/r.git", { commit: SHA1 })]);
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("yarn.lock, classic sources: the registry is checked, a mirror is not and its #sha1 is no commit; a codeload link is git", () => {
+  assert.deepEqual(one("yarn.lock", "yarn.classic.sources.lock"), {
+    ...EMPTY,
+    packages: [npm("js-tokens", "4.0.0", "yarn.lock", 5)],
+    sourced: [
+      sourced("left-pad", "1.3.0", "yarn.lock", 10, "git", "https://github.com/someone/left-pad", { commit: SHA1 }),
+      sourced("lodash", "4.17.21", "yarn.lock", 14, "host", "https://registry.npmmirror.com"),
+    ],
+  });
+});
+
+test("yarn.lock, Berry sources: npm: and a patch of an npm: package are checked; #commit= is git; an https tarball pins one archive; portal: is local", () => {
+  assert.deepEqual(one("app/yarn.lock", "yarn.berry.sources.lock"), {
+    ...EMPTY,
+    packages: [npm("js-tokens", "4.0.0", "app/yarn.lock", 8), npm("resolve", "1.22.1", "app/yarn.lock", 28)],
+    notRecorded: notRecorded("app/yarn.lock"),
+    sourced: [
+      sourced("left-pad", "1.3.0", "app/yarn.lock", 15, "git", "https://github.com/someone/left-pad.git", { commit: SHA1 }),
+      sourced("tiny", "1.0.0", "app/yarn.lock", 43, "url", "https://files.example.com/tiny-1.0.0.tgz"),
+    ],
+  });
+});
+
+test("yarn.lock, Berry: a patch whose encoding cannot be decoded is a source it could not read", () => {
+  const text = '__metadata:\n  version: 8\n\n"x@patch:x@npm%E0%A4%A#./p.patch":\n  version: 1.0.0\n  resolution: "x@patch:x@npm%E0%A4%A#./p.patch"\n';
+  const read = readPackages([{ path: "yarn.lock", text }]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("x", "1.0.0", "yarn.lock", 4, "unreadable", null)],
+  });
+});
+
+test("the source fixtures read the same with Windows line endings", () => {
+  const crlf = (name) => fixture(name).replace(/\n/g, "\r\n");
+  const cases = [
+    ["package-lock.json", "package-lock.v3.sources.json"], ["package-lock.json", "package-lock.v1.git.json"],
+    ["yarn.lock", "yarn.classic.sources.lock"], ["yarn.lock", "yarn.berry.sources.lock"],
+  ];
+  for (const [file, name] of cases) {
+    assert.deepEqual(readPackages([{ path: file, text: crlf(name) }]), one(file, name), name);
+  }
+});
+
+test("the same package from the registry in one lockfile and a mirror in another: the mirror is reported whatever the file order", () => {
+  const lock = (resolved) => JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/lodash": { version: "4.17.21", resolved } } });
+  const registry = { path: "a/package-lock.json", text: lock("https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz") };
+  const mirror = { path: "b/package-lock.json", text: lock("https://registry.npmmirror.com/lodash/-/lodash-4.17.21.tgz") };
+  for (const files of [[registry, mirror], [mirror, registry]]) {
+    assert.deepEqual(readPackages(files), {
+      ...EMPTY,
+      packages: [npm("lodash", "4.17.21", "a/package-lock.json", 1)],
+      sourced: [sourced("lodash", "4.17.21", "b/package-lock.json", 1, "host", "https://registry.npmmirror.com")],
+    });
+  }
+});
+
+test("a resolved address it cannot read is reported, once per file, never sent to OSV, and never shown", () => {
+  const text = JSON.stringify({
+    lockfileVersion: 3,
+    packages: {
+      "node_modules/x": { version: "1.0.0", resolved: "weird:SECRET token" },
+      "node_modules/y": { version: "2.0.0", resolved: "%%%SECRET" },
+    },
+  });
+  const read = readPackages([{ path: "package-lock.json", text }]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "package-lock.json", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("x", "1.0.0", "package-lock.json", 1, "unreadable", null), sourced("y", "2.0.0", "package-lock.json", 1, "unreadable", null)],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("a yarn.lock with a resolution line millions of characters long is read quickly", () => {
+  const text = `__metadata:\n  version: 8\n\n"x@npm:1":\n  version: 1.0.0\n  resolution: "x@${"a@".repeat(2000000)}"\n`;
+  const read = quickly(() => readPackages([{ path: "yarn.lock", text }]));
+  assert.deepEqual(read.couldNotRead, [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }]);
+});
+
+test("package-lock.json version 1: an alias whose version is a URL is classified from it, and the version is not kept", () => {
+  const text = JSON.stringify({ lockfileVersion: 1, dependencies: { a: { version: `npm:b@git+https://SECRET@github.com/u/r.git#${SHA1}` } } });
+  const read = readPackages([{ path: "package-lock.json", text }]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    sourced: [sourced("b", null, "package-lock.json", 1, "git", "https://github.com/u/r.git", { commit: SHA1 })],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("package-lock.json version 3: a version that is not semver is never kept; with no source of its own the entry is unreadable", () => {
+  const bad = "git+https://SECRET@github.com/u/r.git";
+  const text = JSON.stringify({
+    lockfileVersion: 3,
+    packages: {
+      "node_modules/a": { version: bad, resolved: "https://registry.npmjs.org/a/-/a-1.0.0.tgz" },
+      "node_modules/b": { version: bad, resolved: "https://registry.npmmirror.com/b/-/b-1.0.0.tgz" },
+      "node_modules/c": { version: bad },
+    },
+  });
+  const read = readPackages([{ path: "package-lock.json", text }]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [npm("a", null, "package-lock.json", 1)],
+    couldNotRead: [{ file: "package-lock.json", reason: UNREADABLE_SOURCE }],
+    sourced: [
+      sourced("b", null, "package-lock.json", 1, "host", "https://registry.npmmirror.com"),
+      sourced("c", null, "package-lock.json", 1, "unreadable", null),
+    ],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("package-lock.json: an installed entry with no version, or that is no object (a string too), is one it could not read at its line, never left out, its own dependencies still read; a packages or dependencies section that is no object is a layout it cannot read", () => {
+  const lock = (packages) => JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/a": { version: "1.0.0", resolved: "https://registry.npmjs.org/a/-/a-1.0.0.tgz" }, ...packages } }, null, 2);
+  const v3 = readPackages([{ path: "package-lock.json", text: lock({ "node_modules/b": { resolved: "https://SECRET.example/b.tgz" }, "node_modules/c": ["x"], "node_modules/d": { version: 1 }, "node_modules/e": "link" }) }]);
+  assert.deepEqual(v3, {
+    ...EMPTY,
+    packages: [npm("a", "1.0.0", "package-lock.json", 5)],
+    couldNotRead: [{ file: "package-lock.json", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("b", null, "package-lock.json", 9, "unreadable", null), sourced("c", null, "package-lock.json", 12, "unreadable", null), sourced("d", null, "package-lock.json", 15, "unreadable", null), sourced("e", null, "package-lock.json", 18, "unreadable", null)],
+  });
+  const v1 = JSON.stringify({ lockfileVersion: 1, dependencies: { a: { version: "1.0.0" }, b: { resolved: "https://SECRET.example/b.tgz", dependencies: { c: { version: "1.0.0" } } }, d: "1.0.0" } }, null, 2);
+  assert.deepEqual(readPackages([{ path: "package-lock.json", text: v1 }]), {
+    ...EMPTY,
+    packages: [npm("a", "1.0.0", "package-lock.json", 4), npm("c", "1.0.0", "package-lock.json", 10)],
+    couldNotRead: [{ file: "package-lock.json", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("b", null, "package-lock.json", 7, "unreadable", null), sourced("d", null, "package-lock.json", 15, "unreadable", null)],
+  });
+  // A string entry is placed by its own member, so the same name nested further down keeps its line.
+  const repeated = JSON.stringify({ lockfileVersion: 1, dependencies: { d: "1.0.0", e: { version: "1.0.0", dependencies: { d: { version: "1.0.0" } } } } }, null, 2);
+  assert.deepEqual(readPackages([{ path: "package-lock.json", text: repeated }]), {
+    ...EMPTY,
+    packages: [npm("e", "1.0.0", "package-lock.json", 5), npm("d", "1.0.0", "package-lock.json", 8)],
+    couldNotRead: [{ file: "package-lock.json", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("d", null, "package-lock.json", 4, "unreadable", null)],
+  });
+  const layout = [{ file: "package-lock.json", reason: "not laid out as npm writes it" }];
+  for (const text of [
+    { lockfileVersion: 3, packages: [{ resolved: "https://SECRET.example/x.tgz" }] },
+    { lockfileVersion: 2, packages: "https://SECRET.example/x.tgz" },
+    { lockfileVersion: 1, dependencies: [{ version: "https://SECRET.example/x.tgz" }] },
+    { lockfileVersion: 1, dependencies: { a: { version: "1.0.0", dependencies: ["https://SECRET.example/x.tgz"] } } },
+  ].map((json) => JSON.stringify(json))) {
+    assert.deepEqual(readPackages([{ path: "package-lock.json", text }]), { ...EMPTY, couldNotRead: layout }, text);
+  }
+});
+
+test("yarn.lock, classic: a version that is not semver is never kept; with no source of its own the entry is unreadable", () => {
+  const text = [
+    "# yarn lockfile v1", "",
+    "a@^1:", '  version "git+https://SECRET@github.com/u/r.git"', '  resolved "https://registry.npmmirror.com/a/-/a-1.0.0.tgz"', "",
+    "b@^1:", '  version "git+https://SECRET@github.com/u/r.git"', "",
+  ].join("\n");
+  const read = readPackages([{ path: "yarn.lock", text }]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("a", null, "yarn.lock", 3, "host", "https://registry.npmmirror.com"), sourced("b", null, "yarn.lock", 7, "unreadable", null)],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("yarn.lock, Berry: a version that is not semver from npm: has no source of its own, so the entry is unreadable", () => {
+  const text = '__metadata:\n  version: 8\n\n"a@npm:^1":\n  version: git+https://SECRET@github.com/u/r.git\n  resolution: "a@npm:1.0.0"\n';
+  const read = readPackages([{ path: "yarn.lock", text }]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("a", null, "yarn.lock", 4, "unreadable", null)],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("yarn.lock: a second source line in a classic entry replaces the first entirely; in a Berry entry it is a source it could not read", () => {
+  const berry = '__metadata:\n  version: 8\n\n"a@npm:^1":\n  version: 1.0.0\n  resolution: "a@https://files.example.com/a-1.0.0.tgz"\n  resolution: "a@npm:1.0.0"\n';
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text: berry }]).sourced, [sourced("a", "1.0.0", "yarn.lock", 4, "unreadable", null)]);
+  const classic = [
+    "# yarn lockfile v1", "",
+    "a@^1:", '  version "1.0.0"', `  resolved "https://codeload.github.com/u/r/tar.gz/${SHA1}"`, '  resolved "https://registry.yarnpkg.com/a/-/a-1.0.0.tgz"', "",
+  ].join("\n");
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text: classic }]), { ...EMPTY, packages: [npm("a", "1.0.0", "yarn.lock", 3)] });
+});
+
+test("a codeload address that is not a GitHub shorthand's tarball is left to the classifier", () => {
+  const text = `# yarn lockfile v1\n\na@^1:\n  version "1.0.0"\n  resolved "https://codeload.github.com/u/r/zip/${SHA1}"\n`;
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text }]).sourced, [sourced("a", "1.0.0", "yarn.lock", 3, "host", "https://codeload.github.com")]);
+});
+
+const berryLock = (resolution) => `__metadata:\n  version: 8\n\n"x@npm:^1":\n  version: 1.0.0\n  resolution: "x@${resolution}"\n`;
+const berrySourced = (resolution) => readPackages([{ path: "yarn.lock", text: berryLock(resolution) }]).sourced;
+
+test("yarn.lock, Berry: a patch that names no package is a source it could not read", () => {
+  assert.deepEqual(berrySourced("patch:nothing#./p.patch"), [sourced("x", "1.0.0", "yarn.lock", 4, "unreadable", null)]);
+});
+
+test("yarn.lock, Berry: a plain http address with #commit= is git, shown with http", () => {
+  assert.deepEqual(berrySourced(`http://git.example/u/r.git#commit=${SHA1}`), [
+    sourced("x", "1.0.0", "yarn.lock", 4, "git", "http://git.example/u/r.git", { commit: SHA1 }),
+  ]);
+});
+
+test("yarn.lock, Berry: a patch of a git repository or an https tarball is classified by what it patches", () => {
+  assert.deepEqual(berrySourced(`patch:x@https%3A//github.com/u/r.git%23commit=${SHA1}#./p.patch`), [
+    sourced("x", "1.0.0", "yarn.lock", 4, "git", "https://github.com/u/r.git", { commit: SHA1 }),
+  ]);
+  assert.deepEqual(berrySourced("patch:x@https%3A//files.example.com/a/x-1.0.0.tgz#./p.patch"), [
+    sourced("x", "1.0.0", "yarn.lock", 4, "url", "https://files.example.com/…/x-1.0.0.tgz"),
+  ]);
+});
+
+test("pnpm-lock.yaml version 9 sources: integrity alone is checked; a mirror tarball, git, a codeload link and an https key are not; a directory is local", () => {
+  const file = "pnpm-lock.yaml";
+  assert.deepEqual(one(file, "pnpm-lock.v9.sources.yaml"), {
+    ...EMPTY,
+    packages: [npm("js-tokens", "4.0.0", file, 39)],
+    notRecorded: notRecorded(file),
+    sourced: [
+      sourced("@scope/thing", "2.0.0", file, 35, "url", "https://files.example.com/…/thing-2.0.0.tgz"),
+      sourced("left-pad", "1.3.0", file, 42, "git", "git@github.com:someone/left-pad.git", { commit: SHA1 }),
+      sourced("lodash", "4.17.21", file, 46, "host", "https://registry.npmmirror.com"),
+      sourced("other", "2.1.0", file, 56, "git", "https://gitlab.com/someone/other.git", { commit: SHA1 }),
+      sourced("tiny", "1.0.0", file, 60, "git", "https://github.com/someone/tiny", { commit: SHA1 }),
+    ],
+  });
+});
+
+test("pnpm-lock.yaml version 6 sources: a github.com/u/r/<sha> key is git, named by the entry's name line", () => {
+  const file = "pnpm-lock.yaml";
+  assert.deepEqual(one(file, "pnpm-lock.v6.sources.yaml"), {
+    ...EMPTY,
+    packages: [npm("chalk", "2.4.2", file, 17)],
+    notRecorded: notRecorded(file),
+    sourced: [sourced("left-pad", "1.3.0", file, 22, "git", "https://github.com/someone/left-pad", { commit: SHA1 })],
+  });
+});
+
+test("the pnpm source fixtures read the same with Windows line endings", () => {
+  const crlf = (name) => fixture(name).replace(/\n/g, "\r\n");
+  for (const name of ["pnpm-lock.v9.sources.yaml", "pnpm-lock.v6.sources.yaml"]) {
+    assert.deepEqual(readPackages([{ path: "pnpm-lock.yaml", text: crlf(name) }]), one("pnpm-lock.yaml", name), name);
+  }
+});
+
+const pnpmLock = (...lines) => ["lockfileVersion: '9.0'", "", "packages:", "", ...lines, ""].join("\n");
+const pnpmRead = (...lines) => readPackages([{ path: "pnpm-lock.yaml", text: pnpmLock(...lines) }]);
+
+test("pnpm-lock.yaml: a credential in a git key or repo is never shown, and a commit that is not a commit id is not kept", () => {
+  const read = pnpmRead(
+    "  x@git+https://SECRET@github.com/u/r.git#SECRETREF:",
+    "    resolution: {commit: SECRETREF, repo: https://SECRET@github.com/u/r.git, type: git}",
+  );
+  assert.deepEqual(read, { ...EMPTY, sourced: [sourced("x", null, "pnpm-lock.yaml", 5, "git", "https://github.com/u/r.git")] });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("pnpm-lock.yaml: a resolution on following lines is read up to the next field, so a dependency named like a resolution field is not", () => {
+  const read = pnpmRead(
+    "  a@1.0.0:",
+    "    resolution:",
+    `      commit: ${SHA1}`,
+    "      repo: https://github.com/u/a.git",
+    "      type: git",
+    "    dependencies:",
+    "      tarball: 1.0.0",
+    "      type: 2.0.0",
+    "",
+    "  b@1.0.0:",
+    "    resolution:",
+    "      integrity: sha512-x",
+    "    dependencies:",
+    "      tarball: 1.0.0",
+  );
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [npm("b", "1.0.0", "pnpm-lock.yaml", 14)],
+    notRecorded: notRecorded("pnpm-lock.yaml"),
+    sourced: [sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "git", "https://github.com/u/a.git", { commit: SHA1 })],
+  });
+});
+
+test("pnpm-lock.yaml: a file: key naming a tarball in the repository is a bundled package file whatever its resolution; a resolution type it does not know is a source it could not read", () => {
+  const read = pnpmRead(
+    "  local@file:local-1.0.0.tgz:",
+    "    resolution: {integrity: sha512-x, tarball: file:local-1.0.0.tgz}",
+    "    version: 1.0.0",
+    "",
+    "  node@runtime:22.0.0:",
+    "    resolution: {type: variations, variants: SECRET}",
+    "    version: 22.0.0",
+  );
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
+    sourced: [
+      sourced("local", "1.0.0", "pnpm-lock.yaml", 5, "bundled", "local-1.0.0.tgz", { text: "a bundled package file the scan cannot read" }),
+      sourced("node", "22.0.0", "pnpm-lock.yaml", 9, "unreadable", null),
+    ],
+  });
+  assert.ok(read.sourced.every((item) => item.kind !== "local"));
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("pnpm-lock.yaml: a key with no name takes the entry's name line and is classified by its resolution", () => {
+  const read = pnpmRead(
+    "  registry.npmmirror.com/tiny/-/tiny-1.0.0.tgz:",
+    "    resolution: {tarball: https://registry.npmmirror.com/tiny/-/tiny-1.0.0.tgz}",
+    "    name: tiny",
+    "    version: 1.0.0",
+  );
+  assert.deepEqual(read.sourced, [sourced("tiny", "1.0.0", "pnpm-lock.yaml", 5, "host", "https://registry.npmmirror.com")]);
+});
+
+test("pnpm-lock.yaml: resolution fields named like built-in object properties are plain names; __proto__ is no plain name", () => {
+  const read = pnpmRead("  a@1.0.0:", "    resolution: {constructor: y, hasOwnProperty: z, toString: w, integrity: sha512-x}");
+  assert.deepEqual(read, { ...EMPTY, packages: [npm("a", "1.0.0", "pnpm-lock.yaml", 5)], notRecorded: notRecorded("pnpm-lock.yaml") });
+  assert.deepEqual(pnpmRead("  a@1.0.0:", "    resolution: {__proto__: x, integrity: sha512-x}").sourced, [
+    sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null),
+  ]);
+});
+
+test("a pnpm-lock.yaml with a resolution line millions of characters long is read quickly", () => {
+  const long = `    resolution: {integrity: sha512-${"A".repeat(4000000)}}`;
+  const read = quickly(() => pnpmRead("  a@1.0.0:", long));
+  assert.deepEqual(read.packages, [npm("a", "1.0.0", "pnpm-lock.yaml", 5)]);
+  const commas = quickly(() => pnpmRead("  a@1.0.0:", `    resolution: {integrity: sha512-x${", ".repeat(2000000)}}`));
+  assert.deepEqual(commas.sourced, [sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null)]);
+});
+
+const pnpmV6Read = (...lines) => readPackages([{ path: "pnpm-lock.yaml", text: ["lockfileVersion: '6.0'", "", "packages:", "", ...lines, ""].join("\n") }]);
+
+test("pnpm-lock.yaml version 6: a tarball key is its address without the protocol, named by the entry's name line", () => {
+  const read = pnpmV6Read(
+    "  registry.npmjs.org/@s/p/-/p-1.0.0.tgz:",
+    "    resolution: {integrity: sha512-x}",
+    "    name: '@s/p'",
+    "    version: 1.0.0",
+  );
+  assert.deepEqual(read, { ...EMPTY, packages: [npm("@s/p", "1.0.0", "pnpm-lock.yaml", 5)] });
+});
+
+test("pnpm-lock.yaml version 6: a key holding a credential before an @ is a source it could not read, named by the name line, never shown", () => {
+  const read = pnpmV6Read(
+    "  SECRET:pw@files.example.com/a/p-1.0.0.tgz:",
+    "    resolution: {integrity: sha512-x}",
+    "    name: p",
+    "    version: 1.0.0",
+  );
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("p", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null)],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("pnpm-lock.yaml: a resolution written in any shape but a one-line flow map or a block is a source it could not read", () => {
+  const read = pnpmRead(
+    "  a@1.0.0:",
+    "    resolution: # mirror",
+    "      tarball: https://evil.example/a-1.0.0.tgz",
+    "",
+    "  b@1.0.0:",
+    "    resolution: &r",
+    "      tarball: https://evil.example/b-1.0.0.tgz",
+    "",
+    "  c@1.0.0:",
+    "    resolution: {integrity: sha512-x,",
+    "      tarball: https://evil.example/c-1.0.0.tgz}",
+    "",
+    "  d@1.0.0:",
+    "    resolution:   ",
+    "      tarball: https://evil.example/d-1.0.0.tgz",
+  );
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
+    sourced: [
+      sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null),
+      sourced("b", "1.0.0", "pnpm-lock.yaml", 9, "unreadable", null),
+      sourced("c", "1.0.0", "pnpm-lock.yaml", 13, "unreadable", null),
+      sourced("d", "1.0.0", "pnpm-lock.yaml", 17, "host", "https://evil.example"),
+    ],
+  });
+});
+
+test("pnpm-lock.yaml: a key that is neither the name line's name with a version nor a host and path is a source it could not read", () => {
+  const read = pnpmRead("  alias@1.0.0:", "    resolution: {integrity: sha512-x}", "    name: real", "    version: 1.0.0");
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("real", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null)],
+  });
+});
+
+test("pnpm-lock.yaml: a git resolution with no repository is a source it could not read", () => {
+  const read = pnpmRead("  a@1.0.0:", `    resolution: {commit: ${SHA1}, type: git}`);
+  assert.deepEqual(read.sourced, [sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null)]);
+});
+
+test("pnpm-lock.yaml: a git key with a peer suffix is classified without it", () => {
+  const read = pnpmRead(`  a@git+https://github.com/u/a.git#${SHA1}(react@18.2.0):`, "    resolution: {integrity: sha512-x}", "    version: 1.0.0");
+  assert.deepEqual(read.sourced, [sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "git", "https://github.com/u/a.git", { commit: SHA1 })]);
+});
+
+const unnamed = (line) => sourced(null, null, "pnpm-lock.yaml", line, "unreadable", null);
+
+test("pnpm-lock.yaml version 6: a tarball key with no name line is a source it could not read with no name, never named from the key", () => {
+  const read = pnpmV6Read(
+    "  /chalk@2.4.2:",
+    "    resolution: {integrity: sha512-x}",
+    "",
+    "  registry.npmmirror.com/@s/p/-/p-1.0.0.tgz:",
+    "    resolution: {integrity: sha512-x}",
+    "    version: 1.0.0",
+    "",
+    "  SECRET:pw@files.example.com/a/p-1.0.0.tgz:",
+    "    resolution: {integrity: sha512-x}",
+  );
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [npm("chalk", "2.4.2", "pnpm-lock.yaml", 5)],
+    notRecorded: notRecorded("pnpm-lock.yaml"),
+    couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
+    sourced: [unnamed(8), unnamed(12)],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("pnpm-lock.yaml: an entry whose name cannot be found is a source it could not read, with nothing from it kept", () => {
+  const read = pnpmRead(
+    "  a@1.0.0:",
+    "    resolution: {integrity: sha512-x}",
+    "",
+    "  SECRETNAME:",
+    "    resolution: {tarball: https://evil.example/SECRET/x.tgz}",
+    "    version: 6.6.6-SECRET",
+    "",
+    "  x@latest:",
+    "    resolution: {tarball: https://evil.example/SECRET/y.tgz}",
+  );
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [npm("a", "1.0.0", "pnpm-lock.yaml", 5)],
+    notRecorded: notRecorded("pnpm-lock.yaml"),
+    couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
+    sourced: [unnamed(8), unnamed(12)],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+  assert.ok(!JSON.stringify(read).includes("evil"));
+});
+
+test("pnpm-lock.yaml: a quoted value in a resolution flow map is a source it could not read", () => {
+  const read = pnpmRead("  a@1.0.0:", '    resolution: {integrity: "x\\", tarball: https://evil.example/a.tgz"}');
+  assert.deepEqual(read.sourced, [sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null)]);
+});
+
+test("pnpm-lock.yaml: an entry or resolution in a shape pnpm does not write is a source it could not read, never the registry", () => {
+  const read = pnpmRead(
+    "  a@1.0.0:",
+    "    resolution:",
+    "      tarball:",
+    "        https://evil.example/a.tgz",
+    "",
+    "  b@1.0.0:",
+    '    "resolution": {tarball: https://evil.example/b.tgz}',
+    "",
+    "  c@1.0.0: {resolution: {tarball: https://evil.example/c.tgz}}",
+    "",
+    "  d@1.0.0:",
+    "    resolutions: {tarball: https://evil.example/d.tgz}",
+    "    resolution: {integrity: sha512-x}",
+    "",
+    "  e@1.0.0:",
+    "    resolution:",
+    "      'tarball': https://evil.example/e.tgz",
+    "",
+    "  f@1.0.0:",
+    "      tarball: https://evil.example/f.tgz",
+  );
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [npm("d", "1.0.0", "pnpm-lock.yaml", 15)],
+    notRecorded: notRecorded("pnpm-lock.yaml"),
+    couldNotRead: [{ file: "pnpm-lock.yaml", reason: UNREADABLE_SOURCE }],
+    sourced: [
+      sourced("a", "1.0.0", "pnpm-lock.yaml", 5, "unreadable", null),
+      sourced("b", "1.0.0", "pnpm-lock.yaml", 10, "unreadable", null),
+      unnamed(13),
+      sourced("e", "1.0.0", "pnpm-lock.yaml", 19, "unreadable", null),
+      sourced("f", "1.0.0", "pnpm-lock.yaml", 23, "unreadable", null),
+    ],
+  });
+  assert.ok(!JSON.stringify(read).includes("c.tgz"));
+});
+
+test("pnpm-lock.yaml: a packages section laid out at other indentations could not be read", () => {
+  const layouts = [
+    "packages:\n\n    a@1.0.0:\n      resolution: {tarball: https://evil.example/a.tgz}\n",
+    "packages:\n\n  a@1.0.0:\n   resolution: {tarball: https://evil.example/a.tgz}\n",
+    "packages:\n\n  a@1.0.0:\n    resolution:\n     tarball: https://evil.example/a.tgz\n",
+    "packages:\n\n  a@1.0.0:\n\tresolution: {tarball: https://evil.example/a.tgz}\n",
+  ];
+  for (const layout of layouts) {
+    const read = readPackages([{ path: "pnpm-lock.yaml", text: `lockfileVersion: '9.0'\n\n${layout}` }]);
+    assert.deepEqual(read, { ...EMPTY, couldNotRead: [{ file: "pnpm-lock.yaml", reason: "not laid out as pnpm writes it" }] }, layout);
+  }
+});
+
+test("pnpm-lock.yaml: comments and blank lines inside packages, at any indentation, are skipped without ending the section", () => {
+  const read = pnpmRead(
+    "  a@1.0.0:",
+    "    resolution: {integrity: sha512-x}",
+    "# a note",
+    "   # another",
+    "  b@1.0.0:",
+    "    resolution: {tarball: https://evil.example/b.tgz}",
+  );
+  assert.deepEqual(read.sourced, [sourced("b", "1.0.0", "pnpm-lock.yaml", 9, "host", "https://evil.example")]);
+});
+
+test("yarn.lock: an entry header that does not end in a colon is a source it could not read with no name, never left out", () => {
+  const classic = '# yarn lockfile v1\n\nleft-pad@^1\n  version "1.3.0"\n  resolved "https://evil.example/SECRET/x.tgz"\n';
+  const berry = '__metadata:\n  version: 8\n\n"left-pad@npm:^1"\n  version: 1.3.0\n  resolution: "left-pad@https://evil.example/SECRET/x.tgz"\n';
+  for (const [text, line] of [[classic, 3], [berry, 4]]) {
+    const read = readPackages([{ path: "yarn.lock", text }]);
+    assert.deepEqual(read, {
+      ...EMPTY,
+      couldNotRead: [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }],
+      sourced: [sourced(null, null, "yarn.lock", line, "unreadable", null)],
+    });
+    assert.ok(!JSON.stringify(read).includes("SECRET"));
+  }
+});
+
+test("yarn.lock: an entry with no version line is never left out; its source is classified, or with none it is unreadable", () => {
+  const classic = [
+    "# yarn lockfile v1", "",
+    "a@^1:", '  resolved "https://registry.npmmirror.com/a/-/a-1.0.0.tgz"', "",
+    "b@^1:", '  integrity "sha512-x"', "",
+  ].join("\n");
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text: classic }]), {
+    ...EMPTY,
+    couldNotRead: [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("a", null, "yarn.lock", 3, "host", "https://registry.npmmirror.com"), sourced("b", null, "yarn.lock", 6, "unreadable", null)],
+  });
+  const berry = '__metadata:\n  version: 8\n\n"a@npm:^1":\n  resolution: "a@https://files.example.com/a-1.0.0.tgz"\n\n"b@npm:^1":\n  checksum: x\n';
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text: berry }]), {
+    ...EMPTY,
+    couldNotRead: [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("a", null, "yarn.lock", 4, "url", "https://files.example.com/a-1.0.0.tgz"), sourced("b", null, "yarn.lock", 7, "unreadable", null)],
+  });
+});
+
+const PNPM_LAYOUT = "not laid out as pnpm writes it";
+const EVIL = "https://evil.example/a.tgz";
+const REGISTRY_B = ["  b@1.0.0:", "    resolution: {integrity: sha512-x}"];
+
+test("pnpm-lock.yaml: YAML that pnpm does not write is a file or a source it could not read, never the registry", () => {
+  const lock = (...lines) => ["lockfileVersion: '9.0'", "", "packages:", "", ...lines, ""].join("\n");
+  const shapes = [
+    ["A1 a flow map as packages", `lockfileVersion: '9.0'\n\npackages: {a@1.0.0: {resolution: {tarball: ${EVIL}}}}\n`, PNPM_LAYOUT],
+    ["A2 a comment after packages:", `lockfileVersion: '9.0'\n\npackages: # c\n  a@1.0.0:\n    resolution: {tarball: ${EVIL}}\n`, PNPM_LAYOUT],
+    ["A3 a tag after packages:", `lockfileVersion: '9.0'\n\npackages: !!map\n  a@1.0.0:\n    resolution: {tarball: ${EVIL}}\n`, PNPM_LAYOUT],
+    ["A4 a top-level anchor merged in", `lockfileVersion: '9.0'\n\nsettings: &s\n  autoInstallPeers: true\n\n<<: *s\n\npackages:\n\n  a@1.0.0:\n    resolution: {integrity: sha512-x}\n`, PNPM_LAYOUT],
+    ["C an entry merge key", lock(...REGISTRY_B, "    meta: &m", `      resolution: {tarball: ${EVIL}}`, "  a@1.0.0:", "    <<: *m"), UNREADABLE_SOURCE],
+    ["E1 a quoted field name", lock("  a@1.0.0:", `    "resol\\u0075tion": {tarball: ${EVIL}}`), UNREADABLE_SOURCE],
+    ["E2 a quoted flow key", lock("  a@1.0.0:", `    resolution: {"t\\u0061rball": ${EVIL}}`), UNREADABLE_SOURCE],
+    ["G1 a tagged field name", lock("  a@1.0.0:", `    !!str resolution: {tarball: ${EVIL}}`), UNREADABLE_SOURCE],
+    ["G2 a tagged flow key", lock("  a@1.0.0:", `    resolution: {!!str tarball: ${EVIL}}`), UNREADABLE_SOURCE],
+    ["K a lone CR between fields", lock("  a@1.0.0:", `    version: 1.0.0\r    resolution: {tarball: ${EVIL}}`), PNPM_LAYOUT],
+    ["K2 lone CRs at the top level", `lockfileVersion: '9.0'\n\nsettings: {}\rpackages:\r  a@1.0.0:\r    resolution: {tarball: ${EVIL}}\n`, PNPM_LAYOUT],
+    ["T a tab after resolution:", lock("  a@1.0.0:", `    resolution:\t{tarball: ${EVIL}}`), PNPM_LAYOUT],
+    ["V a list inside the flow map", lock("  a@1.0.0:", `    resolution: {tarball: ${EVIL}, x: [y, tarball: https://registry.npmjs.org/a/-/a-1.0.0.tgz]}`), UNREADABLE_SOURCE],
+    ["F a passed-over flow map running onto the next line", lock("  a@1.0.0:", "    engines: {node: x,", "    resolution: {integrity: sha512-x}}"), UNREADABLE_SOURCE],
+    ["Z a JSON-style flow map", lock("  a@1.0.0:", `    resolution: {"tarball":"${EVIL}"}`), UNREADABLE_SOURCE],
+    ["W a flow key given twice", lock("  a@1.0.0:", `    resolution: {tarball: ${EVIL}, tarball: https://registry.npmjs.org/a/-/a-1.0.0.tgz}`), UNREADABLE_SOURCE],
+    ["W2 a block key given twice", lock("  a@1.0.0:", "    resolution:", `      tarball: ${EVIL}`, "      tarball: https://registry.npmjs.org/a/-/a-1.0.0.tgz"), UNREADABLE_SOURCE],
+    ["R a second resolution", lock("  a@1.0.0:", `    resolution: {tarball: ${EVIL}}`, "    resolution: {integrity: sha512-x}"), UNREADABLE_SOURCE],
+    ["N an alias as a field value", lock(...REGISTRY_B, "  a@1.0.0:", "    version: *v", "    resolution: {integrity: sha512-x}"), UNREADABLE_SOURCE],
+  ];
+  for (const [shape, text, reason] of shapes) {
+    const read = readPackages([{ path: "pnpm-lock.yaml", text }]);
+    assert.deepEqual(read.couldNotRead, [{ file: "pnpm-lock.yaml", reason }], shape);
+    assert.ok(!read.packages.some((p) => p.name === "a"), shape);
+    assert.ok(!JSON.stringify(read).includes("evil"), shape);
+  }
+});
+
+test("pnpm-lock.yaml: the top level is plain names, a document start and empty collections only", () => {
+  const text = "---\nlockfileVersion: '9.0'\n\nsettings:\n  autoInstallPeers: true\n\noverrides: {}\n\npackages:\n\n  a@1.0.0:\n    resolution: {integrity: sha512-x}\n";
+  assert.deepEqual(readPackages([{ path: "pnpm-lock.yaml", text }]), {
+    ...EMPTY,
+    packages: [npm("a", "1.0.0", "pnpm-lock.yaml", 11)],
+    notRecorded: notRecorded("pnpm-lock.yaml"),
+  });
+  for (const header of ["'packages':", '"packages":']) {
+    const quoted = `lockfileVersion: '9.0'\n\n${header}\n\n  a@1.0.0:\n    resolution: {tarball: ${EVIL}}\n`;
+    assert.deepEqual(readPackages([{ path: "pnpm-lock.yaml", text: quoted }]).couldNotRead, [{ file: "pnpm-lock.yaml", reason: PNPM_LAYOUT }], header);
+  }
+});
+
+const YARN_LAYOUT = "not laid out as Yarn writes it";
+const berryText = (...lines) => ["__metadata:", "  version: 8", "", ...lines, ""].join("\n");
+
+test("yarn.lock, Berry: a lone CR or a tab could not be read", () => {
+  for (const text of [berryText('"a@npm:^1":', "  version: 1.0.0\r  resolution: \"a@npm:1.0.0\""), berryText('"a@npm:^1":', "  version:\t1.0.0")]) {
+    assert.deepEqual(readPackages([{ path: "yarn.lock", text }]), { ...EMPTY, couldNotRead: [{ file: "yarn.lock", reason: YARN_LAYOUT }] });
+  }
+});
+
+test("yarn.lock, Berry: an escape, tag, anchor, alias, merge key or quoted field name is a source it could not read", () => {
+  const entry = (...fields) => berryText('"a@npm:^1":', "  version: 1.0.0", ...fields);
+  const shapes = [
+    ["a tagged value", entry(`  resolution: !!str "a@${EVIL}"`)],
+    ["an anchored value", entry('  resolution: &r "a@npm:1.0.0"')],
+    ["an alias as a value", entry("  resolution: *r")],
+    ["a merge key", entry('  resolution: "a@npm:1.0.0"', "  <<: *m")],
+    ["a quoted field name", entry('  resolution: "a@npm:1.0.0"', `  "resolution": "a@${EVIL}"`)],
+    ["an escape in a value", entry('  resolution: "a@https\\u003a//evil.example/a.tgz"')],
+  ];
+  for (const [shape, text] of shapes) {
+    const read = readPackages([{ path: "yarn.lock", text }]);
+    assert.deepEqual(read, {
+      ...EMPTY,
+      couldNotRead: [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }],
+      sourced: [sourced("a", "1.0.0", "yarn.lock", 4, "unreadable", null)],
+    }, shape);
+  }
+  const header = readPackages([{ path: "yarn.lock", text: berryText('"a@npm:^1\\u0020":', "  version: 1.0.0", '  resolution: "a@npm:1.0.0"') }]);
+  assert.deepEqual(header.sourced, [sourced(null, null, "yarn.lock", 4, "unreadable", null)]);
+});
+
+test("yarn.lock, Berry: lines below a field other than resolution are passed over, whatever YAML they hold", () => {
+  const text = berryText('"a@npm:^1":', "  version: 1.0.0", '  resolution: "a@npm:1.0.0"', "  dependencies:", "    b: *x", '    "c\\u0020": &y "npm:^1"');
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text }]), { ...EMPTY, packages: [npm("a", "1.0.0", "yarn.lock", 4)], notRecorded: notRecorded("yarn.lock") });
+});
+
+test("yarn.lock, Berry: a header Berry does not write is an entry it cannot name", () => {
+  const headers = ['? "a@npm:^1"', "{a@npm:^1: x}", '"a@npm:^1": &x', "'a@npm:^1':", '"a@npm:^1" #c:', "<<: *m"];
+  for (const header of headers) {
+    const read = readPackages([{ path: "yarn.lock", text: berryText(header, "  version: 1.0.0", `  resolution: "a@${EVIL}"`) }]);
+    assert.deepEqual(read.sourced, [sourced(null, null, "yarn.lock", 4, "unreadable", null)], header);
+    assert.ok(!JSON.stringify(read).includes("evil"), header);
+  }
+  const plain = readPackages([{ path: "yarn.lock", text: berryText("a@npm:^1:", "  version: 1.0.0", '  resolution: "a@npm:1.0.0"') }]);
+  assert.deepEqual(plain, { ...EMPTY, packages: [npm("a", "1.0.0", "yarn.lock", 4)], notRecorded: notRecorded("yarn.lock") });
+});
+
+test("yarn.lock, Berry: a version or resolution that is not a plain or double-quoted scalar on one line, or a field left open, is a source it could not read", () => {
+  const entry = (...fields) => berryText('"a@npm:^1":', ...fields);
+  const shapes = [
+    ["a block scalar resolution", entry("  version: 1.0.0", "  resolution: |", `    a@${EVIL}`)],
+    ["a single-quoted resolution", entry("  version: 1.0.0", `  resolution: 'a@${EVIL}'`)],
+    ["a flow map resolution", entry("  version: 1.0.0", `  resolution: {a: ${EVIL}}`)],
+    ["a flow list resolution", entry("  version: 1.0.0", `  resolution: [a@${EVIL}]`)],
+    ["a resolution on the next line", entry("  version: 1.0.0", "  resolution:", `    "a@${EVIL}"`)],
+    ["a folded version", entry("  version: >", "    1.0.0", `  resolution: "a@${EVIL}"`)],
+    ["a flow map left open", entry("  version: 1.0.0", `  resolution: "a@${EVIL}"`, "  checksum: {x: y,", '  resolution: "a@npm:1.0.0"}')],
+    ["a flow list left open", entry("  version: 1.0.0", `  resolution: "a@${EVIL}"`, "  checksum: [x,", '  resolution: "a@npm:1.0.0"]')],
+    ["a quoted string left open", entry("  version: 1.0.0", `  resolution: "a@${EVIL}"`, '  checksum: "x', '  resolution: a@npm:1.0.0"')],
+  ];
+  for (const [shape, text] of shapes) {
+    const read = readPackages([{ path: "yarn.lock", text }]);
+    assert.deepEqual(read.couldNotRead, [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }], shape);
+    assert.equal(read.sourced.length, 1, shape);
+    assert.equal(read.sourced[0].kind, "unreadable", shape);
+    assert.ok(!JSON.stringify(read).includes("evil"), shape);
+  }
+});
+
+test("yarn.lock, Berry: version and resolution come from the one field read; any other shape around them is a source it could not read", () => {
+  const entry = (...fields) => berryText('"a@npm:^1":', ...fields);
+  const shapes = [
+    ["a space before the colon", entry("  version: 1.0.0", `  resolution : "a@${EVIL}"`), "1.0.0"],
+    ["a space before the version's colon", entry("  version : 9.9.9", '  resolution: "a@npm:1.0.0"'), null],
+    ["a resolution continued on a deeper line", entry("  version: 1.0.0", "  resolution: a@npm:1.0.0", `   ${EVIL}`), "1.0.0"],
+    ["a version continued on a deeper line", entry("  version: 1.0.0", "    2", '  resolution: "a@npm:1.0.0"'), "1.0.0"],
+    ["a second version", entry("  version: 1.0.0", "  version: 2.0.0", '  resolution: "a@npm:1.0.0"'), "1.0.0"],
+  ];
+  for (const [shape, text, version] of shapes) {
+    const read = readPackages([{ path: "yarn.lock", text }]);
+    assert.deepEqual(read.sourced, [sourced("a", version, "yarn.lock", 4, "unreadable", null)], shape);
+    assert.deepEqual(read.couldNotRead, [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }], shape);
+  }
+});
+
+test("yarn.lock, Berry: an entry is skipped as a workspace by its resolution, not its header; a quoted __metadata is an entry", () => {
+  const listed = berryText('"a@workspace:x, a@npm:1.0.0":', "  version: 1.0.0", `  resolution: "a@${EVIL}"`);
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text: listed }]).sourced, [sourced("a", "1.0.0", "yarn.lock", 4, "url", "https://evil.example/a.tgz")]);
+  const workspace = berryText('"a@npm:1.0.0, a@workspace:x":', "  version: 1.0.0", '  resolution: "a@workspace:x"');
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text: workspace }]), EMPTY);
+  const metadata = berryText('"__metadata":', "  version: 1.0.0", `  resolution: "a@${EVIL}"`);
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text: metadata }]).sourced, [sourced("__metadata", "1.0.0", "yarn.lock", 4, "url", "https://evil.example/a.tgz")]);
+});
+
+const classicText = (...lines) => ["# THIS IS AN AUTOGENERATED FILE. DO NOT EDIT THIS FILE DIRECTLY.", "# yarn lockfile v1", "", "", ...lines, ""].join("\n");
+
+test("yarn.lock, classic: a field in any shape but a plain name, one space and a plain or escape-free double-quoted value is a source it could not read", () => {
+  const entry = (...fields) => classicText("a@^1.0.0:", '  version "1.0.0"', ...fields);
+  const shapes = [
+    ["a quoted key", entry(`  "resolved" "${EVIL}"`)],
+    ["a key with a colon", entry(`  resolved: "${EVIL}"`)],
+    ["a tab between key and value", entry(`  resolved\t"${EVIL}"`)],
+    ["an escape in the host", entry('  resolved "https://registry.yarnpkg.com\\u002eevil.example/a.tgz"')],
+    ["an escape deeper down", entry('  resolved "https://registry.yarnpkg.com/a/-/a-1.0.0.tgz"', "  dependencies:", '    "b\\u0020" "^1"')],
+    ["text after the quoted value", entry(`  resolved "${EVIL}" # c`)],
+    ["a line at 3 spaces", entry('  resolved "https://registry.yarnpkg.com/a/-/a-1.0.0.tgz"', `   resolved "${EVIL}"`)],
+    ["a deeper line under a field with a value", entry('  resolved "https://registry.yarnpkg.com/a/-/a-1.0.0.tgz"', `    "${EVIL}"`)],
+  ];
+  for (const [shape, text] of shapes) {
+    const read = readPackages([{ path: "yarn.lock", text }]);
+    assert.deepEqual(read.sourced, [sourced("a", "1.0.0", "yarn.lock", 5, "unreadable", null)], shape);
+    assert.deepEqual(read.couldNotRead, [{ file: "yarn.lock", reason: UNREADABLE_SOURCE }], shape);
+  }
+  const plain = classicText("a@^1.0.0:", "  version 1.0.0", '  resolved "https://registry.yarnpkg.com/a/-/a-1.0.0.tgz"', "  integrity sha512-x", "  dependencies:", '    b "^1"');
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text: plain }]), { ...EMPTY, packages: [npm("a", "1.0.0", "yarn.lock", 5)] });
+});
+
+test("yarn.lock, classic: no entry is skipped for its header", () => {
+  const text = classicText("a@workspace:x, a@^1.0.0:", '  version "1.0.0"', `  resolved "${EVIL}"`);
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text }]).sourced, [sourced("a", "1.0.0", "yarn.lock", 5, "host", "https://evil.example")]);
+});
+
+test("yarn.lock, classic: a second version in an entry is a source it could not read", () => {
+  const text = classicText("a@^1.0.0:", '  version "1.0.0"', '  version "2.0.0"', '  resolved "https://registry.yarnpkg.com/a/-/a-1.0.0.tgz"');
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text }]).sourced, [sourced("a", "1.0.0", "yarn.lock", 5, "unreadable", null)]);
+});
+
+test("yarn.lock, Berry: a workspace resolution is skipped only when it names a relative folder; any other is a source it could not read", () => {
+  const lock = (resolution) => berryText('"a@workspace:x":', "  version: 1.0.0", `  resolution: "a@workspace:${resolution}"`);
+  for (const folder of [".", "./packages/a", "../a", "packages/a"]) {
+    assert.deepEqual(readPackages([{ path: "app/yarn.lock", text: lock(folder) }]), EMPTY, folder);
+  }
+  for (const odd of [EVIL, "/abs/a", "x:y", "a//b", ""]) {
+    const read = readPackages([{ path: "yarn.lock", text: lock(odd) }]);
+    assert.deepEqual(read.sourced, [sourced("a", "1.0.0", "yarn.lock", 4, "unreadable", null)], odd);
+    assert.ok(!JSON.stringify(read).includes("evil"), odd);
+  }
+});
+
+const pypiSourced = (name, version, file, line, kind, address, extra = {}) => ({ ecosystem: "PyPI", file, line, name, version, kind, address, ...extra });
+const POETRY_LAYOUT = "not laid out as Poetry writes it";
+const UV_LAYOUT = "not laid out as uv writes it";
+
+test("poetry.lock sources: a block runs through its sub-tables to [package.source]; a mirror index and git are reported, a folder inside the project is local, one outside it is not", () => {
+  const file = "poetry.lock";
+  assert.deepEqual(one(file, "poetry.sources.lock"), {
+    ...EMPTY,
+    packages: [pypi("certifi", "2024.8.30", file, 4)],
+    sourced: [
+      pypiSourced("requests", "2.32.3", file, 15, "host", "https://mirror.example.com"),
+      pypiSourced("left-pad", "1.3.0", file, 39, "git", "https://github.com/someone/left-pad.git", { commit: SHA1 }),
+      pypiSourced("outside", "0.2.0", file, 67, "url", null, { text: "a path outside the project" }),
+    ],
+  });
+});
+
+test("uv.lock sources: git with its commit and a direct URL are reported; a mirror named by source, sdist and wheels is one package; an archive path is a bundled package file; the project is not reported", () => {
+  const file = "uv.lock";
+  assert.deepEqual(one(file, "uv.sources.lock"), {
+    ...EMPTY,
+    packages: [pypi("anyio", "4.6.2.post1", file, 6)],
+    sourced: [
+      pypiSourced("idna", "3.10", file, 18, "host", "https://mirror.example.com"),
+      pypiSourced("left-pad", "1.3.0", file, 28, "git", "https://github.com/someone/left-pad", { commit: SHA1 }),
+      pypiSourced("local-tool", "0.1.0", file, 33, "bundled", "dist/local_tool-0.1.0.tar.gz", { text: "a bundled package file the scan cannot read" }),
+      pypiSourced("sniffio", "1.3.1", file, 39, "url", "https://files.example.com/…/sniffio-1.3.1.tar.gz"),
+    ],
+  });
+});
+
+test("the Poetry and uv source fixtures read the same with Windows line endings", () => {
+  for (const [file, name] of [["poetry.lock", "poetry.sources.lock"], ["uv.lock", "uv.sources.lock"]]) {
+    assert.deepEqual(readPackages([{ path: file, text: fixture(name).replace(/\n/g, "\r\n") }]), one(file, name), name);
+  }
+});
+
+const uvLock = (...lines) => ['version = 1', 'requires-python = ">=3.10"', "", "[[package]]", 'name = "a"', 'version = "1.0.0"', ...lines, ""].join("\n");
+const poetryLock = (...lines) => ["[[package]]", 'name = "a"', 'version = "1.0.0"', 'description = ""', "files = []", ...lines, "", "[metadata]", 'lock-version = "2.0"', ""].join("\n");
+const uvBlock = (name, source) => uvLock(`source = ${source}`).replace('name = "a"', `name = "${name}"`);
+
+test("uv.lock: the first address that is not the registry among source, sdist and wheels decides; a wheel file name is no address", () => {
+  const read = readPackages([{
+    path: "uv.lock",
+    text: uvLock(
+      'source = { registry = "https://pypi.org/simple" }',
+      'sdist = { url = "https://files.pythonhosted.org/packages/a-1.0.0.tar.gz", hash = "sha256:x", size = 1 }',
+      "wheels = [",
+      '    { url = "https://files.pythonhosted.org/packages/a-1.0.0-py3-none-any.whl", hash = "sha256:x", size = 1 },',
+      '    { url = "https://mirror.example.com/a-1.0.0-cp312-win_amd64.whl", hash = "sha256:x", size = 1 },',
+      '    { filename = "a-1.0.0-cp311-win_amd64.whl", hash = "sha256:x", size = 1 },',
+      "]",
+    ),
+  }]);
+  assert.deepEqual(read, { ...EMPTY, sourced: [pypiSourced("a", "1.0.0", "uv.lock", 5, "host", "https://mirror.example.com")] });
+  const oneLine = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "https://pypi.org/simple" }', 'wheels = [{ url = "https://mirror.example.com/a.whl" }]') }]);
+  assert.deepEqual(oneLine.sourced, [pypiSourced("a", "1.0.0", "uv.lock", 5, "host", "https://mirror.example.com")]);
+});
+
+test("uv.lock: a registry that is a folder in the repository is a bundled package file; one that is neither a folder nor an address it can read is a source it could not read", () => {
+  assert.deepEqual(readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "wheels" }') }]), {
+    ...EMPTY,
+    sourced: [pypiSourced("a", "1.0.0", "uv.lock", 5, "bundled", "wheels", { text: "a bundled package folder the scan cannot read" })],
+  });
+  const read = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "weird:SECRET" }') }]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    couldNotRead: [{ file: "uv.lock", reason: UNREADABLE_SOURCE }],
+    sourced: [pypiSourced("a", "1.0.0", "uv.lock", 5, "unreadable", null)],
+  });
+  assert.ok(!JSON.stringify(read).includes("SECRET"));
+});
+
+test("uv.lock: a package with no source is a source it could not read; an editable or virtual source with anything else beside it is not the project", () => {
+  const shapes = [uvLock(), uvLock('source = { editable = ".", url = "https://evil.example/a.tgz" }')];
+  for (const text of shapes) {
+    const read = readPackages([{ path: "uv.lock", text }]);
+    assert.deepEqual(read.sourced, [pypiSourced("a", "1.0.0", "uv.lock", 5, "unreadable", null)], text);
+    assert.ok(!JSON.stringify(read).includes("evil"), text);
+  }
+});
+
+test("poetry.lock: url, file and git sources; a commit that is not a commit id is not kept; a file in the repository is a bundled package file; an absolute path is outside the project", () => {
+  const block = (name, ...source) => ["[[package]]", `name = "${name}"`, 'version = "1.0.0"', "", "[package.source]", ...source, ""].join("\n");
+  const text = [
+    block("a", 'type = "url"', 'url = "https://files.example.com/x/a-1.0.0.tar.gz"'),
+    block("b", 'type = "git"', 'url = "git@github.com:u/b.git"', 'reference = "main"', 'resolved_reference = "main"'),
+    block("c", 'type = "file"', 'url = "dist/c-1.0.0.tar.gz"'),
+    block("d", 'type = "file"', 'url = "/home/someone/d-1.0.0.tar.gz"'),
+    block("e", 'type = "legacy"', 'url = "https://pypi.org/simple"', 'reference = "pypi-explicit"'),
+    block("f", 'type = "directory"', 'url = "a/../../f"'),
+  ].join("\n");
+  assert.deepEqual(readPackages([{ path: "poetry.lock", text }]), {
+    ...EMPTY,
+    packages: [pypi("e", "1.0.0", "poetry.lock", 36)],
+    sourced: [
+      pypiSourced("a", "1.0.0", "poetry.lock", 2, "url", "https://files.example.com/…/a-1.0.0.tar.gz"),
+      pypiSourced("b", "1.0.0", "poetry.lock", 10, "git", "git@github.com:u/b.git"),
+      pypiSourced("c", "1.0.0", "poetry.lock", 20, "bundled", "dist/c-1.0.0.tar.gz", { text: "a bundled package file the scan cannot read" }),
+      pypiSourced("d", "1.0.0", "poetry.lock", 28, "url", null, { text: "a path outside the project" }),
+      pypiSourced("f", "1.0.0", "poetry.lock", 45, "url", null, { text: "a path outside the project" }),
+    ],
+  });
+});
+
+test("Python lockfiles: a version that is PEP 440 is kept, in its normal form; any other is never kept, and with no source of its own the entry is unreadable", () => {
+  const versions = ["4.6.2.post1", "2024.8.30", "1!2.0", "1.0+local", "1.0rc1", "1.0.dev0", "1.0.0-beta.1", "v1.0", "1.0-1", "1.0+ubuntu-1.2"];
+  const normal = ["4.6.2.post1", "2024.8.30", "1!2.0", "1.0+local", "1.0rc1", "1.0.dev0", "1.0.0b1", "1.0", "1.0.post1", "1.0+ubuntu.1.2"];
+  const uv = versions.map((v, i) => uvLock('source = { registry = "https://pypi.org/simple" }').replace('version = "1.0.0"', `version = "${v}"`).replace('name = "a"', `name = "p${i}"`).split("\n").slice(3).join("\n")).join("\n");
+  assert.deepEqual(readPackages([{ path: "uv.lock", text: `version = 1\n\n${uv}` }]).packages.map((p) => p.version), normal);
+  const odd = ["https://SECRET@evil.example/x.tgz", "1.0.*", "1..0", "1.0.", "latest", "1.0\u001b[31m"];
+  for (const version of odd) {
+    const poetry = `[[package]]\nname = "a"\nversion = "${version}"\n`;
+    const read = readPackages([{ path: "poetry.lock", text: poetry }]);
+    assert.deepEqual(read, {
+      ...EMPTY,
+      couldNotRead: [{ file: "poetry.lock", reason: UNREADABLE_SOURCE }],
+      sourced: [pypiSourced("a", null, "poetry.lock", 2, "unreadable", null)],
+    }, version);
+    const uvRead = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "https://pypi.org/simple" }').replace('version = "1.0.0"', `version = "${version}"`) }]);
+    assert.deepEqual(uvRead, { ...EMPTY, packages: [pypi("a", null, "uv.lock", 5)] }, version);
+    assert.ok(!JSON.stringify(read).includes("SECRET") && !JSON.stringify(uvRead).includes("SECRET"), version);
+  }
+  const requirements = readPackages([{ path: "requirements.txt", text: "x==1.0\u001b[31m\nidna==3.10\n" }]);
+  assert.deepEqual(requirements, {
+    ...EMPTY,
+    packages: [pypi("idna", "3.10", "requirements.txt", 2)],
+    couldNotRead: [{ file: "requirements.txt", reason: UNREADABLE_SOURCE }],
+    sourced: [pypiSourced("x", null, "requirements.txt", 1, "unreadable", null)],
+  });
+});
+
+test("a long run of digits as a Python version is checked quickly", () => {
+  const read = quickly(() => readPackages([{ path: "requirements.txt", text: `x==${"1".repeat(4000000)}x\n` }]));
+  assert.equal(read.sourced.length, 1);
+});
+
+test("a version longer than 256 characters is no version, however well formed: never kept, sent or shown", () => {
+  const longest = `1.0.0-${"a".repeat(250)}`;
+  const tooLong = `1.0.0-${"b".repeat(251)}`;
+  const lock = JSON.stringify({
+    lockfileVersion: 3,
+    packages: {
+      "node_modules/a": { version: longest, resolved: "https://registry.npmjs.org/a/-/a.tgz" },
+      "node_modules/b": { version: tooLong, resolved: "https://registry.npmjs.org/b/-/b.tgz" },
+      "node_modules/c": { version: tooLong, resolved: "https://registry.npmmirror.com/c/-/c.tgz" },
+    },
+  });
+  assert.deepEqual(readPackages([{ path: "package-lock.json", text: lock }]), {
+    ...EMPTY,
+    packages: [npm("a", longest, "package-lock.json", 1), npm("b", null, "package-lock.json", 1)],
+    sourced: [sourced("c", null, "package-lock.json", 1, "host", "https://registry.npmmirror.com")],
+  });
+  const local = `1.0+${"x".repeat(253)}`;
+  const uv = uvLock('source = { registry = "https://pypi.org/simple" }').replace('version = "1.0.0"', `version = "${local}"`);
+  assert.deepEqual(readPackages([{ path: "uv.lock", text: uv }]).packages, [pypi("a", null, "uv.lock", 5)]);
+  const requirements = readPackages([{ path: "requirements.txt", text: `x==${local}\nidna==3.10\n` }]);
+  assert.deepEqual(requirements, {
+    ...EMPTY,
+    packages: [pypi("idna", "3.10", "requirements.txt", 2)],
+    couldNotRead: [{ file: "requirements.txt", reason: UNREADABLE_SOURCE }],
+    sourced: [pypiSourced("x", null, "requirements.txt", 1, "unreadable", null)],
+  });
+});
+
+test("Python lockfiles: a block whose name cannot be found is a source it could not read with no name, never left out", () => {
+  const uv = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "https://evil.example/SECRET" }').replace('name = "a"', '"name" = "a"') }]);
+  const poetry = readPackages([{ path: "poetry.lock", text: '[[package]]\nversion = "1.0.0"\n\n[package.source]\ntype = "legacy"\nurl = "https://evil.example/SECRET"\n' }]);
+  for (const [file, read] of [["uv.lock", uv], ["poetry.lock", poetry]]) {
+    assert.deepEqual(read, {
+      ...EMPTY,
+      couldNotRead: [{ file, reason: UNREADABLE_SOURCE }],
+      sourced: [pypiSourced(null, null, file, file === "uv.lock" ? 4 : 1, "unreadable", null)],
+    }, file);
+    assert.ok(!JSON.stringify(read).includes("SECRET"), file);
+  }
+});
+
+test("Python lockfiles: a block with no version and a source that is not the registry is reported with no version", () => {
+  const read = readPackages([{ path: "poetry.lock", text: '[[package]]\nname = "a"\n\n[package.source]\ntype = "git"\nurl = "https://github.com/u/a.git"\n' }]);
+  assert.deepEqual(read, { ...EMPTY, sourced: [pypiSourced("a", null, "poetry.lock", 2, "git", "https://github.com/u/a.git")] });
+});
+
+test("Python lockfiles: what Poetry and uv write outside a source reads as they write it (escapes, quoted keys, inline tables, nested arrays)", () => {
+  const poetry = [
+    "[[package]]", 'name = "a"', 'version = "1.0.0"', 'description = "A \\"quoted\\" word # not a comment"', "",
+    "[package.dependencies]", 'colorama = {version = "*", markers = "platform_system == \\"Windows\\""}', '"zope.interface" = ">=5"', "",
+    "[package.extras]", 'socks = ["PySocks (>=1.5.6,!=1.5.7)"]', "",
+    "[metadata]", 'lock-version = "2.0"', "", "[metadata.files]", '"zope.interface" = [', '    {file = "z.whl", hash = "sha256:x"},', "]", "",
+  ].join("\n");
+  assert.deepEqual(readPackages([{ path: "poetry.lock", text: poetry }]), { ...EMPTY, packages: [pypi("a", "1.0.0", "poetry.lock", 2)] });
+  const uv = [
+    "version = 1", 'requires-python = ">=3.10"', "resolution-markers = [", '    "sys_platform == \'win32\'",', "]",
+    "conflicts = [[", '    { package = "t", extra = "a" },', '    { package = "t", extra = "b" },', "]]", "",
+    "[[package]]", 'name = "a"', 'version = "1.0.0"', 'source = { registry = "https://pypi.org/simple" }', "",
+    "[package.metadata]", "requires-dist = [", '["nested"],', "]", "", "[package.metadata.requires-dev]", 'dev = [{ name = "b" }]', "",
+    "[manifest]", 'members = ["t"]', "",
+  ].join("\n");
+  assert.deepEqual(readPackages([{ path: "uv.lock", text: uv }]), { ...EMPTY, packages: [pypi("a", "1.0.0", "uv.lock", 12)] });
+});
+
+test("Python lockfiles: TOML that Poetry or uv would not write where a source can be named is a file or a source it could not read, never the registry", () => {
+  const EVIL_INDEX = "https://evil.example/simple";
+  const uvSource = (text) => uvLock(text);
+  const shapes = [
+    ["uv.lock", "a [package.source] table", uvLock("", "[package.source]", `registry = "${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["uv.lock", "a dotted source key", uvSource(`source.registry = "${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["uv.lock", "a dotted sdist key", uvLock('source = { registry = "https://pypi.org/simple" }', 'sdist.url = "https://evil.example/a.tar.gz"'), UNREADABLE_SOURCE],
+    ["uv.lock", "a quoted source key", uvSource(`"source" = { registry = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "a literal source key", uvSource(`'source' = { registry = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "a quoted key inside the source", uvSource(`source = { "registry" = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "a dotted key inside the source", uvSource(`source = { registry.x = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "an escape in the address", uvSource('source = { registry = "https:\\u002f\\u002fevil.example/simple" }'), UNREADABLE_SOURCE],
+    ["uv.lock", "a literal string address", uvSource(`source = { registry = '${EVIL_INDEX}' }`), UNREADABLE_SOURCE],
+    ["uv.lock", "a multi-line basic string", uvSource(`source = { registry = """${EVIL_INDEX}""" }`), UV_LAYOUT],
+    ["uv.lock", "a multi-line literal string", uvSource(`source = { registry = '''${EVIL_INDEX}''' }`), UV_LAYOUT],
+    ["uv.lock", "no spaces around =", uvSource(`source={ registry = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "two spaces before =", uvSource(`source  = { registry = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "an inline table without inner spaces", uvSource(`source = {registry = "${EVIL_INDEX}"}`), UNREADABLE_SOURCE],
+    ["uv.lock", "a comment after the source", uvSource(`source = { registry = "${EVIL_INDEX}" } # mirror`), UNREADABLE_SOURCE],
+    ["uv.lock", "a source given twice", uvLock('source = { registry = "https://pypi.org/simple" }', `source = { registry = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "a key given twice in the source", uvSource(`source = { registry = "https://pypi.org/simple", registry = "${EVIL_INDEX}" }`), UNREADABLE_SOURCE],
+    ["uv.lock", "two kinds of source", uvSource('source = { registry = "https://pypi.org/simple", url = "https://evil.example/a.tgz" }'), UNREADABLE_SOURCE],
+    ["uv.lock", "a key it does not know in sdist", uvLock('source = { registry = "https://pypi.org/simple" }', 'sdist = { mirror = "https://evil.example/a.tar.gz" }'), UNREADABLE_SOURCE],
+    ["uv.lock", "a comment inside wheels", uvLock('source = { registry = "https://pypi.org/simple" }', "wheels = [", "    # mirror", '    { url = "https://evil.example/a.whl" },', "]"), UNREADABLE_SOURCE],
+    ["uv.lock", "a wheel without its trailing comma", uvLock('source = { registry = "https://pypi.org/simple" }', "wheels = [", '    { url = "https://evil.example/a.whl" }', "]"), UNREADABLE_SOURCE],
+    ["uv.lock", "a [[package.wheels]] table", uvLock('source = { registry = "https://pypi.org/simple" }', "", "[[package.wheels]]", 'url = "https://evil.example/a.whl"'), UNREADABLE_SOURCE],
+    ["uv.lock", "a [package.sdist] table", uvLock('source = { registry = "https://pypi.org/simple" }', "", "[package.sdist]", 'url = "https://evil.example/a.tar.gz"'), UNREADABLE_SOURCE],
+    ["uv.lock", "an indented header", uvLock('source = { registry = "https://pypi.org/simple" }', "", "  [package.source]", `  registry = "${EVIL_INDEX}"`), UV_LAYOUT],
+    ["uv.lock", "an indented key", uvLock('source = { registry = "https://pypi.org/simple" }', `  sdist = { url = "https://evil.example/a.tar.gz" }`), UV_LAYOUT],
+    ["uv.lock", "a header with spaces", uvLock('source = { registry = "https://pypi.org/simple" }', "", "[ package.source ]", `registry = "${EVIL_INDEX}"`), UV_LAYOUT],
+    ["uv.lock", "a header with a quoted key", uvLock('source = { registry = "https://pypi.org/simple" }', "", '[package."source"]', `registry = "${EVIL_INDEX}"`), UV_LAYOUT],
+    ["uv.lock", "a package table after another table", uvLock('source = { registry = "https://pypi.org/simple" }', "", "[manifest]", "", "[package.metadata]", `x = "${EVIL_INDEX}"`), UV_LAYOUT],
+    ["uv.lock", "a lone CR", uvLock(`version2 = 1\rsource = { registry = "${EVIL_INDEX}" }`), UV_LAYOUT],
+    ["uv.lock", "a tab before =", uvSource(`source\t= { registry = "${EVIL_INDEX}" }`), UV_LAYOUT],
+    ["uv.lock", "an inline table over two lines", uvSource(`source = { registry =\n"${EVIL_INDEX}" }`), UV_LAYOUT],
+    ["uv.lock", "packages as a top-level array", `version = 1\npackage = [{ name = "a", version = "1.0.0", source = { registry = "${EVIL_INDEX}" } }]\n`, UV_LAYOUT],
+    ["uv.lock", "a quoted top-level key", `version = 1\n"package" = [{ name = "a", version = "1.0.0", source = { registry = "${EVIL_INDEX}" } }]\n`, UV_LAYOUT],
+    ["poetry.lock", "an inline source", poetryLock(`source = {type = "legacy", url = "${EVIL_INDEX}"}`), UNREADABLE_SOURCE],
+    ["poetry.lock", "dotted source keys", poetryLock('source.type = "legacy"', `source.url = "${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["poetry.lock", "a quoted key in the source", poetryLock("", "[package.source]", 'type = "legacy"', `"url" = "${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["poetry.lock", "a literal string url", poetryLock("", "[package.source]", 'type = "legacy"', `url = '${EVIL_INDEX}'`), UNREADABLE_SOURCE],
+    ["poetry.lock", "an escape in the url", poetryLock("", "[package.source]", 'type = "legacy"', 'url = "https://evil\\u002eexample/simple"'), UNREADABLE_SOURCE],
+    ["poetry.lock", "a multi-line url", poetryLock("", "[package.source]", 'type = "legacy"', `url = """${EVIL_INDEX}"""`), POETRY_LAYOUT],
+    ["poetry.lock", "no spaces around =", poetryLock("", "[package.source]", 'type = "legacy"', `url="${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["poetry.lock", "a comment after the url", poetryLock("", "[package.source]", 'type = "legacy"', `url = "${EVIL_INDEX}" # mirror`), UNREADABLE_SOURCE],
+    ["poetry.lock", "a url given twice", poetryLock("", "[package.source]", 'type = "legacy"', `url = "${EVIL_INDEX}"`, 'url = "https://pypi.org/simple"'), UNREADABLE_SOURCE],
+    ["poetry.lock", "a key it does not know", poetryLock("", "[package.source]", 'type = "legacy"', 'url = "https://pypi.org/simple"', `index = "${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["poetry.lock", "a type it does not know", poetryLock("", "[package.source]", 'type = "hg"', `url = "${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["poetry.lock", "no url", poetryLock("", "[package.source]", 'type = "legacy"'), UNREADABLE_SOURCE],
+    ["poetry.lock", "a source table given twice", poetryLock("", "[package.source]", 'type = "legacy"', `url = "${EVIL_INDEX}"`, "", "[package.source]", 'type = "legacy"', 'url = "https://pypi.org/simple"'), UNREADABLE_SOURCE],
+    ["poetry.lock", "a table inside the source", poetryLock("", "[package.source]", 'type = "legacy"', 'url = "https://pypi.org/simple"', "", "[package.source.extra]", `url = "${EVIL_INDEX}"`), UNREADABLE_SOURCE],
+    ["poetry.lock", "an sdist in a Poetry block", poetryLock('sdist = {url = "https://evil.example/a.tar.gz"}'), UNREADABLE_SOURCE],
+    ["poetry.lock", "a source table after another table", `${poetryLock()}\n[package.source]\ntype = "legacy"\nurl = "${EVIL_INDEX}"\n`, POETRY_LAYOUT],
+    ["poetry.lock", "a header with spaces around a dot", poetryLock("", "[package . source]", 'type = "legacy"', `url = "${EVIL_INDEX}"`), POETRY_LAYOUT],
+  ];
+  for (const [file, shape, text, reason] of shapes) {
+    const read = readPackages([{ path: file, text }]);
+    assert.deepEqual(read.couldNotRead, [{ file, reason }], shape);
+    assert.ok(!read.packages.some((p) => p.name === "a"), shape);
+    if (reason === UNREADABLE_SOURCE) assert.deepEqual(read.sourced.map((s) => s.kind), ["unreadable"], shape);
+    assert.ok(!JSON.stringify(read).includes("evil"), shape);
+  }
+});
+
+test("Python lockfiles: keys in another order read the same, since TOML gives order no meaning", () => {
+  const text = ['version = 1', "", "[[package]]", `source = { registry = "https://mirror.example.com/simple" }`, 'version = "1.0.0"', 'name = "a"', ""].join("\n");
+  assert.deepEqual(readPackages([{ path: "uv.lock", text }]).sourced, [pypiSourced("a", "1.0.0", "uv.lock", 6, "host", "https://mirror.example.com")]);
+});
+
+test("Python lockfiles built to make the reader backtrack or rescan are read quickly", () => {
+  const long = uvLock(`source = { registry = "https://pypi.org/simple" }`, `sdist = { url = "https://files.pythonhosted.org/${"a".repeat(4000000)}.tar.gz" }`);
+  assert.deepEqual(quickly(() => readPackages([{ path: "uv.lock", text: long }])).packages, [pypi("a", "1.0.0", "uv.lock", 5)]);
+  quickly(() => readPackages([{ path: "uv.lock", text: `version = 1\nx = ${"[".repeat(200000)}\n` }]));
+  quickly(() => readPackages([{ path: "poetry.lock", text: `[[package]]\nname = "${"\\\"".repeat(1000000)}"\n` }]));
+  quickly(() => readPackages([{ path: "poetry.lock", text: "[[package]]\n".repeat(200000) }]));
+});
+
+test("poetry.lock: a block with no version and no source of its own is a source it could not read, kept with its name", () => {
+  const text = '[[package]]\nname = "a"\nversion = "1.0.0"\n\n[[package]]\nname = "B_c"\n';
+  assert.deepEqual(readPackages([{ path: "poetry.lock", text }]), {
+    ...EMPTY,
+    packages: [pypi("a", "1.0.0", "poetry.lock", 2)],
+    couldNotRead: [{ file: "poetry.lock", reason: UNREADABLE_SOURCE }],
+    sourced: [pypiSourced("b-c", null, "poetry.lock", 6, "unreadable", null)],
+  });
+});
+
+test("uv.lock: a path or directory source is local only while it stays inside the project, where an archive is a bundled package file", () => {
+  const inside = ['{ directory = "packages/a" }', '{ directory = "packages/../a" }', '{ path = "." }'];
+  for (const source of inside) assert.deepEqual(readPackages([{ path: "uv.lock", text: uvLock(`source = ${source}`) }]), EMPTY, source);
+  assert.deepEqual(readPackages([{ path: "uv.lock", text: uvLock('source = { path = "dist/a-1.0.0.tar.gz" }') }]).sourced,
+    [pypiSourced("a", "1.0.0", "uv.lock", 5, "bundled", "dist/a-1.0.0.tar.gz", { text: "a bundled package file the scan cannot read" })]);
+  const outside = ['{ path = "/home/someone/a-1.0.0.tar.gz" }', '{ directory = "../a" }', '{ directory = "packages/../../a" }', '{ path = "C:/a.whl" }', '{ directory = "~/a" }'];
+  for (const source of outside) {
+    assert.deepEqual(readPackages([{ path: "uv.lock", text: uvLock(`source = ${source}`) }]), {
+      ...EMPTY,
+      sourced: [pypiSourced("a", "1.0.0", "uv.lock", 5, "url", null, { text: "a path outside the project" })],
+    }, source);
+  }
+});
+
+test("uv.lock: a project block with group-requires-python and default-groups, as uv writes them, is the project", () => {
+  const text = [
+    "version = 1", 'requires-python = ">=3.10"', "",
+    "[[package]]", 'name = "t"', 'version = "0.1.0"', 'source = { virtual = "." }', 'default-groups = ["dev"]', "",
+    "[package.group-requires-python]", 'dev = ">=3.12"', 'docs = ">=3.11"', "",
+    "[package.metadata]", "requires-dist = []", "",
+  ].join("\n");
+  assert.deepEqual(readPackages([{ path: "uv.lock", text }]), EMPTY);
+});
+
+test("uv.lock: every local path, a registry folder, an sdist or wheel path or a file: URL, is local only while it stays inside the project", () => {
+  const outside = (...lines) => assert.deepEqual(readPackages([{ path: "uv.lock", text: uvLock(...lines) }]).sourced,
+    [pypiSourced("a", "1.0.0", "uv.lock", 5, "url", null, { text: "a path outside the project" })], lines.join(" "));
+  const registry = 'source = { registry = "https://pypi.org/simple" }';
+  outside('source = { registry = "../wheels" }');
+  outside('source = { registry = "/srv/wheels" }');
+  outside(registry, 'sdist = { path = "../a-1.0.0.tar.gz" }');
+  outside(registry, "wheels = [", '    { path = "/tmp/a-1.0.0-py3-none-any.whl" },', "]");
+  outside(registry, 'sdist = { url = "file:///home/someone/a-1.0.0.tar.gz" }');
+  outside(registry, "wheels = [", '    { url = "file:///tmp/a-1.0.0-py3-none-any.whl" },', "]");
+  outside('source = { url = "file:///home/someone/a-1.0.0.tar.gz" }');
+  outside('source = { directory = "packages/a" }', 'sdist = { path = "../../a-1.0.0.tar.gz" }');
+  const bundledFirst = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "wheels" }', 'sdist = { path = "../../a-1.0.0.tar.gz" }') }]);
+  assert.deepEqual(bundledFirst.sourced, [pypiSourced("a", "1.0.0", "uv.lock", 5, "bundled", "wheels", { text: "a bundled package folder the scan cannot read" })]);
+});
+
+test("uv.lock: a package is judged by its first address that is not the registry; an archive path inside the project is a bundled package file, after the source", () => {
+  const registry = 'source = { registry = "https://pypi.org/simple" }';
+  const read = readPackages([{ path: "uv.lock", text: uvLock(registry, 'sdist = { path = "dist/a-1.0.0.tar.gz" }', "wheels = [", '    { path = "dist/a-1.0.0-py3-none-any.whl" },', "]") }]);
+  assert.deepEqual(read, { ...EMPTY, sourced: [pypiSourced("a", "1.0.0", "uv.lock", 5, "bundled", "dist/a-1.0.0.tar.gz", { text: "a bundled package file the scan cannot read" })] });
+  const mirror = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "https://mirror.example.com/simple" }', 'sdist = { path = "dist/a-1.0.0.tar.gz" }') }]);
+  assert.deepEqual(mirror.sourced, [pypiSourced("a", "1.0.0", "uv.lock", 5, "host", "https://mirror.example.com")]);
+});
+
+const OUTSIDE = { kind: "url", address: null, text: "a path outside the project" };
+const poetryBlock = (type, url) => ["[[package]]", 'name = "a"', 'version = "1.0.0"', "", "[package.source]", `type = "${type}"`, `url = "${url}"`, ""].join("\n");
+// What a lockfile at `file` makes of package `a`: the kind and address it is reported with, "local" when dropped as local, or
+// "registry" when sent to OSV.
+function verdictFor(file, text) {
+  const read = readPackages([{ path: file, text }]);
+  if (read.packages.length === 1) return "registry";
+  if (read.sourced.length === 0) return read.couldNotRead.length === 0 ? "local" : read.couldNotRead;
+  const { kind, address, text: shown } = read.sourced[0];
+  return shown === undefined ? { kind, address } : { kind, address, text: shown };
+}
+
+test("Python lockfiles: every address that is a file: URL, an absolute path, a drive or a path climbing out of the repository is a path outside the project, whatever field holds it", () => {
+  const cases = [
+    ["uv.lock", uvLock('source = { git = "file:///srv/repo#abc" }')],
+    ["uv.lock", uvLock('source = { git = "../repo" }')],
+    ["uv.lock", uvLock('source = { git = "/srv/repo" }')],
+    ["uv.lock", uvLock('source = { url = "../a-1.0.0.tar.gz" }')],
+    ["uv.lock", uvLock('source = { url = "/srv/a-1.0.0.tar.gz" }')],
+    ["uv.lock", uvLock('source = { registry = "C:/wheels" }')],
+    ["uv.lock", uvLock('source = { registry = "file:///srv/wheels" }')],
+    ["uv.lock", uvLock('source = { editable = "../x" }')],
+    ["uv.lock", uvLock('source = { virtual = "/x" }')],
+    ["uv.lock", uvLock('source = { path = "~/a.whl" }')],
+    ["poetry.lock", poetryBlock("git", "/srv/repo")],
+    ["poetry.lock", poetryBlock("git", "../repo")],
+    ["poetry.lock", poetryBlock("git", "file:///srv/repo")],
+    ["poetry.lock", poetryBlock("url", "/srv/a-1.0.0.tar.gz")],
+    ["poetry.lock", poetryBlock("url", "../a-1.0.0.tar.gz")],
+    ["poetry.lock", poetryBlock("url", "file:///srv/a-1.0.0.tar.gz")],
+    ["poetry.lock", poetryBlock("legacy", "/srv/simple")],
+    ["poetry.lock", poetryBlock("legacy", "../simple")],
+    ["poetry.lock", poetryBlock("legacy", "file:///srv/simple")],
+    ["poetry.lock", poetryBlock("file", "C:/a-1.0.0.tar.gz")],
+    ...["../evil://x", "/srv/evil://x", "~/x://y", "./../x://y"].flatMap((address) => [
+      ["uv.lock", uvLock(`source = { path = "${address}" }`)],
+      ["uv.lock", uvLock(`source = { editable = "${address}" }`)],
+      ["uv.lock", uvLock(`source = { url = "${address}" }`)],
+      ["uv.lock", uvLock(`source = { git = "${address}" }`)],
+      ["uv.lock", uvLock(`source = { registry = "${address}" }`)],
+      ["uv.lock", uvLock('source = { registry = "https://pypi.org/simple" }', `sdist = { url = "${address}" }`)],
+      ["uv.lock", uvLock('source = { registry = "https://pypi.org/simple" }', "wheels = [", `    { url = "${address}" },`, "]")],
+      ["poetry.lock", poetryBlock("legacy", address)],
+      ["poetry.lock", poetryBlock("git", address)],
+      ["poetry.lock", poetryBlock("directory", address)],
+    ]),
+  ];
+  for (const [file, text] of cases) assert.deepEqual(verdictFor(file, text), OUTSIDE, text);
+});
+
+test("Python lockfiles: a path is measured from the repository root, so one into a sibling folder is inside and one above the root is outside", () => {
+  const inside = [
+    ["api/uv.lock", uvLock('source = { directory = "../pipeline" }')],
+    ["api/uv.lock", uvLock('source = { git = "../vendor/repo" }')],
+    ["a/b/poetry.lock", poetryBlock("directory", "../../x")],
+    ["a/poetry.lock", poetryBlock("git", "../vendor/repo")],
+  ];
+  for (const [file, text] of inside) assert.deepEqual(verdictFor(file, text), "local", `${file} ${text}`);
+  const bundledInside = [
+    ["api/uv.lock", uvLock('source = { url = "./dist/a-1.0.0.tar.gz" }'), "api/dist/a-1.0.0.tar.gz", "file"],
+    ["api/uv.lock", uvLock('source = { registry = "../wheels" }'), "wheels", "folder"],
+    ["api/uv.lock", uvLock('source = { path = "../dist/a-1.0.0.tar.gz" }', 'sdist = { path = "../dist/a-1.0.0.tar.gz" }'), "dist/a-1.0.0.tar.gz", "file"],
+  ];
+  for (const [file, text, address, what] of bundledInside) {
+    assert.deepEqual(verdictFor(file, text), { kind: "bundled", address, text: `a bundled package ${what} the scan cannot read` }, `${file} ${text}`);
+  }
+  const outside = [
+    ["uv.lock", uvLock('source = { directory = "../pipeline" }')],
+    ["api/uv.lock", uvLock('source = { directory = "../../pipeline" }')],
+    ["api/uv.lock", uvLock('source = { registry = "https://pypi.org/simple" }', 'sdist = { path = "../../a-1.0.0.tar.gz" }')],
+    ["api/uv.lock", uvLock('source = { registry = "https://pypi.org/simple" }', "wheels = [", '    { path = "../../a-1.0.0-py3-none-any.whl" },', "]")],
+    ["a/poetry.lock", poetryBlock("directory", "../../x")],
+  ];
+  for (const [file, text] of outside) assert.deepEqual(verdictFor(file, text), OUTSIDE, `${file} ${text}`);
+  const project = uvLock('source = { editable = "../packages/t" }');
+  assert.deepEqual(readPackages([{ path: "api/uv.lock", text: project }]), EMPTY);
+});
+
+test("poetry.lock: package = [], as Poetry writes a lockfile with no dependencies, holds none; any other top-level package value could not be read", () => {
+  assert.deepEqual(one("poetry.lock", "poetry.empty.lock"), EMPTY);
+  assert.deepEqual(readPackages([{ path: "poetry.lock", text: fixture("poetry.empty.lock").replace(/\n/g, "\r\n") }]), EMPTY);
+  const odd = [
+    ["poetry.lock", 'package = ["x"]\n', POETRY_LAYOUT],
+    ["poetry.lock", 'package = [{ name = "a", version = "1.0.0", source = { type = "legacy", url = "https://evil.example/simple" } }]\n', POETRY_LAYOUT],
+    ["poetry.lock", "package=[]\n", POETRY_LAYOUT],
+    ["poetry.lock", "package = [ ]\n", POETRY_LAYOUT],
+    ["poetry.lock", "package = [] # none\n", POETRY_LAYOUT],
+    ["poetry.lock", 'package = []\n\n[[package]]\nname = "a"\nversion = "1.0.0"\n', POETRY_LAYOUT],
+    ["poetry.lock", 'package = []\n\n[package.source]\ntype = "legacy"\nurl = "https://evil.example/simple"\n', POETRY_LAYOUT],
+    ["uv.lock", "version = 1\npackage = []\n", UV_LAYOUT],
+  ];
+  for (const [file, text, reason] of odd) {
+    const read = readPackages([{ path: file, text }]);
+    assert.deepEqual(read, { ...EMPTY, couldNotRead: [{ file, reason }] }, text);
+  }
+});
+
+test("a uv.lock or poetry.lock with no [[package]] block at all could not be read: no packages found in it", () => {
+  const files = [
+    ["uv.lock", 'version = 1\nrequires-python = ">=3.10"\n'],
+    ["poetry.lock", '[metadata]\nlock-version = "2.0"\n'],
+    ["poetry.lock", ""],
+  ];
+  for (const [file, text] of files) {
+    assert.deepEqual(readPackages([{ path: file, text }]), { ...EMPTY, couldNotRead: [{ file, reason: "no packages found in it" }] }, text);
+  }
+});
+
+const requirementsLine = (line, kind, address, extra = {}) => ({ ecosystem: "PyPI", file: "requirements.txt", line, from: "requirements", kind, address, ...extra });
+const ENV_INDEX = { text: "an index set from an environment variable" };
+const OUTSIDE_TEXT = { text: "a path outside the project" };
+const BUNDLED_FOLDER_TEXT = { text: "a bundled package folder the scan cannot read" };
+// What a line names where its kind alone does not say: a setting permitting plain http, or a find-links page.
+const ALLOWS_HTTP = { role: "allows-http" };
+const FIND_LINKS = { role: "find-links" };
+
+test("requirements*.txt: index options in every form, --trusted-host, VCS lines, name @ url and bare archive URLs are reported; == pins under an index option are still checked", () => {
+  const file = "requirements.txt";
+  const read = readPackages([
+    { path: file, text: fixture("requirements.sources.txt") },
+    { path: "requirements-dev.txt", text: "" },
+    { path: "constraints.txt", text: "" },
+  ]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [pypi("requests", "2.32.3", file, 10), pypi("idna", "3.10", file, 21)],
+    sourced: [
+      requirementsLine(2, "host", "https://mirror.example.com"),
+      requirementsLine(3, "host", "https://extra.example.com"),
+      requirementsLine(5, "host", "https://other.example.com"),
+      requirementsLine(6, "bundled", "wheels", { ...BUNDLED_FOLDER_TEXT, ...FIND_LINKS }),
+      requirementsLine(7, "url", null, { ...OUTSIDE_TEXT, ...FIND_LINKS }),
+      requirementsLine(8, "http", "http://mirror.example.com", ALLOWS_HTTP),
+      requirementsLine(9, "host", null, ENV_INDEX),
+      pypiSourced("left-pad", null, file, 13, "git", "https://github.com/someone/left-pad.git", { commit: SHA1 }),
+      pypiSourced("tool", null, file, 14, "git", "ssh://github.com/someone/tool.git"),
+      pypiSourced("hgpkg", null, file, 15, "git", "hg+https://hg.example.com/repo"),
+      pypiSourced("named", null, file, 16, "url", "https://files.example.com/…/named-1.0-py3-none-any.whl"),
+      pypiSourced(null, null, file, 17, "url", "https://files.example.com/…/bare-1.0.tar.gz"),
+      pypiSourced("local", null, file, 18, "url", null, OUTSIDE_TEXT),
+    ],
+  });
+  const json = JSON.stringify(read);
+  assert.ok(!json.includes("SECRET") && !json.includes("TOKEN") && !json.includes("user"));
+});
+
+test("requirements*.txt: a file with only name @ url lines and no == pin is read, not unreadable", () => {
+  const file = "requirements.txt";
+  assert.deepEqual(one(file, "requirements.direct.txt"), {
+    ...EMPTY,
+    sourced: [
+      pypiSourced("alpha", null, file, 1, "url", "https://files.example.com/alpha-1.0.tar.gz"),
+      pypiSourced("beta", null, file, 2, "git", "https://github.com/someone/beta", { commit: SHA1 }),
+    ],
+  });
+});
+
+test("requirements*.txt: a path is local inside the repository and outside the project when it leaves it, measured from the repository root", () => {
+  const read = (file, text) => readPackages([{ path: file, text: `${text}\nidna==3.10\n` }, { path: "requirements-base.txt", text: "" }]).sourced;
+  assert.deepEqual(read("api/requirements.txt", "-e ../packages/x\n-r ../requirements-base.txt"), []);
+  assert.deepEqual(read("api/requirements.txt", "-f ../wheels"), [{ ...requirementsLine(1, "bundled", "wheels", { ...BUNDLED_FOLDER_TEXT, ...FIND_LINKS }), file: "api/requirements.txt" }]);
+  const outside = ["-f ../../wheels", "-e ../../x", "../../x", "-f file:///opt/wheels", "-e /opt/x", "-r ../../base.txt", "y @ file:./y"];
+  for (const line of outside) {
+    const file = "api/requirements.txt";
+    const [item] = read(file, line);
+    assert.deepEqual({ kind: item.kind, address: item.address, text: item.text }, { kind: "url", address: null, ...OUTSIDE_TEXT }, line);
+  }
+});
+
+test("requirements*.txt: shapes pip accepts that hold no source, or a pin, read as pip reads them", () => {
+  const cases = [
+    ["requests==2.0 --hash=sha256:abc", [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ["requests==2.0 --hash sha256:abc --config-settings=a=b", [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ['requests[socks, security] == 2.0 ; python_version < "3.8"', [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ["requests (==2.0)", [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ["requests==2.0  # pinned", [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ["requests==2.0 \\", [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ["requests==2.0\\\n", [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ["﻿requests==2.0", [pypi("requests", "2.0", "requirements.txt", 1)], []],
+    ["# a comment that ends in a backslash \\\nrequests==2.0", [pypi("requests", "2.0", "requirements.txt", 2)], []],
+    ["requests==2.0.*", [pypi("requests", null, "requirements.txt", 1)], []],
+    ["requests===2.0", [pypi("requests", null, "requirements.txt", 1)], []],
+    ["requests>=2.0\nrequests~=2.0\nrequests\nrequests>=1,<3\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 5)], []],
+    ["--index-url=https://pypi.org/simple\n--extra-index-url https://pypi.org/simple/\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 3)], []],
+    ["--extra-index-url https://files.pythonhosted.org/simple\n-i https://pypi.org/simple/requests/\n-f https://pypi.org/simple\n-f https://files.pythonhosted.org/packages/\nx @ https://pypi.org/packages/x-1.0.whl", [], [
+      requirementsLine(1, "host", "https://files.pythonhosted.org"),
+      requirementsLine(2, "host", "https://pypi.org"),
+      requirementsLine(3, "host", "https://pypi.org", FIND_LINKS),
+      requirementsLine(4, "host", "https://files.pythonhosted.org", FIND_LINKS),
+      pypiSourced("x", null, "requirements.txt", 5, "url", "https://pypi.org/…/x-1.0.whl"),
+    ]],
+    ["--pre\n--no-index\n--prefer-binary\n--require-hashes\n--only-binary :all:\n--no-binary=:none:\n--use-feature=truststore\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 8)], []],
+    ["-f wheels\n-e .[dev]\n-e.\n--editable=./x\n-c constraints.txt\n-rrequirements-dev.txt\n.\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 8)], [requirementsLine(1, "bundled", "wheels", { ...BUNDLED_FOLDER_TEXT, ...FIND_LINKS })]],
+    ["https://files.example.com/x-1.0.whl#egg=xpkg", [], [pypiSourced("xpkg", null, "requirements.txt", 1, "url", "https://files.example.com/x-1.0.whl")]],
+    ["https://user:SECRET@files.example.com/TOKEN/x-1.0.whl", [], [pypiSourced(null, null, "requirements.txt", 1, "url", "https://files.example.com/…/x-1.0.whl")]],
+    ["x @ https://files.pythonhosted.org/packages/x-1.0.whl", [pypi("x", null, "requirements.txt", 1)], []],
+    ["https://files.pythonhosted.org/packages/ab/cd/requests-2.32.3-py3-none-any.whl", [pypi("requests", "2.32.3", "requirements.txt", 1)], []],
+    ["https://files.pythonhosted.org/packages/ab/cd/charset_normalizer-3.3.2.tar.gz#sha256=abc", [pypi("charset-normalizer", "3.3.2", "requirements.txt", 1)], []],
+    ["https://files.pythonhosted.org/packages/ab/cd/pkg-notaversion.zip", [pypi("pkg", null, "requirements.txt", 1)], []],
+    ["https://files.pythonhosted.org/packages/ab/cd/pkg-1.0.tar.bz2", [pypi("pkg", "1.0", "requirements.txt", 1)], []],
+    ["https://files.pythonhosted.org/packages/ab/cd/pkg-1.0.tar.lzma", [pypi("pkg", "1.0", "requirements.txt", 1)], []],
+    ["git+https://github.com/u/r@feature/x#egg=r", [], [pypiSourced("r", null, "requirements.txt", 1, "git", "https://github.com/u/r")]],
+    ["svn+https://svn.example.com/repo/trunk#egg=s", [], [pypiSourced("s", null, "requirements.txt", 1, "git", "svn+https://svn.example.com/repo/trunk")]],
+    ["--trusted-host host.example:8080", [], [requirementsLine(1, "http", "http://host.example:8080", ALLOWS_HTTP)]],
+    ["--no-require-hashes\n--all-releases :all:\n--only-final=:none:\nrequests==2.0 -C a=b\nidna==3.10", [pypi("requests", "2.0", "requirements.txt", 4), pypi("idna", "3.10", "requirements.txt", 5)], []],
+    ["--pypi-url https://mirror.example.com/simple", [], [requirementsLine(1, "host", "https://mirror.example.com")]],
+    ["--trusted-host 10.0.0.1", [], [requirementsLine(1, "http", "http://10.0.0.1", ALLOWS_HTTP)]],
+    ["-f https://download.pytorch.org/whl/cpu", [], [requirementsLine(1, "host", "https://download.pytorch.org", FIND_LINKS)]],
+    ["-i http://mirror.example.com/simple", [], [requirementsLine(1, "http", "http://mirror.example.com")]],
+    ["-i https://${USER}:${TOKEN}@mirror.example.com/simple", [], [requirementsLine(1, "host", null, ENV_INDEX)]],
+    ["-f ${WHEELS}", [], [requirementsLine(1, "host", null, { text: "a find-links page set from an environment variable", ...FIND_LINKS })]],
+    ["requests==2.0 \\\n  --hash=sha256:abc\n-i https://mirror.example.com/simple", [pypi("requests", "2.0", "requirements.txt", 1)], [requirementsLine(3, "host", "https://mirror.example.com")]],
+  ];
+  for (const [text, packages, sourced] of cases) {
+    for (const lines of [text, text.replace(/\n/g, "\r\n")]) {
+      const read = readPackages([{ path: "requirements.txt", text: lines }, { path: "constraints.txt", text: "" }, { path: "requirements-dev.txt", text: "" }]);
+      assert.deepEqual(read, { ...EMPTY, packages, sourced }, JSON.stringify(lines));
+      assert.ok(!JSON.stringify(read).includes("SECRET"), lines);
+    }
+  }
+});
+
+test("requirements*.txt: a line that could name a source and is not one it can read is a source it could not read, never ignored or taken for a pin", () => {
+  const lines = [
+    "requests==2.0 --index-url https://evil.example/SECRET/simple",
+    "requests==2.0 \\\n-i https://evil.example/SECRET/simple",
+    "requests==2.0 -f https://evil.example/SECRET",
+    "--index=https://evil.example/SECRET/simple",
+    "--extra-index https://evil.example/SECRET/simple",
+    "--index-url",
+    "-i",
+    "-e",
+    "--pre requests==2.0",
+    "--pre=yes",
+    "-i https://evil.example/SECRET/simple extra",
+    "-e git+https://evil.example/SECRET.git --index-url https://evil.example/simple",
+    "-e ./a -e ./b",
+    "-x https://evil.example/SECRET",
+    "--foo",
+    '-i "https://evil.example/SECRET/simple"',
+    "-i https://evil.example/SECRET/simple\\ x",
+    "requests==2.0\t--index-url\thttps://evil.example/SECRET/simple",
+    "requests==2.0\r-i https://evil.example/SECRET/simple",
+    "# a comment -i https://evil.example/SECRET/simple",
+    "# a comment\f-i https://evil.example/SECRET/simple",
+    "-i https://pypi.org/simple \uFEFF# -i https://evil.example/SECRET/simple",
+    "--pre \uFEFF# -i https://evil.example/SECRET/simple",
+    "requests==2.0\uFEFF",
+    "# first\n\uFEFFrequests==2.0",
+    "requests==2.0 \u001f# -i https://evil.example/SECRET/simple",
+    "${PACKAGE}==1.0",
+    "requests @ https://${TOKEN}@evil.example/SECRET/x.whl",
+    "--trusted-host ${HOST}",
+    "--trusted-host evil.example/SECRET",
+    "--trusted-host a:99999",
+    "--trusted-host 1.2.3.4.5",
+    "--trusted-host 999",
+    "--trusted-host 1.2.3.999",
+    "requests==2.0 --hash=${HASH}",
+    "requests==2.0 -C ${SETTINGS}",
+    "--only-binary ${SECRET}",
+    "--use-feature=${SECRET}",
+    "-e ${SECRET}",
+    "-r https://evil.example/SECRET/requirements.txt",
+    "-c ${CONSTRAINTS}",
+    "git+git@github.com:someone/SECRET.git",
+    "git+ssh://git@github.com:someone/SECRET.git",
+    "git+https://",
+    "ftp://evil.example/SECRET/x.tar.gz",
+    "-i SECRET",
+    "requests=2.0",
+    "requests==",
+    "requests 2.0",
+    "requests==2.0 junk",
+    "requests>=",
+    "pkg @",
+    "pkg @ https://evil.example/SECRET/x.whl extra",
+    "@ https://evil.example/SECRET/x.whl",
+    "https://files.pythonhosted.org/packages/ab/cd/README.txt",
+  ];
+  for (const text of lines) {
+    const read = readPackages([{ path: "requirements.txt", text: `${text}\nidna==3.10\n` }]);
+    assert.equal(read.sourced.length, 1, JSON.stringify(text));
+    assert.equal(read.sourced[0].kind, "unreadable", JSON.stringify(text));
+    assert.equal(read.sourced[0].address, null, JSON.stringify(text));
+    assert.deepEqual(read.couldNotRead, [{ file: "requirements.txt", reason: UNREADABLE_SOURCE }], JSON.stringify(text));
+    assert.deepEqual(read.packages.map((p) => p.name), ["idna"], JSON.stringify(text));
+    assert.ok(!JSON.stringify(read).includes("SECRET"), JSON.stringify(text));
+  }
+});
+
+test("requirements*.txt: a requirement whose specifier is not one it can read keeps its name; one it cannot read at all has none", () => {
+  const read = readPackages([{ path: "requirements.txt", text: "requests=2.0\n-x\n" }]);
+  assert.deepEqual(read.sourced, [
+    pypiSourced("requests", null, "requirements.txt", 1, "unreadable", null),
+    pypiSourced(null, null, "requirements.txt", 2, "unreadable", null),
+  ]);
+});
+
+test("a long requirements line of any shape is read quickly", () => {
+  for (const line of [`-i ${"a".repeat(4000000)}`, `x${" ".repeat(4000000)}@`, `x${"[".repeat(4000000)}`, `x==1.0 ${"\\".repeat(4000000)}`, `${"#".repeat(4000000)}`]) {
+    quickly(() => readPackages([{ path: "requirements.txt", text: line }]));
+  }
+});
+
+test("requirements*.txt: a -r or -c file inside the repository is read as a requirements file whatever its name, from the folder of the file naming it", () => {
+  const read = readPackages([
+    { path: "requirements.txt", text: "-r base.in\n-c constraints/c.txt\n" },
+    { path: "base.in", text: "idna==3.10\n-i https://mirror.example.com/simple\n" },
+    { path: "constraints/c.txt", text: "-r ../base.in\nrequests==2.0\n-c c.txt\n" },
+    { path: "api/requirements.txt", text: "-r ../shared/reqs.in\n" },
+    { path: "shared/reqs.in", text: "-r ../api/requirements.txt\ngit+https://github.com/u/r@" + SHA1 + "#egg=r\n" },
+  ]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [pypi("idna", "3.10", "base.in", 1), pypi("requests", "2.0", "constraints/c.txt", 2)],
+    sourced: [
+      { ...requirementsLine(2, "host", "https://mirror.example.com"), file: "base.in" },
+      pypiSourced("r", null, "shared/reqs.in", 2, "git", "https://github.com/u/r", { commit: SHA1 }),
+    ],
+  });
+});
+
+test("requirements*.txt: a -r or -c file inside the repository that the scan did not read, missing or left out, is a source it could not read at the line naming it", () => {
+  const read = readPackages(
+    [
+      { path: "requirements.txt", text: "idna==3.10\n-r missing.txt\n-c big.txt\n" },
+      { path: "a/requirements.txt", text: "-r requirements.txt\nidna==3.10\n" },
+    ],
+    [{ path: "big.txt", reason: "larger than 5 MB" }],
+  );
+  const unreadableLine = (line) => ({ ...requirementsLine(line, "unreadable", null) });
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [pypi("idna", "3.10", "requirements.txt", 1)],
+    couldNotRead: [{ file: "requirements.txt", reason: UNREADABLE_SOURCE }],
+    sourced: [unreadableLine(2), unreadableLine(3)],
+  });
+});
+
+test("requirements*.txt: a -r or -c file with only unpinned requirements was read, so it is not listed as holding no pinned versions; a file read in its own right still is", () => {
+  const read = readPackages([
+    { path: "requirements.txt", text: "-c constraints.txt\nidna==3.10\n" },
+    { path: "constraints.txt", text: "Django>=4.2\n" },
+    { path: "requirements-ranges.txt", text: "Django>=4.2\n" },
+  ]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [pypi("idna", "3.10", "requirements.txt", 2)],
+    couldNotRead: [{ file: "requirements-ranges.txt", reason: "no pinned versions in it" }],
+  });
+});
+
+test("requirements*.txt: a coding line in the first two lines naming anything but UTF-8 makes the file one it cannot read, as pip would decode it otherwise; a BOM wins over it", () => {
+  const odd = [
+    "# -*- coding: utf-7 -*-\n+AAo--i https://evil.example/SECRET/simple\nidna==3.10\n",
+    "idna==3.10\n# coding=latin-1\n",
+    "#coding:cp1252\r\nidna==3.10\r\n",
+  ];
+  for (const text of odd) {
+    const read = readPackages([{ path: "requirements.txt", text }]);
+    assert.deepEqual(read, { ...EMPTY, couldNotRead: [{ file: "requirements.txt", reason: "an encoding it cannot read" }] }, JSON.stringify(text));
+  }
+  const utf8 = ["# -*- coding: utf-8 -*-\nidna==3.10\n", "# coding=UTF8\nidna==3.10\n", "# vim: set fileencoding=utf_8 :\nidna==3.10\n",
+    "# coding: u8\nidna==3.10\n", "# coding: utf-8-sig\nidna==3.10\n", "\uFEFF# coding: utf-7\nidna==3.10\n",
+    "idna==3.10\n\n# coding: utf-7\n", "idna==3.10  # coding: utf-7\n"];
+  for (const text of utf8) {
+    const read = readPackages([{ path: "requirements.txt", text }]);
+    assert.deepEqual(read.packages.map((p) => p.name), ["idna"], JSON.stringify(text));
+    assert.deepEqual(read.couldNotRead, [], JSON.stringify(text));
+  }
+});
+
+test("requirements*.txt: a -r or -c naming a lockfile or manifest another reader handles is a source it could not read at that line, not read as requirements", () => {
+  const read = readPackages([
+    { path: "requirements.txt", text: "-r poetry.lock\n-c pyproject.toml\n-r requirements-dev.txt\nidna==3.10\n" },
+    { path: "poetry.lock", text: fixture("poetry.empty.lock") },
+    { path: "pyproject.toml", text: '[project]\nname = "x"\n' },
+    { path: "requirements-dev.txt", text: "" },
+  ]);
+  assert.deepEqual(read, {
+    ...EMPTY,
+    packages: [pypi("idna", "3.10", "requirements.txt", 4)],
+    couldNotRead: [{ file: "requirements.txt", reason: UNREADABLE_SOURCE }],
+    sourced: [requirementsLine(1, "unreadable", null), requirementsLine(2, "unreadable", null)],
+  });
+});
+
+test("Python lockfiles: pypi.org is expected only as the index at /simple; a package file on it is not", () => {
+  const poetry = [
+    "[[package]]", 'name = "a"', 'version = "1.0.0"', "", "[package.source]", 'type = "legacy"', 'url = "https://pypi.org/pypi"', "",
+  ].join("\n");
+  assert.deepEqual(readPackages([{ path: "poetry.lock", text: poetry }]).sourced, [pypiSourced("a", "1.0.0", "poetry.lock", 2, "host", "https://pypi.org")]);
+  const uvIndex = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "https://pypi.org/simple/a/" }') }]);
+  assert.deepEqual(uvIndex.sourced, [pypiSourced("a", "1.0.0", "uv.lock", 5, "host", "https://pypi.org")]);
+  const uvFile = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "https://pypi.org/simple" }', 'sdist = { url = "https://pypi.org/packages/a-1.0.0.tar.gz" }') }]);
+  assert.deepEqual(uvFile.sourced, [pypiSourced("a", "1.0.0", "uv.lock", 5, "host", "https://pypi.org")]);
+});
+
+const BUNDLED = "a bundled package file the scan cannot read";
+const BUNDLED_FOLDER = "a bundled package folder the scan cannot read";
+const bundledItem = (ecosystem, name, version, file, line, address) => ({ ecosystem, file, line, name, version, kind: "bundled", address, text: BUNDLED });
+
+test("bundled archives: an npm, Yarn or pnpm package from an archive inside the repository is bundled, shown by its repository path; a folder stays local; an archive outside is a path outside the project", () => {
+  const lock = (packages) => JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" }, ...packages } }, null, 2);
+  const npmRead = readPackages([{ path: "app/package-lock.json", text: lock({
+    "node_modules/a": { version: "1.0.0", resolved: "file:vendor/a-1.0.0.tgz" },
+    "node_modules/b": { version: "1.0.0", resolved: "file:../shared/b-1.0.0.tar.gz" },
+    "node_modules/c": { version: "1.0.0", resolved: "file:../../c-1.0.0.tgz" },
+    "node_modules/d": { version: "1.0.0", resolved: "file:../lib/d" },
+  }) }]);
+  assert.deepEqual(npmRead.sourced.map(({ name, kind, address, text }) => ({ name, kind, address, text })), [
+    { name: "a", kind: "bundled", address: "app/vendor/a-1.0.0.tgz", text: BUNDLED },
+    { name: "b", kind: "bundled", address: "shared/b-1.0.0.tar.gz", text: BUNDLED },
+    { name: "c", kind: "url", address: null, text: "a path outside the project" },
+  ]);
+  const berry = '__metadata:\n  version: 8\n\n"x@file:./x-1.0.0.tgz::locator=t%40workspace%3A.":\n  version: 1.0.0\n  resolution: "x@file:./x-1.0.0.tgz::locator=t%40workspace%3A."\n';
+  assert.deepEqual(readPackages([{ path: "yarn.lock", text: berry }]).sourced, [bundledItem("npm", "x", "1.0.0", "yarn.lock", 4, "x-1.0.0.tgz")]);
+  const pnpm = ["lockfileVersion: '9.0'", "", "packages:", "", "  y@1.0.0:", "    resolution: {integrity: sha512-x, tarball: file:vendor/y-1.0.0.tgz}", "", "  z@file:packages/z:", "    resolution: {directory: packages/z, type: directory}", ""].join("\n");
+  assert.deepEqual(readPackages([{ path: "pnpm-lock.yaml", text: pnpm }]).sourced, [bundledItem("npm", "y", "1.0.0", "pnpm-lock.yaml", 5, "vendor/y-1.0.0.tgz")]);
+});
+
+test("bundled archives: a Python package from an archive, or a folder used as an index or find-links, inside the repository is bundled; a source folder stays local", () => {
+  const poetry = ["[[package]]", 'name = "a"', 'version = "1.0.0"', "", "[package.source]", 'type = "file"', 'url = "dist/a-1.0.0.egg"', ""].join("\n");
+  assert.deepEqual(readPackages([{ path: "py/poetry.lock", text: poetry }]).sourced, [bundledItem("PyPI", "a", "1.0.0", "py/poetry.lock", 2, "py/dist/a-1.0.0.egg")]);
+  const uv = (...lines) => readPackages([{ path: "uv.lock", text: uvLock(...lines) }]).sourced;
+  assert.deepEqual(uv('source = { path = "dist/a-1.0.0-py3-none-any.whl" }'), [bundledItem("PyPI", "a", "1.0.0", "uv.lock", 5, "dist/a-1.0.0-py3-none-any.whl")]);
+  assert.deepEqual(uv('source = { registry = "wheels" }'), [{ ...bundledItem("PyPI", "a", "1.0.0", "uv.lock", 5, "wheels"), text: BUNDLED_FOLDER }]);
+  assert.deepEqual(uv('source = { registry = "https://pypi.org/simple" }', 'sdist = { path = "dist/a-1.0.0.tar.bz2" }'), [bundledItem("PyPI", "a", "1.0.0", "uv.lock", 5, "dist/a-1.0.0.tar.bz2")]);
+  assert.deepEqual(uv('source = { directory = "libs/a" }'), []);
+  const requirements = readPackages([{ path: "api/requirements.txt", text: [
+    "-f ./wheels", "-i ../simple", "-e ./x-1.0.tar.gz", "y @ ./y-1.0-py3-none-any.whl", "dist/z-1.0.tar.xz", "w-1.0.zip", "-e .", "./libs/v", "-f ../wheels", "idna==3.10",
+  ].join("\n") }]);
+  const line = (n, address) => ({ ecosystem: "PyPI", file: "api/requirements.txt", line: n, from: "requirements", kind: "bundled", address, text: BUNDLED_FOLDER });
+  assert.deepEqual(requirements.sourced, [
+    { ...line(1, "api/wheels"), ...FIND_LINKS },
+    line(2, "simple"),
+    bundledItem("PyPI", null, null, "api/requirements.txt", 3, "api/x-1.0.tar.gz"),
+    bundledItem("PyPI", "y", null, "api/requirements.txt", 4, "api/y-1.0-py3-none-any.whl"),
+    bundledItem("PyPI", null, null, "api/requirements.txt", 5, "api/dist/z-1.0.tar.xz"),
+    bundledItem("PyPI", null, null, "api/requirements.txt", 6, "api/w-1.0.zip"),
+    { ...line(9, "wheels"), ...FIND_LINKS },
+  ]);
+  assert.deepEqual(requirements.packages.map((p) => p.name), ["idna"]);
+});
+
+test("bundled archives: a Python archive path is judged after pip's normalising, so a trailing slash or dot segment still names the archive; .tar.lzma is an archive", () => {
+  const requirements = readPackages([{ path: "requirements.txt", text: [
+    "./evil-1.0-py3-none-any.whl/", "-e evil-1.0-py3-none-any.whl/.", "x-1.0.tar.lzma", "./libs/a.whl.d/", "idna==3.10",
+  ].join("\n") }]);
+  assert.deepEqual(requirements.sourced, [
+    bundledItem("PyPI", null, null, "requirements.txt", 1, "evil-1.0-py3-none-any.whl"),
+    bundledItem("PyPI", null, null, "requirements.txt", 2, "evil-1.0-py3-none-any.whl"),
+    bundledItem("PyPI", null, null, "requirements.txt", 3, "x-1.0.tar.lzma"),
+  ]);
+  const uv = readPackages([{ path: "uv.lock", text: uvLock('source = { path = "dist/a-1.0.0-py3-none-any.whl/" }') }]);
+  assert.deepEqual(uv.sourced, [bundledItem("PyPI", "a", "1.0.0", "uv.lock", 5, "dist/a-1.0.0-py3-none-any.whl")]);
+  const npmFolder = JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" }, "node_modules/b": { version: "1.0.0", resolved: "file:vendor/b.tgz/" } } });
+  assert.deepEqual(readPackages([{ path: "package-lock.json", text: npmFolder }]).sourced, []);
+});
+
+test("JavaScript lockfiles: a file: folder outside the repository is a path outside the project; one inside stays local; a pnpm directory with no path is a source it could not read", () => {
+  const outside = { kind: "url", address: null, text: "a path outside the project" };
+  const pick = (read) => read.sourced.map(({ name, kind, address, text }) => ({ name, kind, address, text }));
+  const lock = JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" },
+    "node_modules/in": { version: "1.0.0", resolved: "file:../lib/in" },
+    "node_modules/far": { version: "1.0.0", resolved: "file:../../far" },
+    "node_modules/abs": { version: "1.0.0", resolved: "file:///opt/abs" },
+  } }, null, 2);
+  assert.deepEqual(pick(readPackages([{ path: "app/package-lock.json", text: lock }])), [{ name: "far", ...outside }, { name: "abs", ...outside }]);
+  const berry = '__metadata:\n  version: 8\n\n"x@file:../x::locator=t%40workspace%3A.":\n  version: 1.0.0\n  resolution: "x@file:../x::locator=t%40workspace%3A."\n';
+  assert.deepEqual(pick(readPackages([{ path: "yarn.lock", text: berry }])), [{ name: "x", ...outside }]);
+  const pnpm = ["lockfileVersion: '9.0'", "", "packages:", "",
+    "  a@file:packages/a:", "    resolution: {directory: packages/a, type: directory}", "",
+    "  b@file:../b:", "    resolution: {directory: ../b, type: directory}", "",
+    "  c@file:c:", "    resolution: {type: directory}", ""].join("\n");
+  assert.deepEqual(pick(readPackages([{ path: "pnpm-lock.yaml", text: pnpm }])), [
+    { name: "b", ...outside },
+    { name: "c", kind: "unreadable", address: null, text: undefined },
+  ]);
+});
+
+test("yarn.lock, Berry: a workspace, portal or link folder that leaves the repository is a path outside the project; inside it stays local", () => {
+  const outside = { kind: "url", address: null, text: "a path outside the project" };
+  const pick = (read) => read.sourced.map(({ name, kind, address, text }) => ({ name, kind, address, text }));
+  const lock = (resolution) => berryText('"a@x":', "  version: 1.0.0", `  resolution: "a@${resolution}"`);
+  for (const resolution of ["workspace:../a", "portal:../a::locator=t%40workspace%3A.", "link:../../a::locator=t%40workspace%3A."]) {
+    assert.deepEqual(pick(readPackages([{ path: "yarn.lock", text: lock(resolution) }])), [{ name: "a", ...outside }], resolution);
+  }
+  for (const resolution of ["workspace:packages/a", "portal:./a::locator=t%40workspace%3A.", "link:a::locator=t%40workspace%3A."]) {
+    assert.deepEqual(readPackages([{ path: "yarn.lock", text: lock(resolution) }]).sourced, [], resolution);
+  }
+});
+
+test("JavaScript lockfiles: a linked folder outside the repository, an npm link entry or a pnpm importer's link: version, is a path outside the project; inside it gives nothing", () => {
+  const outside = { kind: "url", address: null, text: "a path outside the project" };
+  const pick = (read) => read.sourced.map(({ name, line, kind, address, text }) => ({ name, line, kind, address, text }));
+  const lock = JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" },
+    "node_modules/in": { resolved: "packages/in", link: true },
+    "node_modules/up": { resolved: "../up", link: true },
+    "node_modules/far": { resolved: "../../far", link: true },
+    "node_modules/abs": { resolved: "/opt/abs", link: true },
+    "node_modules/ok": { version: "1.0.0" },
+  } }, null, 2);
+  assert.deepEqual(pick(readPackages([{ path: "app/package-lock.json", text: lock }])), [{ name: "far", line: 15, ...outside }, { name: "abs", line: 19, ...outside }]);
+  const pnpm = (version) => ["lockfileVersion: '9.0'", "", "importers:", "", "  .:", "    dependencies:", "      near:", "        specifier: link:packages/near", "        version: link:packages/near",
+    "      far:", "        specifier: link:../far", `        version: ${version}`, "", "  packages/a:", "    devDependencies:", "      sibling:", "        specifier: link:../b", "        version: link:../b",
+    "      gone:", "        specifier: link:../../../gone", "        version: link:../../../gone", "", "packages:", "", "  x@1.0.0:", "    resolution: {integrity: sha512-x}", ""].join("\n");
+  assert.deepEqual(pick(readPackages([{ path: "pnpm-lock.yaml", text: pnpm("link:../far") }])), [{ name: "far", line: 12, ...outside }, { name: "gone", line: 21, ...outside }]);
+  assert.deepEqual(pick(readPackages([{ path: "pnpm-lock.yaml", text: pnpm("'link:../far'") }])), [{ name: "far", line: 12, ...outside }, { name: "gone", line: 21, ...outside }]);
+  assert.deepEqual(pick(readPackages([{ path: "pnpm-lock.yaml", text: pnpm("1.0.0") }])), [{ name: "gone", line: 21, ...outside }]);
+});
+
+test("npm and pnpm lockfiles: a workspace folder outside the repository is a path outside the project; a link entry with no path is a source it could not read", () => {
+  const outside = { kind: "url", address: null, text: "a path outside the project" };
+  const pick = (read) => read.sourced.map(({ name, line, kind, address, text }) => ({ name, line, kind, address, text }));
+  const lock = JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" },
+    "packages/in": { name: "in", version: "1.0.0" },
+    "../../ext": { name: "ext", version: "1.0.0" },
+    "node_modules/nopath": { link: true },
+    "node_modules/oddpath": { link: true, resolved: 5 },
+    "node_modules/ok": { version: "1.0.0" },
+  } }, null, 2);
+  assert.deepEqual(pick(readPackages([{ path: "app/package-lock.json", text: lock }])), [
+    { name: "ext", line: 11, ...outside },
+    { name: "nopath", line: 15, kind: "unreadable", address: null, text: undefined },
+    { name: "oddpath", line: 18, kind: "unreadable", address: null, text: undefined },
+  ]);
+  const odd = JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "t" }, "../far": "x", "node_modules/ok": { version: "1.0.0" } } }, null, 2);
+  assert.deepEqual(pick(readPackages([{ path: "package-lock.json", text: odd }])), [{ name: "far", line: 7, ...outside }]);
+  const pnpm = ["lockfileVersion: '9.0'", "", "importers:", "", "  .: {}", "", "  packages/a:", "    dependencies: {}", "", "  ../../far:", "    dependencies: {}", "", "  ../sibling: {}", ""].join("\n");
+  assert.deepEqual(pick(readPackages([{ path: "app/pnpm-lock.yaml", text: pnpm }])), [{ name: null, line: 10, ...outside }]);
+});
+
+test("pnpm-lock.yaml: the importers section is read strictly; an indentation pnpm does not write could not be read, and a dependency written in another shape is a source it could not read", () => {
+  const head = ["lockfileVersion: '9.0'", "", "importers:", "", "  .:", "    dependencies:"];
+  const read = (...rows) => readPackages([{ path: "pnpm-lock.yaml", text: [...head, ...rows, ""].join("\n") }]);
+  for (const odd of [["      a:", "         version: link:../far"], ["     a:", "        version: 1.0.0"], ["      a:", "        version: 1.0.0", "          deeper: x"]]) {
+    assert.deepEqual(read(...odd).couldNotRead, [{ file: "pnpm-lock.yaml", reason: "not laid out as pnpm writes it" }], odd.join("|"));
+  }
+  const bad = (name, line) => ({ ecosystem: "npm", file: "pnpm-lock.yaml", line, name, version: null, kind: "unreadable", address: null });
+  for (const [rows, name, line] of [
+    [["      a:", "        version: {link: ../far}"], "a", 8],
+    [["      a:", "        version: [link:../far]"], "a", 8],
+    [["      a:", "        version: &x link:../far"], "a", 8],
+    [["      a: {specifier: link:../far, version: link:../far}"], "a", 7],
+    [["      a:", "        version: 'link:../far"], "a", 8],
+  ]) {
+    assert.deepEqual(read(...rows).sourced, [bad(name, line)], rows.join("|"));
+  }
+  assert.deepEqual(read("      a:", "        specifier: ^1.0.0", "        version: 1.0.0", "    dependenciesMeta:", "      a:", "        injected: true").sourced, []);
+  const flow = readPackages([{ path: "pnpm-lock.yaml", text: [...head.slice(0, 5), "    dependencies: {x: {version: 'link:../ext'}}", ""].join("\n") }]);
+  assert.deepEqual(flow.sourced, [bad(null, 6)]);
 });

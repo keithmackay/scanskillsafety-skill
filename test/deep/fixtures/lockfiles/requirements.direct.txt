@@ -1,0 +1,2 @@
+alpha @ https://files.example.com/alpha-1.0.tar.gz
+beta@git+https://github.com/someone/beta@3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a

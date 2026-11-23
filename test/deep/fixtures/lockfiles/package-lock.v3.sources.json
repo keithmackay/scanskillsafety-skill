@@ -1,0 +1,50 @@
+{
+  "name": "table-formatter",
+  "version": "1.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "table-formatter",
+      "version": "1.0.0",
+      "dependencies": {
+        "bundler": "^2.0.0",
+        "left-pad": "github:someone/left-pad",
+        "local-thing": "file:vendor/local-thing-1.0.0.tgz",
+        "lodash": "^4.17.21",
+        "no-host": "^1.0.0"
+      }
+    },
+    "node_modules/bundler": {
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/bundler/-/bundler-2.0.0.tgz",
+      "integrity": "sha512-quJQXlTSUGL2LH9SUXo8VwsY4soanhgo6LNSm84E1LBcE8s3O0wpdiRzyR9z/ZZJMlMWv37qOOb9pdJlMUEKFQ==",
+      "bundleDependencies": [
+        "bundled"
+      ]
+    },
+    "node_modules/bundler/node_modules/bundled": {
+      "version": "0.3.1",
+      "resolved": "https://registry.npmmirror.com/bundled/-/bundled-0.3.1.tgz",
+      "inBundle": true
+    },
+    "node_modules/left-pad": {
+      "version": "1.3.0",
+      "resolved": "git+ssh://git@github.com/someone/left-pad.git#3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a"
+    },
+    "node_modules/local-thing": {
+      "version": "1.0.0",
+      "resolved": "file:vendor/local-thing-1.0.0.tgz",
+      "integrity": "sha512-Y38VPSHcqkFrCpFnQ9vuSXmquuv5oXOKpGeT6aGrr3o3Gc9AlVa6JBfUSOCnbxGGZF+/0ooI7KrPuUSztUdU5A=="
+    },
+    "node_modules/lodash": {
+      "version": "4.17.21",
+      "resolved": "https://registry.npmmirror.com/lodash/-/lodash-4.17.21.tgz",
+      "integrity": "sha512-v2kDEe57lecTulaDIuNTPy3Ry4gLGJ6Z1O3vE1krgXZNrsQ+LFTGHVxVjcXPs17LhbZVGedAJv8XZ1tvj5FvSg=="
+    },
+    "node_modules/no-host": {
+      "version": "1.0.0",
+      "integrity": "sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g=="
+    }
+  }
+}

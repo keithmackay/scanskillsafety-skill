@@ -25,10 +25,14 @@ function classifyFile(relPath, bytes, size = bytes.length) {
   }
 }
 
+// An error code as the system gives one (EACCES, ELOOP). An error's message is never shown: it can name a local path.
+const ERROR_CODE = /^[A-Z][A-Z0-9_]{1,30}$/;
+const unreadableReason = (err) => (typeof err?.code === "string" && ERROR_CODE.test(err.code) ? `unreadable (${err.code})` : "unreadable");
+
 function listEveryFile(root) {
   const files = [];
   const leftOut = [];
-  const unreadable = (relPath, err) => leftOut.push({ path: relPath, reason: `unreadable (${err.code ?? err.message})` });
+  const unreadable = (relPath, err) => leftOut.push({ path: relPath, reason: unreadableReason(err) });
   const walk = (dir, rel) => {
     let entries;
     try {

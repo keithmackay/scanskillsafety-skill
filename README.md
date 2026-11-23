@@ -4,12 +4,12 @@ Works with: Claude Code · Codex · Antigravity · Gemini CLI
 
 Check a Claude Code skill, plugin, or MCP server for prompt-injection phrasing, exfiltration URLs, hidden text, leaked secrets, and destructive shell commands before you install it. Point it at a GitHub link or a local folder and it reads the files Claude Code would load (`SKILL.md`, plugin manifests, commands, agents, hooks, `.mcp.json`), pattern-matches them, and reports a red/yellow/green rating with the file and line of every hit. It never runs the code it's checking and never contacts any service except the target's own host.
 
-`--deep` goes further on your own machine: it reads every file of the exact commit you would install, lists what runs at install and start-up, checks the packages it pulls in against OSV, and can have Claude read every file through your own `claude` CLI once you agree to the plan. It names every service it will contact, and what each receives, before it sends anything.
+`--deep` goes further on your own machine: it reads every file of the exact commit you would install, lists what runs at install and start-up, reports packages it pulls in from anywhere but the official registries, checks the rest against OSV, and can have Claude read every file through your own `claude` CLI once you agree to the plan. It names every service it will contact, and what each receives, before it sends anything.
 
 It's the same scanner that produces the safety badge on [findsafeskills](https://findsafeskills.com) listings, packaged to run on your machine with no dependency on that site.
 
 ```
-Version 1.3.0 · MIT license
+Version 1.4.0 · MIT license
 Source:  https://github.com/keithmackay/scanskillsafety-skill
 Author:  Keith MacKay <technofacto@gmail.com>
 Update:  git -C ~/.claude/skills/scanskillsafety pull   (or: gemini extensions update scanskillsafety)
@@ -38,7 +38,7 @@ Issues:  https://github.com/keithmackay/scanskillsafety-skill/issues
 - **Points at the evidence** — every finding names its file and line and quotes the line (with any secret-shaped token redacted), so you can judge it yourself.
 - **Honest about its limits** — prints what it does *not* check on every run; a green result means "no known pattern found," not "safe."
 - **Scriptable** — exit codes per rating and a `--json` mode.
-- **A deeper check when you want one** — `--deep` reads every file of the exact commit, lists what runs at install, checks dependencies against OSV and, with your agreement, has Claude read every file. Claude's findings are shown apart and never change the rating.
+- **A deeper check when you want one** — `--deep` reads every file of the exact commit, lists what runs at install, reports dependencies from outside the official registries, checks the rest against OSV and, with your agreement, has Claude read every file. Claude's findings are shown apart and never change the rating.
 - **No dependencies** — one Node.js script plus a compiled, dependency-free scanner library.
 
 ## Installation
@@ -130,7 +130,7 @@ The skill is auto-discovered from `GEMINI.md` after installation.
 scanskillsafety [--json] <local-path-or-repo-url>
 scanskillsafety [--json] --deep [deep options] <local-folder-or-repo-url>   # see Deep scan
 scanskillsafety --help      # usage, options, examples, exit codes
-scanskillsafety --version   # e.g. "scanskillsafety 1.3.0"
+scanskillsafety --version   # e.g. "scanskillsafety 1.4.0"
 ```
 
 An option it doesn't know is refused with exit code `3` rather than ignored, and so is a deep option given without `--deep`. Inside an agent, `/scanskillsafety --help` shows usage and `/scanskillsafety --version` shows the installed version and whether a newer release exists.
@@ -217,9 +217,9 @@ scanskillsafety --deep [--json] [deep options] <local-folder-or-repo-url>
 The plain scan reads the files an agent loads. `--deep` checks the exact commit a person would install, in five stages:
 
 1. **The exact commit.** For a repository URL on GitHub, Gitea or Forgejo it resolves the branch, tag or commit (`--ref`, default the default branch) to a full commit id and prints it, then reads every file of that one commit. With `git` installed it fetches just that commit (`git fetch --depth 1`) from the repository's own host over https into a temporary bare repository, with no git configuration of yours or the system's (git sees an empty home folder, so no `.gitconfig` or `.netrc` either), no credentials, no prompts, no hooks and no redirects followed, and reads each file from git's own store: nothing from the target is checked out or written as a file, so `.gitattributes` filters and hooks never run, and a file `.gitattributes` keeps out of release archives (`export-ignore`) is read like any other. A Gitea or Forgejo host that won't serve that commit to git is read from its archive instead. A repository that answers with a redirect (moved or renamed on some hosts) is not followed: the tool exits `3` and asks you to scan its current address. Without `git` it downloads the commit's archive from the repository's own host into a temporary folder; since an archive leaves out every `export-ignore` path, which a `git clone` still delivers, it also lists the commit's files from the same host and fetches any the archive left out, one by one, and names each one; more than 50 such files, or a file list the host can't give in full, gives no rating. The output says which way the commit was read ("Read with git", or "Read from the archive" and why). The temporary folder is removed when the scan ends, also on an error or Ctrl-C. Submodules are listed, not read. A link into a subfolder (`…/tree/<ref>/<path>`) reads that folder of the commit. Only public repositories can be read. For a local folder it names the git commit at `HEAD` and says whether there are uncommitted changes (then the files scanned are not exactly any commit); outside a git checkout it says no commit can be named. A link to a single file, or a local file, is refused (exit `3`).
-2. **Every file.** The static rules run on every text file, tests included, with no limit on the number or size of files. Binary files, files that aren't UTF-8, files over 5 MB, and symbolic links (never followed) are listed by name with the reason. Findings in test files that nothing launches are listed under their own heading and don't count toward the rating, so a security tool's test fixtures don't turn it red; test files something does run count as usual. The rating comes from the same rules as the plain scan.
+2. **Every file.** The static rules run on every text file, tests included, with no limit on the number or size of files. Binary files, files that aren't UTF-8, files over 5 MB, and symbolic links (never followed) are listed by name with the reason. Findings in test files that nothing launches are listed under their own heading and don't count toward the rating, so a security tool's test fixtures don't turn it red; test files something does run count as usual. The same goes for a package source, or an install file it could not read, in a test folder (`test`, `tests`, `__tests__`, `evals`): a lockfile, requirements file, manifest or config there is listed under test files and doesn't count, unless an install-time command names it (a `postinstall` running `pip install -r tests/requirements.txt`, say). The rating comes from the same rules as the plain scan.
 3. **What runs at install and start-up**, listed as facts with the file and the command: npm `preinstall`, `install`, `postinstall` and `prepare` scripts in every `package.json` outside `node_modules/` and `vendor/`; `setup.py` (runs code at install) and the `pyproject.toml` build backend; MCP server commands in `.mcp.json`, `server.json` and plugin manifests; hooks; plugin commands and agents; and scripts a `SKILL.md` names. Each command is scanned as part of the file that holds it.
-4. **The packages it pulls in**, from its lockfiles, checked against [OSV](https://osv.dev) (`--no-osv` turns this off). A package OSV lists as malicious (an id starting `MAL-`) is a critical finding and counts toward the rating. Known vulnerabilities are listed per package (count, highest severity, ids) and don't count toward the rating. If OSV can't be reached, the output says the check did not run; it is never shown as clean.
+4. **The packages it pulls in**, from its lockfiles, requirements files and manifests. Where each one comes from is checked first: a package from anywhere but its ecosystem's official registry, or a config file that sends installs elsewhere, is a warning and is not sent to OSV (see [Where packages come from](#where-packages-come-from)); that part needs no network and runs with `--no-osv` too. The rest are checked against [OSV](https://osv.dev) (`--no-osv` turns this off). A package OSV lists as malicious (an id starting `MAL-`) is a critical finding and counts toward the rating. Known vulnerabilities are listed per package (count, highest severity, ids) and don't count toward the rating. If OSV can't be reached, the output says the check did not run; it is never shown as clean.
 5. **Claude reads every file** (`--no-claude` turns this off), after you agree to the plan below. See [Claude's reading](#claudes-reading).
 
 For a repository URL it also asks findsafeskills whether the repository is listed there (`--no-site` turns this off) and says how the commit it read relates to the one findsafeskills scanned: the same commit; so many commits newer or older, or diverged (GitHub's compare call; on other hosts it names the commit findsafeskills scanned and the scan's date); "not listed on findsafeskills"; or "could not reach findsafeskills", which never means "not listed". A local folder is not compared.
@@ -239,6 +239,78 @@ Before any request leaves your machine, `--deep` names each service it will cont
 | `--budget <tokens>` | Stop Claude's reading at this many tokens |
 | `--model <model>` | The model Claude reads with (default: `sonnet`) |
 
+### Where packages come from
+
+OSV knows a package by its name on the official registry. A package fetched from somewhere else (a mirror, a git repository, a direct download, an archive in the repository) can carry a name OSV knows while holding other code, and a config file in the repository can send every install in its folder to another registry. So `--deep` also reads where each package comes from. It reads only files the scan already read and contacts nothing, so it runs with `--no-osv` too, and when OSV can't be reached.
+
+**Expected:** for npm, `registry.npmjs.org` and `registry.yarnpkg.com`; for PyPI, the index at `https://pypi.org/simple` and package files on `files.pythonhosted.org`. Only over https, on the default port. `pypi.org` counts only as an index: a find-links page (`-f`, `--find-links`) is reported on any host, `pypi.org` included, because pip takes every link it finds on the page.
+
+**Anything else is a warning** (category `package-source`), so the rating is at least yellow (one in a test folder is listed with the test-file findings and doesn't count, unless an install-time command names its file); none of it makes the rating red. Those packages are not sent to OSV, since their name may not mean what OSV's record means. Reported:
+
+- packages from another registry host or a mirror, or over plain `http://`;
+- git dependencies, pinned to a commit or not (the commit is shown when there is one), and Mercurial, Subversion and Bazaar ones (`hg+`, `svn+`, `bzr+`);
+- direct download URLs;
+- package archives inside the repository (`.whl`, `.tar.gz`, `.tgz`, `.tar.bz2`, `.tar.xz`, `.zip`, `.egg` and the like), and a folder in it used as an index or find-links page. `--deep` doesn't read binary files, so nothing checks what they hold; the output calls each one "a bundled package file the scan cannot read", or "a bundled package folder" for a folder. A local source folder (a path to a project folder, `editable = "."`) is not reported: its files are scanned;
+- paths that leave the repository;
+- config settings and index options that send installs in their folder to another registry or index;
+- settings that turn off certificate checks (`.npmrc` `strict-ssl=false`, `.yarnrc.yml` `enableStrictSsl: false`, `pnpm-workspace.yaml` `strictSsl: false`, uv `allow-insecure-host`, Poetry and PDM `verify_ssl = false`), settings that allow plain http from a host (`--trusted-host`, `.yarnrc.yml` `unsafeHttpWhitelist`), and a certificate authority the repository supplies (`.npmrc` `ca` and `cafile`, `.yarnrc.yml` `caFilePath` and `httpsCaFilePath`, `pnpm-workspace.yaml` `ca` and `cafile`), which lets a proxy present any certificate;
+- `.npmrc` `omit-lockfile-registry-resolved=true`, which hides the registry from `package-lock.json`;
+- a source it could not read, and a file that can install packages but could not be read (invalid JSON or TOML, a format version or layout it doesn't read, too large), since any source in it is unknown. A requirements file with only version ranges is not one: it installs from PyPI.
+
+**Common yellows.** Only the official registries are expected; nothing vouches for the bytes a mirror serves, so there is no list of trusted mirrors and no option to add one. These are all yellow: `registry.npmjs.com` (with `.com`), `pypi.python.org`, `npm.pkg.github.com` (GitHub Packages), `download.pytorch.org`, `npm.jsr.io` (where `jsr:` packages come from), and every company mirror. Read the line and decide whether you trust that host.
+
+Packages that record no address of their own but are installed through such a setting (npm entries with no `resolved` under an `.npmrc` `registry=`, `==` pins in a requirements file with `--index-url`) are still sent to OSV: a mirror normally carries the same packages under the same names, and the setting is already a warning. A setting that names an official registry (`registry=https://registry.npmjs.org/`) is not reported.
+
+Addresses are shown cut down, since a registry can put a token in its path: a registry or index as its scheme and host only; a direct download as its host and file name (on github.com the owner and repository too); a git repository without user names, query or fragment. Credentials in config files (`_authToken`, `_auth`, `_password`, `npmAuthToken`, `npmAuthIdent`, alone or after a `//host/:`) are never read, and no token, user name or password appears in the output.
+
+**What is read:**
+
+- **Lockfiles:** `package-lock.json` and `npm-shrinkwrap.json` (each `resolved`, and in version 1 a `version` that holds an address), `yarn.lock` (classic and Berry), `pnpm-lock.yaml`, `poetry.lock` (each `[package.source]`), `uv.lock` (each `source`, `sdist` and `wheels`).
+- **Requirements files:** `requirements*.txt`, and any file inside the repository that a `-r` or `-c` line names, whatever its name: index options (`-i`, `--index-url`, `--extra-index-url`, `-f`, `--find-links`, `--trusted-host`), VCS lines (`git+`, `hg+`, `svn+`, `bzr+`), `name @ <url>` lines, bare archive URLs and paths. A `-r` or `-c` file outside the repository, or at a URL, is reported.
+- **Manifests, always, whether or not there is a lockfile:** `package.json` (`dependencies`, `devDependencies`, `optionalDependencies`, `peerDependencies`, `overrides`, `resolutions`, `pnpm.overrides`, `pnpm.packageExtensions`, `workspaces`) and `pyproject.toml` (`[project]` dependencies and optional dependencies, `[dependency-groups]`, `[build-system] requires`, the `[tool.uv]` dependency lists and `[tool.uv.sources]`, Poetry's dependency tables, PDM's dev-dependencies, uv workspace members).
+- **Config files:** `.npmrc` (`registry`, `@scope:registry`, `replace-registry-host`, `omit-lockfile-registry-resolved`, `strict-ssl`, `ca`, `cafile`, and the file its `userconfig`, `globalconfig` or `prefix` loads, when that file is inside the repository); `.yarnrc` (`registry` and scope registries); `.yarnrc.yml` (`npmRegistryServer`, `npmScopes`, `npmRegistries`, `unsafeHttpWhitelist`, `enableStrictSsl`, `caFilePath`, `httpsCaFilePath`, `packageExtensions`); `pnpm-workspace.yaml` (`registry`, `registries`, `namedRegistries`, `strictSsl`, `ca`, `cafile`, `catalog`, `catalogs`, `overrides`, `packageExtensions`); `uv.toml` and `pyproject.toml` `[tool.uv]` (`index-url`, `extra-index-url`, `find-links`, `[[index]]`, `[pip]`, `allow-insecure-host`); `[[tool.poetry.source]]`, `[[tool.pdm.source]]`, `[[tool.rye.sources]]`; `pdm.toml` (`[pypi]`).
+
+Config files apply when someone installs in the cloned folder, which is what you do when you check a skill before installing it. They don't apply when the target is installed as someone else's dependency, so the output says a setting "names" a registry for installs in this folder.
+
+**"Does not record where its packages come from".** A Yarn Berry lockfile, a pnpm lockfile, and a `package-lock.json` version 2 or 3 can leave out the host their packages come from. When none of the target's config files names a registry for one, `Packages:` says "`<file>` does not record where its packages come from; no config in the target names a registry, so they come from whatever registry the installing machine uses". This is a note, not a finding: those packages come from your own machine's registry, usually the official one. When a config file names another registry, that setting is reported instead.
+
+**Not read:**
+
+- `pip.conf`: pip ignores one in a project folder unless `PIP_CONFIG_FILE` points at it.
+- Pixi and Hatch environments.
+- Bun lockfiles (`bun.lock`, `bun.lockb`): listed as not checked. A Bun project's `package.json` is still read.
+- Settings that redirect only interpreter or prebuilt-binary downloads: uv's `python-install-mirror` and `.npmrc` binary-mirror keys.
+- Yarn 1 `.yarnrc` settings other than `registry` and scope registries, such as `ca`, `cafile` and `strict-ssl`.
+
+**Known limits:**
+
+- An `.npmrc` `userconfig`, `globalconfig` or `prefix` file is followed from the project folder. npm resolves it from the folder it is run in, so running npm in a subfolder can load a different file from the one read. One that names a file outside the repository, a missing file, or a path set from an environment variable is reported as a source it could not read.
+- A version range in a manifest is checked at the version its lockfile holds for that name. If the lockfile is out of sync with the manifest (one `npm ci` would refuse), the range is checked only at the lockfile's version.
+
+Example:
+
+```text
+Packages from outside the registry (each also a finding, above or under test files):
+  .npmrc:1 names the npm registry https://registry.npmmirror.com for installs in this folder
+  .npmrc:2 strict-ssl=false turns off certificate checks
+  2 packages in package-lock.json come from https://registry.npmmirror.com (not checked against OSV):
+    lodash 4.17.21 (line 8), react 19.2.0 (line 12)
+  left-pad in package-lock.json:16 comes from git ssh://github.com/someone/left-pad.git (commit 3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a)
+  left-pad in package.json:6 comes from git https://github.com/someone/left-pad (commit 3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a)
+  requirements.txt:1 names the package index https://pypi.python.org
+  requirements.txt:3 names wheels, a bundled package folder the scan cannot read
+```
+
+At most 100 entries are listed, in file and line order. Setting and index lines are kept first, so a redirect is never only counted, then packages; the rest are counted ("and N more packages and M more settings from other sources") and add no findings, since the 100 listed already make the rating yellow.
+
+With `--json`, these are in `deep.packages`:
+
+- `offRegistry`: one entry per source in each file (all the packages a file fetches from one host are one entry), with `ecosystem` (`npm` or `PyPI`), `kind` (`host`, `http`, `git`, `url`, `bundled` or `unreadable`), `address` (null when there is none to show, with `text` saying what it is), `file`, `line`, `commit` (git only, when pinned), `from` (`config` or `requirements`, for a setting or index line), `scope` (the npm scope a setting covers), `role` (`find-links` for a find-links page, `allows-http` for a setting that allows plain http), `packages` (the first five, each with `name`, `version` and `line`; empty for a setting) and `total` (the packages from that source in that file).
+- `offRegistryMore`: `{ packages, lines }`, the packages and setting lines past the 100 entries kept; the text output mentions them when either count is above zero.
+- `couldNotRead`: the files it could not read, with their reasons, given with OSV off too (`status` `off`).
+- `notRecorded`: `[{ file, ecosystem }]`, the lockfiles that record no registry.
+- `notSentToOsv`: how many packages were kept from OSV because of their source, each counted once however many files name it.
+
 ### The plan, and agreeing to it
 
 Before Claude reads anything, `--deep` prints a plan: the files Claude would read, in order (files that look risky first, then what runs at install and start-up, then what an agent loads, then the rest); the files it leaves out, each with the reason; the number of calls; and an estimate of the input and output tokens. The estimate counts the characters sent over four, plus a fixed cost per call for the prompt and the reply's schema, plus the expected reply.
@@ -248,7 +320,7 @@ Before Claude reads anything, `--deep` prints a plan: the files Claude would rea
 
 The plan id pins exactly what you agreed to: the model and the exact text of every file Claude would read. For a repository URL it is `<commit>:<digest>`, and with no `--ref` the rerun downloads that same commit; for a local folder it is the digest alone. If anything changed since the plan (a file, the commit `--ref` names, or the model), the tool reads nothing, says so, and exits `3`; run `--deep` again without `--claude-ok` for a fresh plan.
 
-Claude's reading leaves out vendored copies (`node_modules/`, `vendor/`), build output (`dist/`, `build/`), files that look minified or generated (a line over 1,000 characters in the first 50, or a generated marker in the first five lines), empty files, and lockfiles (they go to OSV instead). Files are packed into calls of about 60,000 characters; a larger file is split at line boundaries into numbered parts. The calls run one at a time. The reading stops at the budget (before a call the estimate says would pass it, and after any call that did), at a usage limit, at a refusal, or after two failed calls in a row, and lists every file Claude did not read. It ends with a usage line (`Claude tokens: ...`).
+Claude's reading leaves out vendored copies (`node_modules/`, `vendor/`), build output (`dist/`, `build/`), files that look minified or generated (a line over 1,000 characters in the first 50, or a generated marker in the first five lines), empty files, and lockfiles (they go to OSV instead; one in a format the package check does not read, such as `Cargo.lock`, is left out too and says so). Files are packed into calls of about 60,000 characters; a larger file is split at line boundaries into numbered parts. The calls run one at a time. The reading stops at the budget (before a call the estimate says would pass it, and after any call that did), at a usage limit, at a refusal, or after two failed calls in a row, and lists every file Claude did not read. It ends with a usage line (`Claude tokens: ...`).
 
 ### Claude's reading
 
@@ -281,8 +353,8 @@ Notification, SubagentStop and PreCompact hooks were reached by neither run; a c
 - **Files:** a file over 5 MB is listed, not read.
 - **Files left out of the archive** (`.gitattributes` `export-ignore`), when reading from the archive: at most 50 are fetched separately; past that, or when the host's file list is cut short or can't be read, there is no rating (exit `3`). Many projects keep their tests and tooling out of their archives, so without `git` installed a good share of repositories end this way; install `git` to read them.
 - **Git LFS and submodules:** a file stored with Git LFS is read as its pointer text, not the file it points to; submodules are listed, not read.
-- **Lockfiles read:** `package-lock.json` and `npm-shrinkwrap.json` (`lockfileVersion` 1, 2 and 3), `yarn.lock` (classic and Berry), `pnpm-lock.yaml` (`lockfileVersion` 6 and 9), `poetry.lock`, `uv.lock`, and `requirements*.txt` lines pinned with `==`. A lockfile it can't parse, or in another format version, is listed as "could not read". `Cargo.lock`, `go.sum` and `Gemfile.lock` are listed as not checked.
-- **No lockfile:** the names in `package.json` (`dependencies`, `optionalDependencies`, `peerDependencies`) and `pyproject.toml` are checked by name only, and the output says so. A package checked by name only counts as malicious (critical) only when OSV says every version is; otherwise it is a warning naming the affected versions.
+- **Lockfiles read:** `package-lock.json` and `npm-shrinkwrap.json` (`lockfileVersion` 1, 2 and 3), `yarn.lock` (classic and Berry), `pnpm-lock.yaml` (`lockfileVersion` 6 and 9), `poetry.lock`, `uv.lock`, and `requirements*.txt` lines pinned with `==` (with the files their `-r` and `-c` lines name). A lockfile it can't parse, or in another format version, is listed as "could not read" and makes the rating yellow. `Cargo.lock`, `go.sum`, `Gemfile.lock` and Bun's `bun.lock` and `bun.lockb` are listed as not checked.
+- **Manifests:** the names in `package.json` (`dependencies`, `optionalDependencies`, `peerDependencies`) and `pyproject.toml` are checked by name only, and the output says so, unless a lockfile or requirements file covering their folder already sent them with a version; an exact pin (`"1.2.3"`, `==1.2.3`) is sent with its version. A package checked by name only counts as malicious (critical) only when OSV says every version is; otherwise it is a warning naming the affected versions.
 - **OSV details:** severities are fetched for the first 200 advisory ids; the rest are listed without severity, and the output says so.
 
 ### Platforms

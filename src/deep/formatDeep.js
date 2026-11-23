@@ -1,15 +1,20 @@
 // ABOUTME: The deep scan's text output: the plain scan's text, then the commit, the files read and left out, what runs at
-// ABOUTME: install and start-up, the package check, how the commit relates to what findsafeskills scanned, findings in test files
-// ABOUTME: nothing launches and Claude's reading (its plan, or what it found); and the services line.
+// ABOUTME: install and start-up, the package check and packages from outside the registry, how the commit relates to what
+// ABOUTME: findsafeskills scanned, findings in test files nothing launches and Claude's reading (its plan, or what it found); and
+// ABOUTME: the services line.
 "use strict";
 
 const { formatText, pushFinding } = require("../scanTarget");
-const { printable, printableCut, printableLines } = require("../printable");
+const { printable, cut, printableLines } = require("../printable");
+const { n } = require("./util");
+const { comesFrom, lineText, packageName, FIELD_MAX } = require("./sourceText");
+const { NO_PINS_REASON } = require("./lockfiles");
 
 const COMMAND_MAX = 300;
 const SITE_TEXT_MAX = 300;
 
 const pathList = (paths) => paths.map(printable).join(", ");
+const count = (x, one, many) => `${n(x)} ${x === 1 ? one : many}`;
 
 function formatServices(services) {
   if (services.length === 0) return "Deep scan will contact no service.";
@@ -23,10 +28,21 @@ function commitLine(deep) {
   return `Commit: ${deep.commit}`;
 }
 
+// The files it could not read (with OSV off, but for those holding no pinned version, which matters only to the OSV check), then
+// each lockfile that records no registry, as a note: it adds no finding.
+function unreadLines(packages) {
+  const unread = (packages.couldNotRead ?? []).filter((c) => packages.status !== "off" || c.reason !== NO_PINS_REASON);
+  return [
+    ...unread.map((c) => `  Could not read: ${printable(c.file)}: ${c.reason}`),
+    ...(packages.notRecorded ?? []).map((note) => `  ${printable(note.file)} does not record where its packages come from; no config in the target names a registry, so they come from whatever registry the installing machine uses`),
+  ];
+}
+
 function packageLines(packages, findings) {
-  if (packages.status === "off") return ["Packages: not checked (--no-osv)"];
+  if (packages.status === "off") return ["Packages: not checked (--no-osv)", ...unreadLines(packages)];
   const lines = ["Packages:"];
   if (packages.status === "not-run") lines.push(`  The package check did not run (${packages.reason})`);
+  else if (packages.checked === 0 && packages.notSentToOsv > 0) lines.push("  No package was sent to OSV: every one comes from outside the registry.");
   else if (packages.checked === 0) lines.push("  No package found in a lockfile or manifest.");
   else lines.push(`  Checked ${packages.checked} package(s) against OSV.`);
   const malicious = findings.filter((f) => f.source === "osv" && f.category === "malicious-package");
@@ -40,14 +56,46 @@ function packageLines(packages, findings) {
   if (packages.detailsLeft > 0) {
     lines.push(`  ${packages.detailsLeft} more advisory id(s) are listed without severity: OSV's details were fetched for the first 200 only.`);
   }
-  if (packages.namesOnly.length > 0) lines.push(`  Names only (no lockfile, so any version may be installed): ${pathList(packages.namesOnly)}`);
-  for (const c of packages.couldNotRead) lines.push(`  Could not read: ${printable(c.file)}: ${c.reason}`);
+  if (packages.namesOnly.length > 0) lines.push(`  Read from manifests (versions not fixed by a lockfile): ${pathList(packages.namesOnly)}`);
+  lines.push(...unreadLines(packages));
   if (packages.notChecked.length > 0) lines.push(`  Not checked (no support for these lockfiles): ${pathList(packages.notChecked)}`);
   return lines;
 }
 
-const n = (x) => x.toLocaleString("en-US");
-const commits = (count) => `${n(count)} commit${count === 1 ? "" : "s"}`;
+// A package as listed under its source: its name as shown, its version when known (cut when long), and its line.
+const listedPackage = (p) => `${packageName(p.name)}${p.version === null ? "" : ` ${cut(p.version, FIELD_MAX, "…")}`} (line ${p.line})`;
+
+// One source's lines. A setting or index line says what it does. A mirror or a plain-http host is said once for all the packages
+// of its file from there, as is any source of more than one, with the first five listed below it; a source it could not read is
+// said once for its packages; any other source of one package names it, with its line.
+function sourceEntryLines(entry) {
+  const file = printable(entry.file);
+  if (entry.from) return [`  ${file}:${entry.line} ${lineText(entry)}`];
+  const counted = `${count(entry.total, "package", "packages")} in ${file}`;
+  if (entry.kind === "unreadable") return [`  ${comesFrom(counted, entry)} (not checked against OSV)`];
+  if (entry.kind === "host" || entry.kind === "http" || entry.total !== 1) {
+    const left = entry.total - entry.packages.length;
+    const listed = [...entry.packages.map(listedPackage), ...(left > 0 ? [`… and ${n(left)} more`] : [])];
+    return [`  ${comesFrom(counted, entry)} (not checked against OSV):`, `    ${listed.join(", ")}`];
+  }
+  return [`  ${comesFrom(`${packageName(entry.packages[0].name)} in ${file}:${entry.line}`, entry)}`];
+}
+
+// The packages and settings from outside the registry, each also a finding, and those past the entries kept, counted only here;
+// nothing when there are none, or when the result has no such fields.
+function sourceLines(packages) {
+  const { offRegistry = [], offRegistryMore = { packages: 0, lines: 0 } } = packages;
+  const more = [
+    ...(offRegistryMore.packages > 0 ? [count(offRegistryMore.packages, "more package", "more packages")] : []),
+    ...(offRegistryMore.lines > 0 ? [count(offRegistryMore.lines, "more setting", "more settings")] : []),
+  ];
+  if (offRegistry.length === 0 && more.length === 0) return [];
+  const lines = ["Packages from outside the registry (each also a finding, above or under test files):", ...offRegistry.flatMap(sourceEntryLines)];
+  if (more.length > 0) lines.push(`  and ${more.join(" and ")} from other sources (not listed in the findings)`);
+  return lines;
+}
+
+const commits = (x) => count(x, "commit", "commits");
 const dayOf = (timestamp) => (timestamp === null ? "an unknown date" : printable(timestamp.slice(0, 10)));
 
 // How one scan's commit relates to the commit read here. The lookup dates only the text scan, so a script scan's line has no date.
@@ -59,19 +107,19 @@ function relationLine(scan, scannedAt) {
   if (scan.relation === "diverged") {
     return `${scanned}; the two have diverged (this commit has ${commits(scan.newerBy)} the scanned one lacks, and the scanned one has ${n(scan.olderBy)} this commit lacks)`;
   }
-  return `${scanned} (not compared: ${printableCut(scan.reason, SITE_TEXT_MAX)})`;
+  return `${scanned} (not compared: ${cut(printable(scan.reason), SITE_TEXT_MAX)})`;
 }
 
 function siteLines(site) {
   if (site.status === "off") return ["findsafeskills: not compared (--no-site)"];
   if (site.status === "local") return ["findsafeskills: not compared (a local folder has no repository address)"];
-  if (site.status === "unreachable") return [`findsafeskills: could not reach findsafeskills (${printableCut(site.reason, SITE_TEXT_MAX)})`];
-  if (site.status === "refused") return [`findsafeskills: ${printableCut(site.reason, SITE_TEXT_MAX)}`];
+  if (site.status === "unreachable") return [`findsafeskills: could not reach findsafeskills (${cut(printable(site.reason), SITE_TEXT_MAX)})`];
+  if (site.status === "refused") return [`findsafeskills: ${cut(printable(site.reason), SITE_TEXT_MAX)}`];
   if (site.status === "not-listed") return ["findsafeskills: not listed on findsafeskills"];
   const lines = ["findsafeskills:"];
   for (const listing of site.listings) {
-    const rating = listing.rating === null ? "no rating" : `rating: ${printableCut(listing.rating, SITE_TEXT_MAX)}`;
-    lines.push(`  ${listing.url === null ? "a listing with no page address" : printableCut(listing.url, SITE_TEXT_MAX)} (${rating})`);
+    const rating = listing.rating === null ? "no rating" : `rating: ${cut(printable(listing.rating), SITE_TEXT_MAX)}`;
+    lines.push(`  ${listing.url === null ? "a listing with no page address" : cut(printable(listing.url), SITE_TEXT_MAX)} (${rating})`);
     if (listing.text && listing.scripts && listing.text.commit === listing.scripts.commit) {
       lines.push(`    Text and script scans: ${relationLine(listing.text, listing.scannedAt)}`);
       continue;
@@ -141,8 +189,8 @@ function formatDeep(result) {
   if (deep.fetchedSeparately.length > 0) lines.push(`Left out of the archive by .gitattributes; fetched separately: ${pathList(deep.fetchedSeparately)}`);
   lines.push("What runs at install and start-up:");
   if (deep.installTime.length === 0) lines.push("  nothing found");
-  for (const e of deep.installTime) lines.push(`  ${printable(e.file)}: ${printable(e.when)}: ${printableCut(e.command, COMMAND_MAX)}`);
-  lines.push(...packageLines(deep.packages, result.findings));
+  for (const e of deep.installTime) lines.push(`  ${printable(e.file)}: ${printable(e.when)}: ${cut(printable(e.command), COMMAND_MAX)}`);
+  lines.push(...packageLines(deep.packages, result.findings), ...sourceLines(deep.packages));
   lines.push(...siteLines(deep.site));
   if (deep.launchedTests.length > 0) lines.push(`Test files the target runs (counted in the rating): ${pathList(deep.launchedTests)}`);
   if (deep.testFindings.length > 0) {

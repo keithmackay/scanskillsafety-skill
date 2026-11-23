@@ -4,11 +4,10 @@
 
 const { posix } = require("path");
 const { isScriptPath, isConfig } = require("../../lib/scriptFiles");
-const { baseName, compare, isVendored, parseJson } = require("./util");
+const { baseName, compare, folderOf, isVendored, parseJson } = require("./util");
 
 const NPM_HOOKS = ["preinstall", "install", "postinstall", "prepare"];
 
-const folderOf = (p) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
 const byFileCommandWhen = (a, b) => compare(a.file, b.file) || compare(a.command, b.command) || compare(a.when, b.when);
 
 function mcpServerEntries(file, json) {

@@ -12,6 +12,8 @@ const path = require("path");
 const SCRIPT = String.raw`
 const fs = require("fs");
 const env = process.env;
+// Ignored before anything else, so a SIGTERM sent while it is still reading its prompt cannot end it.
+if (env.FAKE_CLAUDE_MODE === "stubborn") process.on("SIGTERM", () => {});
 let stdin = "";
 process.stdin.setEncoding("utf-8");
 process.stdin.on("data", (d) => { stdin += d; });
@@ -25,10 +27,7 @@ process.stdin.on("end", () => {
   if (env.FAKE_CLAUDE_STDERR) process.stderr.write(env.FAKE_CLAUDE_STDERR);
   const mode = env.FAKE_CLAUDE_MODE;
   if (mode === "sleep") return setTimeout(() => {}, 600000);
-  if (mode === "stubborn") {
-    process.on("SIGTERM", () => {});
-    return setInterval(() => {}, 1000);
-  }
+  if (mode === "stubborn") return setInterval(() => {}, 1000);
   if (mode === "huge") return process.stdout.write("x".repeat(17 * 1024 * 1024));
   if (mode === "garbage") return process.stdout.write("this is not JSON");
   if (mode === "refuse") return reply({ stop_reason: "refusal", result: "I will not read this." });
