@@ -4,6 +4,7 @@
 "use strict";
 
 const { OBJECT_ID } = require("./util");
+const { cut } = require("../printable");
 
 // PyPI's index is pypi.org at /simple; its package files are on files.pythonhosted.org. Anything else on pypi.org (a project page
 // renders its README) is not official. The index is matched on the text as written, since pip sends a path as written and the URL
@@ -59,10 +60,13 @@ const PATCH_DEPTH = 2;
 // real source is unknown.
 const UNREAD_SOURCE = Object.freeze({ expected: false, kind: "url", address: null, text: "a source it could not read" });
 
-// What a setting or index line names, kept on the line where its kind alone does not say: a setting that lets installs use plain
-// http from a host (rather than a registry or index at a plain http address), or a find-links page (rather than an index).
-const ALLOWS_HTTP = "allows-http";
+// What the field holding an address names, as a reader passes it to classifySource: a package index, or a page or folder pip takes
+// links from. A find-links line keeps its role, so it is named as one.
+const INDEX = "index";
 const FIND_LINKS = "find-links";
+// A setting that lets installs use plain http from a host, kept on its line so it is not named as a registry or index at a plain
+// http address.
+const ALLOWS_HTTP = "allows-http";
 
 const EXPECTED = Object.freeze({ expected: true });
 const LOCAL = Object.freeze({ expected: false, kind: "local" });
@@ -129,8 +133,8 @@ function gitUrl(text) {
 function isOfficial(ecosystem, text, url, role) {
   if (url.port !== "") return false;
   if (ecosystem !== "PyPI") return (OFFICIAL_HOSTS[ecosystem] ?? []).includes(url.hostname);
-  if (role === "find-links") return false;
-  if (role === "index") return PYPI_INDEX.test(withLowerCaseAuthority(text));
+  if (role === FIND_LINKS) return false;
+  if (role === INDEX) return PYPI_INDEX.test(withLowerCaseAuthority(text));
   return url.hostname === PYPI_FILE_HOST;
 }
 
@@ -143,18 +147,33 @@ function webUrl(ecosystem, text, direct, role) {
   if (url.protocol === "http:") return { expected: false, kind: "http", address: origin };
   if (isOfficial(ecosystem, text, url, role)) return EXPECTED;
   if (!direct) return { expected: false, kind: "host", address: origin };
-  return { expected: false, kind: "url", address: shownArchive(origin, url.pathname) };
+  return { expected: false, kind: "url", address: shownArchive(url) };
 }
 
-// A direct address as shown: the host and the path's last named segment (a slash after it kept), with `…/` between them when the
-// path held more before it; the host alone when the path names nothing.
-function shownArchive(origin, pathname) {
-  let end = pathname.length;
-  while (end > 0 && pathname[end - 1] === "/") end--;
-  if (end === 0) return origin;
-  const start = pathname.lastIndexOf("/", end - 1) + 1;
-  const slash = end < pathname.length ? "/" : "";
-  return `${origin}/${start > 1 ? "…/" : ""}${pathname.slice(start, end)}${slash}`;
+// The path segments GitHub's own download routes put after a repository's owner and name, kept in a github.com address.
+const GITHUB_ROUTES = new Map([["releases", ["releases", "download"]], ["raw", ["raw"]], ["archive", ["archive"]]]);
+
+// A direct address as shown: the host and the path's last named segment (a slash after it kept), with `…/` where the path held
+// more before it; the host alone when the path names nothing. Any other part of the path may hold a token, so it is not shown; on
+// github.com the owner, the repository and GitHub's download route, which are no secret, stay.
+function shownArchive(url) {
+  const origin = `${url.protocol}//${url.host}`;
+  const segments = url.pathname.split("/").filter((segment) => segment !== "");
+  if (segments.length === 0) return origin;
+  const slash = url.pathname.endsWith("/") ? "/" : "";
+  const kept = url.hostname === "github.com" ? githubKept(segments) : [];
+  const file = segments[segments.length - 1];
+  const between = segments.length - 1 > kept.length ? ["…"] : [];
+  return [origin, ...kept, ...between, file].join("/") + slash;
+}
+
+// The owner, repository and download route of a github.com path that starts with them, the owner and repository being names, and
+// goes on to a file; none for any other path.
+function githubKept(segments) {
+  const route = GITHUB_ROUTES.get(segments[2]);
+  if (route === undefined || !isRepositoryPath(segments.slice(0, 2), false)) return [];
+  const kept = segments.slice(0, 2 + route.length);
+  return route.every((word, k) => kept[2 + k] === word) && kept.length < segments.length ? kept : [];
 }
 
 // scp-form git, `user@host:path`, split by hand at the first `@` and the first `:` after it; shown as `git@host:path`, with any
@@ -290,11 +309,7 @@ const PACKAGES_SHOWN = 5;
 
 // The longest package name npm allows (PyPI's are shorter); a longer one is cut, by whole characters, and marked so.
 const NAME_MAX = 214;
-const cutName = (name) => {
-  if (name === null || name.length <= NAME_MAX) return name;
-  const chars = Array.from(name);
-  return chars.length <= NAME_MAX ? name : `${chars.slice(0, NAME_MAX).join("")}…`;
-};
+const cutName = (name) => (name === null ? null : cut(name, NAME_MAX, "…"));
 
 // File order, then line order, an item with no line first.
 const byFileThenLine = (a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : (a.line ?? 0) - (b.line ?? 0));
@@ -335,5 +350,5 @@ function groupSources(sourced) {
 }
 
 module.exports = {
-  classifySource, classifyManifestValue, commitFrom, groupSources, ALLOWS_HTTP, EXPECTED, FIND_LINKS, LOCAL, MAX_SOURCE_ENTRIES, OFFICIAL_HOSTS, NAME_SEGMENT, UNREADABLE,
+  classifySource, classifyManifestValue, commitFrom, groupSources, ALLOWS_HTTP, EXPECTED, FIND_LINKS, INDEX, LOCAL, MAX_SOURCE_ENTRIES, OFFICIAL_HOSTS, NAME_SEGMENT, UNREADABLE,
 };

@@ -2,12 +2,12 @@
 // ABOUTME: [tool.uv]), Poetry's, PDM's and Rye's sources, pdm.toml, and the settings that turn off certificate checks.
 "use strict";
 
-const { FIND_LINKS, UNREADABLE } = require("../packageSources");
+const { FIND_LINKS, INDEX, UNREADABLE } = require("../packageSources");
 const { append, manifestEntries, normalisePyPI, unnamedEntry, withoutBom } = require("./shared");
 const { certificateChecksOff, configEntry } = require("./configEntries");
 const { after, arrayTables, stringOf, tomlValues } = require("./toml");
 const { pythonAddress } = require("./python");
-const { ENV_INDEX } = require("./requirements");
+const { envAddress, keptRole } = require("./requirements");
 const { projectRelative, requirementListEntries } = require("./requirementLists");
 
 // An index or find-links address a setting names, `role` saying which: one set from an environment variable is said to be so;
@@ -15,10 +15,9 @@ const { projectRelative, requirementListEntries } = require("./requirementLists"
 // nothing.
 function configAddressEntries(address, line, folder, role) {
   const relative = projectRelative(address);
-  const named = role === FIND_LINKS ? { role } : {};
-  if (relative.includes("${")) return [configEntry(line, ENV_INDEX, named)];
+  if (relative.includes("${")) return [configEntry(line, envAddress(role), keptRole(role))];
   const verdict = pythonAddress(relative, folder, { pathField: true, role });
-  return verdict.expected ? [] : [configEntry(line, verdict, named)];
+  return verdict.expected ? [] : [configEntry(line, verdict, keptRole(role))];
 }
 
 // uv's allow-insecure-host, whatever hosts it names.
@@ -34,9 +33,9 @@ function verifySslEntries(value) {
 
 // uv's settings that name an index or a find-links page: one address, or a list of them.
 const UV_ADDRESS_SETTINGS = new Map([
-  ["index-url", { role: "index", list: false }],
-  ["extra-index-url", { role: "index", list: true }],
-  ["find-links", { role: "find-links", list: true }],
+  ["index-url", { role: INDEX, list: false }],
+  ["extra-index-url", { role: INDEX, list: true }],
+  ["find-links", { role: FIND_LINKS, list: true }],
 ]);
 
 // uv's index-url, extra-index-url and find-links at `prefix` (the top of uv.toml or its [pip], [tool.uv] in pyproject.toml or its
@@ -89,9 +88,9 @@ const roleByField = (field, kinds, absent) => (fields) => {
   return kinds.get(stringOf(fields.get(field))) ?? null;
 };
 
-const UV_INDEX_ROLE = roleByField("format", new Map([["simple", "index"], ["flat", "find-links"]]), "index");
-const PDM_SOURCE_ROLE = roleByField("type", new Map([["index", "index"], ["find_links", "find-links"]]), "index");
-const RYE_SOURCE_ROLE = roleByField("type", new Map([["index", "index"], ["find-links", "find-links"]]), "index");
+const UV_INDEX_ROLE = roleByField("format", new Map([["simple", INDEX], ["flat", FIND_LINKS]]), INDEX);
+const PDM_SOURCE_ROLE = roleByField("type", new Map([["index", INDEX], ["find_links", FIND_LINKS]]), INDEX);
+const RYE_SOURCE_ROLE = roleByField("type", new Map([["index", INDEX], ["find-links", FIND_LINKS]]), INDEX);
 
 // uv's settings and indexes at `prefix` (the top of uv.toml, or [tool.uv] in pyproject.toml), and its settings for `uv pip` below
 // it in [pip].
@@ -155,7 +154,7 @@ function pdmTomlEntries(values, folder) {
       const url = fields.get("url");
       const address = stringOf(url);
       // [pypi] replaces PyPI's index; only a named index may be a find-links page.
-      const role = name === "" ? "index" : PDM_SOURCE_ROLE(fields);
+      const role = name === "" ? INDEX : PDM_SOURCE_ROLE(fields);
       if (address === null || role === null) out.push(configEntry(url.line, UNREADABLE));
       else append(out, configAddressEntries(address, url.line, folder, role));
     }
@@ -169,7 +168,7 @@ function pdmTomlEntries(values, folder) {
 const pyprojectConfigEntries = (values, folder) => [
   ...uvConfigEntries(values, ["tool", "uv"], folder),
   ...sourceTableEntries(values, ["tool", "poetry", "source"], folder, {
-    roleOf: () => "index",
+    roleOf: () => INDEX,
     urlOptional: (fields) => fields.has("name") && stringOf(fields.get("name"))?.toLowerCase() === "pypi",
     verifiesSsl: true,
   }),

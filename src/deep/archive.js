@@ -10,7 +10,7 @@ const { Readable, Transform, Writable } = require("stream");
 const { pipeline } = require("stream/promises");
 const { fetchResponse, fetchText, describeFailure, repoPath } = require("../fetchRemote");
 const { runTool, describeDuration } = require("./runTool");
-const { printableCut } = require("../printable");
+const { printable, cut } = require("../printable");
 const { OBJECT_ID, COMMIT_LIMITS, describeLimit, temporaryFolder } = require("./util");
 const { fillArchiveGaps } = require("./archiveGaps");
 
@@ -118,7 +118,7 @@ async function checkUnpackedSize(file, limits) {
 function runTar(args) {
   const run = runTool("tar", args, TAR_TIMEOUT_MS);
   if (run.error) throw new Error(`could not unpack the archive (${run.error.message})`);
-  if (run.status !== 0) throw new Error(`could not unpack the archive (tar: ${printableCut(run.stderr.trim(), TAR_COMPLAINT_MAX)})`);
+  if (run.status !== 0) throw new Error(`could not unpack the archive (tar: ${cut(printable(run.stderr.trim()), TAR_COMPLAINT_MAX)})`);
   return run.stdout;
 }
 

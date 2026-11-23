@@ -3,7 +3,7 @@
 "use strict";
 
 const { OBJECT_ID } = require("../util");
-const { classifySource, LOCAL, UNREADABLE } = require("../packageSources");
+const { classifySource, INDEX, LOCAL, UNREADABLE } = require("../packageSources");
 const { bundled, gitRepositorySource, isPackageArchive, OUTSIDE_PROJECT, pathFrom, staysInside, unnamedEntry, Unreadable, UNREADABLE_ENTRY } = require("./shared");
 const { tomlStatements } = require("./toml");
 
@@ -48,7 +48,7 @@ function poetryOrigin(block, folder) {
   const type = block.source.get("type");
   const url = block.source.get("url");
   if (url === undefined) return UNREADABLE_ENTRY;
-  if (type === "legacy") return { classified: pythonAddress(url, folder, { role: "index" }) };
+  if (type === "legacy") return { classified: pythonAddress(url, folder, { role: INDEX }) };
   if (type === "url") return { classified: pythonAddress(url, folder, { direct: true }) };
   if (type === "file" || type === "directory") return { classified: pythonAddress(url, folder, { pathField: true }) };
   if (type !== "git") return UNREADABLE_ENTRY;
@@ -81,7 +81,7 @@ function uvSourceVerdict(value, folder) {
   if (fields.size !== 1 + extra || address.kind !== "string") return UNREADABLE;
   if (kind === "git") return pythonAddress(address.raw, folder, { git: true });
   if (kind === "url") return pythonAddress(address.raw, folder, { direct: true });
-  const verdict = pythonAddress(address.raw, folder, { pathField: true, role: kind === "registry" ? "index" : undefined });
+  const verdict = pythonAddress(address.raw, folder, { pathField: true, role: kind === "registry" ? INDEX : undefined });
   return (kind === "editable" || kind === "virtual") && verdict === LOCAL ? project(pathFrom(folder, address.raw)) : verdict;
 }
 

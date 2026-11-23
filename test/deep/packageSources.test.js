@@ -215,12 +215,19 @@ test("package.json: exec: is a url with no address and a fixed text", () => {
   });
 });
 
-test("a direct archive's address marks a cut path with …; one at the top of its host's path is shown whole", () => {
+test("a direct archive's address marks a cut path with …; one at the top of its host's path is shown whole; on github.com the owner and repository stay", () => {
   assert.deepEqual(
     classifySource("PyPI", "https://github.com/KittenML/KittenTTS/releases/download/0.8.1/kittentts-0.8.1-py3-none-any.whl", { direct: true }),
-    offRegistry("url", "https://github.com/…/kittentts-0.8.1-py3-none-any.whl"),
+    offRegistry("url", "https://github.com/KittenML/KittenTTS/releases/download/…/kittentts-0.8.1-py3-none-any.whl"),
   );
   assert.deepEqual(classifySource("PyPI", "https://files.example.com/x-1.0.whl", { direct: true }), offRegistry("url", "https://files.example.com/x-1.0.whl"));
+  const github = (text) => classifySource("npm", text, { direct: true });
+  assert.deepEqual(github("https://github.com/u/r/raw/main/dist/x-1.0.tgz"), offRegistry("url", "https://github.com/u/r/raw/…/x-1.0.tgz"));
+  assert.deepEqual(github("https://github.com/u/r/archive/refs/tags/v1.tar.gz"), offRegistry("url", "https://github.com/u/r/archive/…/v1.tar.gz"));
+  assert.deepEqual(github("https://github.com/u/r/releases/download/v1/x.tgz"), offRegistry("url", "https://github.com/u/r/releases/download/…/x.tgz"));
+  assert.deepEqual(github("https://user:TOKEN@github.com/u/r/raw/main/x.tgz?token=Q"), offRegistry("url", "https://github.com/u/r/raw/…/x.tgz"));
+  assert.deepEqual(github("https://github.com/u/r%2Fx/raw/main/x.tgz"), offRegistry("url", "https://github.com/…/x.tgz"));
+  assert.deepEqual(github("https://codeload.github.com/u/r/tar.gz/main"), offRegistry("url", "https://codeload.github.com/…/main"));
 });
 
 test("a direct address ending in a slash is shown by its last named segment, with the slash; one with no named segment by its host", () => {
@@ -356,7 +363,7 @@ test("package.json: an http(s) URL naming a repository on GitHub, GitLab or Bitb
     ["http://github.com/u/r", offRegistry("git", "http://github.com/u/r")],
     ["https://gitlab.com/g/sub/r", offRegistry("git", "https://gitlab.com/g/sub/r")],
     ["https://bitbucket.org/u/r.git", offRegistry("git", "https://bitbucket.org/u/r.git")],
-    ["https://github.com/u/r/archive/v1.tar.gz", offRegistry("url", "https://github.com/…/v1.tar.gz")],
+    ["https://github.com/u/r/archive/v1.tar.gz", offRegistry("url", "https://github.com/u/r/archive/v1.tar.gz")],
     ["https://gitlab.com/g/r/-/archive/v1/r-v1.tar.gz", offRegistry("url", "https://gitlab.com/…/r-v1.tar.gz")],
     ["https://bitbucket.org/u/r/get/v1.tar.gz", offRegistry("url", "https://bitbucket.org/…/v1.tar.gz")],
     ["https://codeload.github.com/u/r/tar.gz/main", offRegistry("url", "https://codeload.github.com/…/main")],

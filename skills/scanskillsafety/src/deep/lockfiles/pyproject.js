@@ -3,7 +3,7 @@
 "use strict";
 
 const { OBJECT_ID } = require("../util");
-const { EXPECTED, LOCAL, UNREADABLE } = require("../packageSources");
+const { EXPECTED, FIND_LINKS, INDEX, LOCAL, UNREADABLE } = require("../packageSources");
 const { manifestEntries, normalisePyPI, unnamedEntry, withoutBom, workspaceEntries } = require("./shared");
 const { after, arrayTables, stringOf, tableFields, tomlValues } = require("./toml");
 const { pythonAddress } = require("./python");
@@ -21,7 +21,7 @@ function namedIndexVerdict(indexes, name, folder, builtIn, sameName = (a, b) => 
   const index = indexes.find((candidate) => candidate.name !== null && sameName(candidate.name, name));
   if (index === undefined) return builtIn ?? NAMED_INDEX;
   if (index.url === null) return builtIn ?? UNREADABLE;
-  return pythonAddress(index.url, folder, { role: index.flat ? "find-links" : "index" });
+  return pythonAddress(index.url, folder, { role: index.flat ? FIND_LINKS : INDEX });
 }
 
 // A git repository, one archive or a path a uv or Poetry dependency names; a git commit is the `rev` when it is a commit id.

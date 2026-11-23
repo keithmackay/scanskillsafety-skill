@@ -1633,7 +1633,7 @@ test("requirements*.txt: shapes pip accepts that hold no source, or a pin, read 
     ["-f https://download.pytorch.org/whl/cpu", [], [requirementsLine(1, "host", "https://download.pytorch.org", FIND_LINKS)]],
     ["-i http://mirror.example.com/simple", [], [requirementsLine(1, "http", "http://mirror.example.com")]],
     ["-i https://${USER}:${TOKEN}@mirror.example.com/simple", [], [requirementsLine(1, "host", null, ENV_INDEX)]],
-    ["-f ${WHEELS}", [], [requirementsLine(1, "host", null, { ...ENV_INDEX, ...FIND_LINKS })]],
+    ["-f ${WHEELS}", [], [requirementsLine(1, "host", null, { text: "a find-links page set from an environment variable", ...FIND_LINKS })]],
     ["requests==2.0 \\\n  --hash=sha256:abc\n-i https://mirror.example.com/simple", [pypi("requests", "2.0", "requirements.txt", 1)], [requirementsLine(3, "host", "https://mirror.example.com")]],
   ];
   for (const [text, packages, sourced] of cases) {

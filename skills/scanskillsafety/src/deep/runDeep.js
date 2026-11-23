@@ -21,7 +21,7 @@ const { sourceDetail } = require("./sourceText");
 const { compareWithSite, siteUrl } = require("./siteCompare");
 const { findClaude } = require("./runClaude");
 const { chooseForReading, planReading, readEveryFile, quoteLine } = require("./reading");
-const { printable, printableCut } = require("../printable");
+const { printable, cut } = require("../printable");
 const { isDiscoverable } = require("../discover");
 const { OBJECT_ID, COMMIT_LIMITS } = require("./util");
 const { formatClaudeUsage } = require("../../lib/deep/claudeUsage");
@@ -84,7 +84,7 @@ function addressErrors(target, options) {
   const given = [];
   if (options.site && isRepository(target)) given.push(["FINDSAFESKILLS_URL", siteUrl()]);
   if (options.osv) given.push(["OSV_URL", osvUrl()]);
-  return given.filter(([, value]) => !isWebAddress(value)).map(([name, value]) => `${name} is not an http or https address: ${printableCut(value, ADDRESS_SHOWN_MAX)}`);
+  return given.filter(([, value]) => !isWebAddress(value)).map(([name, value]) => `${name} is not an http or https address: ${cut(printable(value), ADDRESS_SHOWN_MAX)}`);
 }
 
 // Each stage that contacts a service names it here, with what it receives, so the list is complete before any request.

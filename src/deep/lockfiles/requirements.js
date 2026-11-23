@@ -3,7 +3,7 @@
 "use strict";
 
 const { OBJECT_ID } = require("../util");
-const { classifySource, ALLOWS_HTTP, FIND_LINKS: FIND_LINKS_ROLE, UNREADABLE } = require("../packageSources");
+const { classifySource, ALLOWS_HTTP, FIND_LINKS, INDEX, UNREADABLE } = require("../packageSources");
 const { found, isPackageArchive, linesOf, OUTSIDE_PROJECT, pathFrom, Unreadable, UNREADABLE_ENTRY, withoutBom } = require("./shared");
 const { pythonAddress } = require("./python");
 
@@ -27,12 +27,17 @@ const TRUSTED_HOST = /^([A-Za-z0-9.-]+)(?::\d+)?$/;
 const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 const VCS_PREFIXES = ["git+", "hg+", "svn+", "bzr+"];
 const ENV_INDEX = Object.freeze({ expected: false, kind: "host", address: null, text: "an index set from an environment variable" });
+const ENV_FIND_LINKS = Object.freeze({ expected: false, kind: "host", address: null, text: "a find-links page set from an environment variable" });
+// What an address set from an environment variable is, by what its field names (`role`).
+const envAddress = (role) => (role === FIND_LINKS ? ENV_FIND_LINKS : ENV_INDEX);
+// What a line keeps of what its field names: a find-links page is named as one; an index needs no role.
+const keptRole = (role) => (role === FIND_LINKS ? { role } : {});
 
 // What each option pip reads in a requirements file does here: names an index or a folder of archives, allows plain http to a
 // host, names another requirements or constraints file, installs an editable project, applies to the requirement on its line,
 // or changes nothing about where a package comes from (a flag, or a setting with a value).
-const INDEX = "index";
-const FIND_LINKS = "find-links";
+const OPTION_INDEX = "index";
+const OPTION_FIND_LINKS = "find-links";
 const TRUSTED = "trusted";
 const OTHER_FILE = "file";
 const EDITABLE = "editable";
@@ -40,10 +45,10 @@ const REQUIREMENT_OPTION = "requirement";
 const FLAG = "flag";
 const SETTING = "setting";
 const LONG_OPTIONS = new Map([
-  ["--index-url", INDEX],
-  ["--pypi-url", INDEX],
-  ["--extra-index-url", INDEX],
-  ["--find-links", FIND_LINKS],
+  ["--index-url", OPTION_INDEX],
+  ["--pypi-url", OPTION_INDEX],
+  ["--extra-index-url", OPTION_INDEX],
+  ["--find-links", OPTION_FIND_LINKS],
   ["--trusted-host", TRUSTED],
   ["--requirement", OTHER_FILE],
   ["--constraint", OTHER_FILE],
@@ -65,8 +70,8 @@ const LONG_OPTIONS = new Map([
 ]);
 const SHORT_OPTIONS = new Map([["-i", "--index-url"], ["-f", "--find-links"], ["-r", "--requirement"], ["-c", "--constraint"], ["-e", "--editable"], ["-C", "--config-settings"]]);
 
-// A line naming where packages come from, with what it names (`role`) where its kind alone does not say.
-const lineEntry = (line, verdict, role) => ({ line, from: "requirements", classified: verdict, ...(role === undefined ? {} : { role }) });
+// A line naming where packages come from, with `extra` fields such as what it names (`role`) where its kind alone does not say.
+const lineEntry = (line, verdict, extra = {}) => ({ line, from: "requirements", classified: verdict, ...extra });
 const unreadableRequirement = (name, line) => ({ name, version: null, line, ...UNREADABLE_ENTRY });
 // A line it cannot read, naming no package it can tell.
 const unreadableLine = (line) => unreadableRequirement(null, line);
@@ -275,11 +280,10 @@ function requirementEntries(text, line, folder) {
 // is PyPI's index or a folder inside the project; a find-links page is reported on any host. One set from an environment variable
 // is reported as such.
 function indexEntries(value, line, folder, role) {
-  const named = role === FIND_LINKS_ROLE ? role : undefined;
-  if (value.includes("${")) return [lineEntry(line, ENV_INDEX, named)];
-  const verdict = pythonAddress(value, folder, { pathField: role === FIND_LINKS_ROLE, role });
+  if (value.includes("${")) return [lineEntry(line, envAddress(role), keptRole(role))];
+  const verdict = pythonAddress(value, folder, { pathField: role === FIND_LINKS, role });
   if (verdict.unreadable) return [unreadableLine(line)];
-  return verdict.expected || verdict.kind === "local" ? [] : [lineEntry(line, verdict, named)];
+  return verdict.expected || verdict.kind === "local" ? [] : [lineEntry(line, verdict, keptRole(role))];
 }
 
 // A `--trusted-host` value: a host name with a letter in it, or an IPv4 address of four parts, with an optional port; any other is
@@ -288,14 +292,14 @@ function trustedHostEntries(value, line) {
   const host = TRUSTED_HOST.exec(value)?.[1];
   const known = host !== undefined && (/[A-Za-z]/.test(host) || IPV4.test(host));
   const verdict = known ? classifySource("PyPI", `http://${value}`) : UNREADABLE;
-  return verdict.unreadable ? [unreadableLine(line)] : [lineEntry(line, verdict, ALLOWS_HTTP)];
+  return verdict.unreadable ? [unreadableLine(line)] : [lineEntry(line, verdict, { role: ALLOWS_HTTP })];
 }
 
 // What an option on a line of options gives. A `-r` or `-c` file inside the repository is a file to read in turn (`requires`, its
 // path in the repository); one outside it is reported; one at a URL is one it cannot read.
 function optionEntries({ kind, value }, line, folder) {
-  if (kind === INDEX) return indexEntries(value, line, folder, "index");
-  if (kind === FIND_LINKS) return indexEntries(value, line, folder, FIND_LINKS_ROLE);
+  if (kind === OPTION_INDEX) return indexEntries(value, line, folder, INDEX);
+  if (kind === OPTION_FIND_LINKS) return indexEntries(value, line, folder, FIND_LINKS);
   if (kind === TRUSTED) return trustedHostEntries(value, line);
   if (kind !== OTHER_FILE) return [];
   const verdict = pythonAddress(value, folder, { pathField: true });
@@ -313,7 +317,7 @@ function requirementsLineEntries(text, line, folder) {
   const first = words.findIndex((word) => word.startsWith("-"));
   const requirement = (first < 0 ? words : words.slice(0, first)).join(" ").trim();
   const options = parseOptions(first < 0 ? [] : words.slice(first).filter((word) => word !== ""));
-  const expanded = (option) => option.kind !== INDEX && option.kind !== FIND_LINKS && option.value?.includes("${");
+  const expanded = (option) => option.kind !== OPTION_INDEX && option.kind !== OPTION_FIND_LINKS && option.value?.includes("${");
   if (options === null || options.some(expanded)) return [unreadableLine(line)];
   if (requirement !== "") {
     const others = options.some((option) => option.kind !== REQUIREMENT_OPTION);
@@ -356,4 +360,4 @@ function readRequirements(text, folder = "") {
 // file of ranges) gives nothing to check rather than a file it could not read.
 const readNamedRequirements = (text, folder = "") => requirementsFile(text, folder).entries;
 
-module.exports = { readRequirements, readNamedRequirements, addressEntries, ENV_INDEX, NO_PINS_REASON, specifierEntries, splitName };
+module.exports = { readRequirements, readNamedRequirements, addressEntries, envAddress, keptRole, ENV_FIND_LINKS, ENV_INDEX, NO_PINS_REASON, specifierEntries, splitName };

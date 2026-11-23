@@ -3,7 +3,7 @@
 // ABOUTME: whole warning text, a subject followed by what it comes from or what the line names.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { packageSource, lineText, sourceDetail, fieldText } = require("../../src/deep/sourceText");
+const { packageSource, lineText, sourceDetail } = require("../../src/deep/sourceText");
 
 const SHA1 = "3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a";
 const group = (kind, address, packages, extra = {}) => ({
@@ -27,6 +27,9 @@ test("packages: one by its name, several by their count, an unreadable source sa
   assert.equal(sourceDetail(group("unreadable", null, ["x"])), "x has a source it could not read");
   assert.equal(sourceDetail(group("unreadable", null, ["x", null])), "2 packages have a source it could not read");
   assert.equal(sourceDetail(group("http", "http://m.example", ["a", "b"])), "2 packages come from http://m.example");
+  assert.equal(sourceDetail(group("host", "https://m.example", ["a b, c (line 4)"])), '"a b, c (line 4)" comes from https://m.example');
+  assert.equal(sourceDetail(group("host", "https://m.example", ["x\u001b"])), '"x\\u001b" comes from https://m.example');
+  for (const name of ["@scope/x", "Django", "zope.interface", "a_b", "left-pad", "x~y"]) assert.equal(sourceDetail(group("git", "https://github.com/u/r", [name])), `${name} comes from git https://github.com/u/r`);
 });
 
 test("setting and index lines: each kind in one wording, a verb phrase after the file and line", () => {
@@ -37,6 +40,7 @@ test("setting and index lines: each kind in one wording, a verb phrase after the
     [line("requirements", "host", "https://pypi.example.com"), "names the package index https://pypi.example.com"],
     [line("requirements", "host", null, { text: "an index set from an environment variable" }), "names an index set from an environment variable"],
     [line("config", "host", null, { text: "an index set from an environment variable" }), "names an index set from an environment variable"],
+    [line("requirements", "host", null, { text: "a find-links page set from an environment variable", role: "find-links" }), "names a find-links page set from an environment variable"],
     [line("requirements", "url", null, { text: "a path outside the project" }), "names a path outside the project"],
     [line("config", "http", "http://m.example"), "names the npm registry http://m.example for installs in this folder"],
     [line("config", "http", "http://uv.example.com", { ecosystem: "PyPI" }), "names the PyPI registry http://uv.example.com for installs in this folder"],
@@ -63,8 +67,6 @@ test("setting and index lines: each kind in one wording, a verb phrase after the
 test("a field longer than 300 characters is cut there and marked with …, in a package's source and in a line's text", () => {
   const long = `https://m.example/${"a".repeat(400)}`;
   const cut = `${long.slice(0, 300)}…`;
-  assert.equal(fieldText(long), cut);
-  assert.equal(fieldText("x".repeat(300)), "x".repeat(300));
   assert.equal(packageSource(group("url", long, ["a"])), cut);
   assert.equal(packageSource(group("git", long, ["a"], { commit: SHA1 })), `git ${cut} (commit ${SHA1})`);
   assert.equal(sourceDetail(group("host", long, ["a"])), `a comes from ${cut}`);
