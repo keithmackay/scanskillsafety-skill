@@ -207,6 +207,14 @@ const REASONS_ADDING_NO_WARNING = new Set([UNREADABLE_SOURCE_REASON, NO_PINS_REA
 const unreadFinding = ({ file, reason }) =>
   ({ severity: "warning", category: "package-source", source: "deep", file, line: null, detail: `${file} could not be read: ${reason}` });
 
+// How many distinct packages (ecosystem, name and version) were kept from OSV for their source; a setting or index line is no
+// package, one package named in several files or lines counts once, and each package with no name found counts on its own.
+function distinctPackages(sourced) {
+  const packages = sourced.filter((item) => item.from === undefined);
+  const named = packages.filter((item) => item.name !== null);
+  return new Set(named.map((item) => [item.ecosystem, item.name, item.version ?? ""].join("\0"))).size + packages.length - named.length;
+}
+
 // The packages the files pull in and where each comes from, read whether or not OSV is asked; those from the official registry
 // are checked against OSV unless the person turned that off. Packages from elsewhere are never sent to OSV, since their name may
 // not mean what OSV's record means.
@@ -217,7 +225,7 @@ async function packageCheck(files, leftOut, options, fetchImpl) {
     offRegistry: entries,
     offRegistryMore: more,
     notRecorded,
-    notSentToOsv: sourced.filter((item) => item.from === undefined).length,
+    notSentToOsv: distinctPackages(sourced),
   };
   const unreadFiles = couldNotRead.filter((c) => !REASONS_ADDING_NO_WARNING.has(c.reason));
   const sourceFindings = [...entries.map(sourceFinding), ...unreadFiles.map(unreadFinding)];

@@ -553,6 +553,18 @@ test("packages from outside the registry are listed, each source a warning, with
   assert.equal(exitCodeFor(off), 1);
 });
 
+test("notSentToOsv counts each package once, however many files or lines name it from outside the registry; each with no name counts", async () => {
+  const pinned = "left-pad @ git+https://github.com/someone/left-pad@3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a\n";
+  const root = makeTree({
+    "SKILL.md": "Formats tables.",
+    "requirements.txt": pinned + pinned + "other @ https://files.example.com/other-1.0.tar.gz\n",
+    "app/requirements.txt": pinned + "--index-url https://mirror.example.com/simple\n-r https://files.example.com/a.txt\n",
+    "lib/requirements.txt": "-r https://files.example.com/a.txt\n",
+  });
+  const result = await runDeep(root, ALL_OFF, { fetchImpl: fakeFetch({}) });
+  assert.equal(result.deep.packages.notSentToOsv, 4);
+});
+
 test("a malicious package from the registry still makes the rating red beside a package from a mirror", async () => {
   const root = makeTree({ "SKILL.md": "Formats tables.", "package-lock.json": MIRROR_LOCK });
   const fetchImpl = fakeFetch({
