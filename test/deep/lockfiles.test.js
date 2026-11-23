@@ -1220,10 +1220,11 @@ test("poetry.lock: url, file and git sources; a commit that is not a commit id i
   });
 });
 
-test("Python lockfiles: a version that is PEP 440 is kept; any other is never kept, and with no source of its own the entry is unreadable", () => {
+test("Python lockfiles: a version that is PEP 440 is kept, in its normal form; any other is never kept, and with no source of its own the entry is unreadable", () => {
   const versions = ["4.6.2.post1", "2024.8.30", "1!2.0", "1.0+local", "1.0rc1", "1.0.dev0", "1.0.0-beta.1", "v1.0", "1.0-1", "1.0+ubuntu-1.2"];
+  const normal = ["4.6.2.post1", "2024.8.30", "1!2.0", "1.0+local", "1.0rc1", "1.0.dev0", "1.0.0b1", "1.0", "1.0.post1", "1.0+ubuntu.1.2"];
   const uv = versions.map((v, i) => uvLock('source = { registry = "https://pypi.org/simple" }').replace('version = "1.0.0"', `version = "${v}"`).replace('name = "a"', `name = "p${i}"`).split("\n").slice(3).join("\n")).join("\n");
-  assert.deepEqual(readPackages([{ path: "uv.lock", text: `version = 1\n\n${uv}` }]).packages.map((p) => p.version), versions);
+  assert.deepEqual(readPackages([{ path: "uv.lock", text: `version = 1\n\n${uv}` }]).packages.map((p) => p.version), normal);
   const odd = ["https://SECRET@evil.example/x.tgz", "1.0.*", "1..0", "1.0.", "latest", "1.0\u001b[31m"];
   for (const version of odd) {
     const poetry = `[[package]]\nname = "a"\nversion = "${version}"\n`;

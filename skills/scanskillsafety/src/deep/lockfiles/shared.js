@@ -189,6 +189,36 @@ function isPep440(version) {
   return !release.includes("..") && PEP440_SUFFIXES.test(publicPart.slice(release.length));
 }
 
+// A PEP 440 version's parts after its release, captured: the pre-release kind and number, a post-release (as `-N`, or by keyword
+// and number), and a development number.
+const PEP440_PARTS =
+  /^(?:[-_.]?(?<pre>alpha|a|beta|b|preview|pre|c|rc)[-_.]?(?<preN>\d*))?(?:-(?<implicitPost>\d+)|[-_.]?(?<post>post|rev|r)[-_.]?(?<postN>\d*))?(?:[-_.]?(?<dev>dev)[-_.]?(?<devN>\d*))?$/i;
+const PRE_SPELLINGS = new Map([["alpha", "a"], ["a", "a"], ["beta", "b"], ["b", "b"], ["c", "rc"], ["pre", "rc"], ["preview", "rc"], ["rc", "rc"]]);
+// A number as PEP 440 writes it: no leading zeros, and 0 when none is given.
+const pep440Number = (digits) => digits.replace(/^0+(?=\d)/, "") || "0";
+
+// A version PEP 440 accepts (isPep440), in its normal form: lower case, no leading `v`, no zero epoch, numbers without leading
+// zeros, the pre-release as a, b or rc, post-releases as .postN, development releases as .devN, and the local part's separators
+// as dots. `trimRelease` also drops the release's trailing zero numbers, as PEP 440 compares releases (1.0 is 1.0.0).
+function normalisePep440(version, { trimRelease = false } = {}) {
+  const lower = version.toLowerCase();
+  const plus = lower.indexOf("+");
+  const publicPart = (plus < 0 ? lower : lower.slice(0, plus)).replace(/^v/, "");
+  const local = plus < 0 ? "" : `+${lower.slice(plus + 1).replace(/[-_]/g, ".")}`;
+  const bang = publicPart.indexOf("!");
+  const epoch = bang < 0 ? "0" : pep440Number(publicPart.slice(0, bang));
+  const rest = publicPart.slice(bang + 1);
+  const releaseText = /^\d[\d.]*/.exec(rest)[0].replace(/\.$/, "");
+  const release = releaseText.split(".").map(pep440Number);
+  while (trimRelease && release.length > 1 && release[release.length - 1] === "0") release.pop();
+  const parts = PEP440_PARTS.exec(rest.slice(releaseText.length)).groups;
+  const pre = parts.pre ? `${PRE_SPELLINGS.get(parts.pre)}${pep440Number(parts.preN)}` : "";
+  const postNumber = parts.implicitPost ?? (parts.post ? parts.postN : undefined);
+  const post = postNumber === undefined ? "" : `.post${pep440Number(postNumber)}`;
+  const dev = parts.dev ? `.dev${pep440Number(parts.devN)}` : "";
+  return `${epoch === "0" ? "" : `${epoch}!`}${release.join(".")}${pre}${post}${dev}${local}`;
+}
+
 // A PyPI name as PyPI compares names: lower case, each run of `-`, `_` and `.` one `-`.
 const normalisePyPI = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
 
@@ -347,6 +377,7 @@ module.exports = {
   ROOT_OBJECT,
   SEMVER,
   isPep440,
+  normalisePep440,
   normalisePyPI,
   UNREADABLE_ENTRY,
   unnamedEntry,

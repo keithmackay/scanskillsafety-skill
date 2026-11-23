@@ -368,6 +368,44 @@ test("an exact pin in a manifest is sent with its version unless a covering file
   }
 });
 
+test("an exact pin written another way is still a pin: npm's leading = or v and spaces, a PyPI specifier set with one ==", () => {
+  const npmLock = flatmapLock({ "node_modules/flatmap-stream": { version: "1.0.0" } });
+  for (const value of ["=0.1.1", "v0.1.1", "=v0.1.1", " 0.1.1", "0.1.1 "]) {
+    const read = readPackages([{ path: "package.json", text: JSON.stringify({ dependencies: { "flatmap-stream": value } }) }, { path: "package-lock.json", text: npmLock }]);
+    assert.deepEqual(sentNames(read), ["package-lock.json flatmap-stream@1.0.0", "package.json flatmap-stream@0.1.1"], JSON.stringify(value));
+  }
+  for (const requirement of ["flatmap-stream==0.1.1,<2", "flatmap-stream<2,==0.1.1"]) {
+    const read = readPackages([
+      { path: "pyproject.toml", text: `[project]\ndependencies = ["${requirement}"]\n` },
+      { path: "requirements.txt", text: "flatmap-stream==1.0.0\n" },
+    ]);
+    assert.deepEqual(sentNames(read), ["requirements.txt flatmap-stream@1.0.0", "pyproject.toml flatmap-stream@0.1.1"], requirement);
+  }
+});
+
+test("PyPI versions are compared and sent in PEP 440's normal form, trailing zero release numbers not counting", () => {
+  const cases = [
+    ["==0.1.1.0", "flatmap-stream==0.1.1", []],
+    ["==0.1.1", "flatmap-stream==0.1.1.0", []],
+    ["==v0.1.1", "flatmap-stream==1.0.0", ["pyproject.toml flatmap-stream@0.1.1"]],
+    ["==1.0RC1", "flatmap-stream==1.0.0", ["pyproject.toml flatmap-stream@1.0rc1"]],
+    ["==1.0-alpha.2", "flatmap-stream==1.0a2", []],
+    ["==01.002.0post", "flatmap-stream==1.2.post0", []],
+    ["==1.0-1", "flatmap-stream==1.0.post1", []],
+    ["==1.0.DEV", "flatmap-stream==1.0.0", ["pyproject.toml flatmap-stream@1.0.dev0"]],
+    ["==0!1.0+Ubuntu-1", "flatmap-stream==1.0.0", ["pyproject.toml flatmap-stream@1.0+ubuntu.1"]],
+  ];
+  for (const [pin, requirement, alsoSent] of cases) {
+    const read = readPackages([
+      { path: "pyproject.toml", text: `[project]\ndependencies = ["flatmap-stream${pin}"]\n` },
+      { path: "requirements.txt", text: `${requirement}\n` },
+    ]);
+    assert.deepEqual(sentNames(read).slice(1), alsoSent, pin);
+  }
+  const sent = readPackages([{ path: "requirements.txt", text: "Flatmap_Stream==V1.0RC1\n" }]);
+  assert.deepEqual(sentNames(sent), ["requirements.txt flatmap-stream@1.0rc1"]);
+});
+
 test("package.json: Windows line endings give the same lines", () => {
   const text = '{\r\n  "dependencies": {\r\n    "a": "^1",\r\n    "b": "github:u/b"\r\n  }\r\n}\r\n';
   assert.deepEqual(readOne("package.json", text).sourced, [item("npm", "package.json")("b", 4, "git", "https://github.com/u/b")]);

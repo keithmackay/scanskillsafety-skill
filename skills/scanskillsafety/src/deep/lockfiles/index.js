@@ -4,7 +4,7 @@
 
 const { baseName, isVendored } = require("../util");
 const { classifySource } = require("../packageSources");
-const { append, isPep440, localPathVerdict, normalisePyPI, pathFrom, SEMVER, staysInside, Unreadable, UNREADABLE_ENTRY } = require("./shared");
+const { append, isPep440, localPathVerdict, normalisePep440, normalisePyPI, pathFrom, SEMVER, staysInside, Unreadable, UNREADABLE_ENTRY } = require("./shared");
 const { readNpmLock } = require("./npm");
 const { readYarnLock } = require("./yarn");
 const { readPnpmLock } = require("./pnpm");
@@ -110,6 +110,10 @@ function withCheckedVersion(ecosystem, entry) {
 }
 
 const packageName = (ecosystem, name) => (ecosystem === "PyPI" && name !== null ? normalisePyPI(name) : name);
+// A PyPI version as it is sent to OSV, in PEP 440's normal form; and as two versions are compared, its release's trailing zeros
+// dropped too. An npm version is sent and compared as written.
+const sentVersion = (ecosystem, version) => (ecosystem === "PyPI" && version !== null ? normalisePep440(version) : version);
+const comparedVersion = (ecosystem, version) => (ecosystem === "PyPI" ? normalisePep440(version, { trimRelease: true }) : version);
 
 // A package from a source other than the official registry, as read from one file; an unreadable source has no address.
 function sourcedPackage(ecosystem, file, entry, verdict) {
@@ -314,7 +318,7 @@ function readPackages(files, leftOut = []) {
   const result = { packages: [], namesOnly: [], couldNotRead: [], notChecked: [], sourced: [], notRecorded: [] };
   const seen = new Set();
   const add = (ecosystem, file, { name, version, line }) => {
-    const pkg = { ecosystem, name: packageName(ecosystem, name), version, file, line };
+    const pkg = { ecosystem, name: packageName(ecosystem, name), version: sentVersion(ecosystem, version), file, line };
     const key = `${pkg.ecosystem}\0${pkg.name}\0${pkg.version}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -357,7 +361,7 @@ function readPackages(files, leftOut = []) {
       return null;
     }
     const { registry, sourced, requires, unreadable, unrecorded, covers, follows, workspaces } = classifyEntries(kind.ecosystem, f.path, read.entries);
-    const keyOf = (name, version) => (version === null ? name : `${name}@${version}`);
+    const keyOf = (name, version) => (version === null ? name : `${name}@${comparedVersion(kind.ecosystem, version)}`);
     const coveredEntry = (entry) => coveredHere(kind.ecosystem, f.path, keyOf(packageName(kind.ecosystem, entry.name), entry.version));
     const sent = manifest ? registry.filter((entry) => !coveredEntry(entry)) : registry;
     for (const entry of sent) add(kind.ecosystem, f.path, entry);

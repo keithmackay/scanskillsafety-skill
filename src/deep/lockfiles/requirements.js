@@ -245,10 +245,13 @@ function specifierEntries({ name, rest }, line) {
   if (specifier.startsWith("(") && specifier.endsWith(")")) specifier = specifier.slice(1, -1).trim();
   const clauses = specifier.split(",").map((clause) => VERSION_CLAUSE.exec(clause.trim()));
   if (clauses.some((clause) => clause === null)) return [unreadableRequirement(name, line)];
-  if (clauses.length !== 1) return null;
-  const [, operator, version] = clauses[0];
-  if (operator === "===" || (operator === "==" && version.endsWith(".*"))) return [{ name, version: null, line }];
-  return operator === "==" ? [{ name, version, line }] : null;
+  if (clauses.length === 1 && clauses[0][1] === "===") return [{ name, version: null, line }];
+  // One `==` pins one release whatever other clauses there are; with a wildcard, alone, it pins a series.
+  const pins = clauses.filter(([, operator]) => operator === "==");
+  if (pins.length !== 1) return null;
+  const [, , version] = pins[0];
+  if (version.endsWith(".*")) return clauses.length === 1 ? [{ name, version: null, line }] : null;
+  return [{ name, version, line }];
 }
 
 const looksLikePath = (text) => /^[.~]/.test(text) || text.includes("/") || text.includes("\\") || isPackageArchive(text);
