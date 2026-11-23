@@ -40,14 +40,22 @@ const NPM_NAME = /^(?:@[A-Za-z0-9-][A-Za-z0-9._~-]*\/)?[A-Za-z0-9-][A-Za-z0-9._~
 const VERSION_LIKE = /^v?\d+(?:\.(?:\d+|x|\*))*(?:[-+][0-9A-Za-z.+-]*)?$/i;
 const isPackageName = (text) => NPM_NAME.test(text) && !VERSION_LIKE.test(text);
 
-// The package an npm alias (`npm:<name>@<range>`, `npm:<name>`, in any case) names, and whether a range follows it; null for any
-// other value, or when the text after `npm:` is no package name (`npm:^4.17.21`), which leaves the key's package.
+// The one release a range pins, as npm reads an exact version (spaces around it, one leading `=`, then one `v`), or null for any
+// other range or tag.
+function exactVersion(range) {
+  const exact = range.trim().replace(/^=/, "").replace(/^v/, "");
+  return SEMVER.test(exact) ? exact : null;
+}
+
+// The package an npm alias (`npm:<name>@<range>`, `npm:<name>`, in any case) names, whether a range follows it and the version an
+// exact one pins; null for any other value, or when the text after `npm:` is no package name (`npm:^4.17.21`), which leaves the
+// key's package.
 function aliasParts(value) {
   if (value.slice(0, 4).toLowerCase() !== "npm:") return null;
   const spec = value.slice(4);
   const at = spec.indexOf("@", 1);
   const name = at < 0 ? spec : spec.slice(0, at);
-  return isPackageName(name) ? { name, ranged: at >= 0 } : null;
+  return isPackageName(name) ? { name, ranged: at >= 0, version: at < 0 ? null : exactVersion(spec.slice(at + 1)) } : null;
 }
 const aliasTarget = (value) => aliasParts(value)?.name ?? null;
 
@@ -100,7 +108,7 @@ function registryTarball(value) {
 // key's package.
 function namedPackages(value, keyName) {
   const alias = aliasParts(value);
-  if (alias !== null) return [{ name: alias.name, version: null }, ...(alias.ranged ? [] : [{ name: keyName, version: null }])];
+  if (alias !== null) return [{ name: alias.name, version: alias.version }, ...(alias.ranged ? [] : [{ name: keyName, version: null }])];
   const patched = patchTarget(value);
   if (patched !== null) return [{ name: patched, version: null }];
   if (!/^https?:/i.test(value)) return null;
@@ -147,11 +155,8 @@ function dependencyFound(packageName, { value, line }, { checked, overrides }, f
   if (!verdict.expected) return [{ entry: { name: packageName, version: null, line, classified: verdict }, checked }];
   const named = namedPackages(value, packageName);
   if (named?.unreadable) return [{ entry: unreadableNamed(packageName, line), checked }];
-  // An exact version pins one release, which is checked as such (npm reads it with spaces around it and one leading `=`, then one
-  // `v`, before it); a range or a tag only names the package.
-  const exact = value.trim().replace(/^=/, "").replace(/^v/, "");
-  const version = SEMVER.test(exact) ? exact : null;
-  if (named === null) return checked ? [{ entry: { name: packageName, version, line }, checked: true }] : [];
+  // An exact version pins one release, which is checked as such; a range or a tag only names the package.
+  if (named === null) return checked ? [{ entry: { name: packageName, version: exactVersion(value), line }, checked: true }] : [];
   if (!checked && !overrides) return [];
   return named.map(({ name, version }) => ({ entry: { name, version, line }, checked: true }));
 }

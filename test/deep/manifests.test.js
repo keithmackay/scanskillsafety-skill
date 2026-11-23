@@ -383,6 +383,23 @@ test("an exact pin written another way is still a pin: npm's leading = or v and 
   }
 });
 
+test("an npm alias to an exact version pins the aliased package; a range of exact versions is still a range", () => {
+  const npmLock = flatmapLock({ "node_modules/flatmap-stream": { version: "1.0.0" }, "node_modules/@s/x": { version: "1.2.3" } });
+  const cases = [
+    [{ y: "npm:flatmap-stream@0.1.1" }, ["package.json flatmap-stream@0.1.1"]],
+    [{ y: "npm:flatmap-stream@=v0.1.1" }, ["package.json flatmap-stream@0.1.1"]],
+    [{ y: "npm:flatmap-stream@1.0.0" }, []],
+    [{ y: "npm:@s/x@=v1.2.3" }, []],
+    [{ y: "npm:@s/x@1.2.4" }, ["package.json @s/x@1.2.4"]],
+    [{ y: "npm:flatmap-stream@^0.1.0" }, []],
+    [{ "flatmap-stream": "0.1.1 || 0.1.1" }, []],
+  ];
+  for (const [dependencies, alsoSent] of cases) {
+    const read = readPackages([{ path: "package.json", text: JSON.stringify({ dependencies }) }, { path: "package-lock.json", text: npmLock }]);
+    assert.deepEqual(sentNames(read).slice(2), alsoSent, JSON.stringify(dependencies));
+  }
+});
+
 test("PyPI versions are compared and sent in PEP 440's normal form, trailing zero release numbers not counting", () => {
   const cases = [
     ["==0.1.1.0", "flatmap-stream==0.1.1", []],
