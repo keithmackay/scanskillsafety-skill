@@ -65,7 +65,7 @@ function readNpmLock(text, folder = "") {
     // entry with no path is one it cannot read.
     const out = [];
     const installed = [];
-    const packages = [];
+    const versioned = [];
     // The line of a workspace key whose value is not an object, which the key lines do not hold: read only when one is needed.
     let members = null;
     const memberLine = (key) => {
@@ -82,7 +82,7 @@ function readNpmLock(text, folder = "") {
           const line = isObject(entry) ? lineOf(key) : memberLine(key);
           out.push({ name: named, version: null, line, classified: OUTSIDE_PROJECT });
         }
-      } else if (entry && entry.link) {
+      } else if (isObject(entry) && entry.link) {
         const linked = typeof entry.resolved === "string" ? staysInside(folder, entry.resolved) : null;
         const link = { name: packageName(key, entry), version: null };
         if (linked === null) out.push({ ...link, line: lineOf(key), ...UNREADABLE_ENTRY });
@@ -92,35 +92,58 @@ function readNpmLock(text, folder = "") {
         installed.push(key);
         if (isObject(entry) && typeof entry.version === "string") {
           const pkg = { name: packageName(key, entry), version: entry.version, line: lineOf(key), ...npmSource(entry) };
-          packages.push(pkg);
+          versioned.push(pkg);
           out.push(pkg);
         } else out.push(unreadableNamed(packageName(key, entry), isObject(entry) ? lineOf(key) : memberLine(key)));
       }
     }
-    found(packages, installed.length);
+    found(versioned, installed.length);
     return out;
   }
   if (version === 1) {
     const dependenciesOf = (entry) => Object.entries(section(entry.dependencies));
     const out = [];
     const versioned = [];
-    // Depth first in document order, with a stack of the entries still to visit at each level, so nesting cannot run out of
-    // stack.
-    const stack = [dependenciesOf(json).reverse()];
+    // The line of an entry whose value is not an object, which the key lines do not hold: its member in its level's dependencies
+    // object, found by walking down from the root through the entries above it, each level's object found once and only when a
+    // line is needed.
+    let members = null;
+    const objectOf = (level) => {
+      members ??= jsonMembers(text);
+      const unfound = [];
+      for (let at = level; at !== null && at.object === undefined; at = at.parent) unfound.push(at);
+      for (let k = unfound.length - 1; k >= 0; k--) {
+        const { parent, name } = unfound[k];
+        const holder = parent === null ? ROOT_OBJECT : members(parent.object ?? undefined, name)?.object;
+        unfound[k].object = members(holder, "dependencies")?.object ?? null;
+      }
+      return level.object ?? undefined;
+    };
+    const memberLine = (level, name) => {
+      const object = objectOf(level);
+      return members(object, name)?.line ?? null;
+    };
+    // Depth first in document order, with a stack of the levels whose entries are still to visit, so nesting cannot run out of
+    // stack; each level knows the entry it belongs to, for the line of an entry that is no object. An entry with no version is
+    // one it cannot read, and its own dependencies are still read.
+    const stack = [{ entries: dependenciesOf(json).reverse(), parent: null, name: null, object: undefined }];
     while (stack.length > 0) {
-      const [name, entry] = stack[stack.length - 1].pop() ?? [];
+      const level = stack[stack.length - 1];
+      const [name, entry] = level.entries.pop() ?? [];
       if (name === undefined) {
         stack.pop();
         continue;
       }
-      if (!isObject(entry) || typeof entry.version !== "string") {
-        out.push(unreadableNamed(name, lineOf(name)));
+      if (!isObject(entry)) {
+        out.push(unreadableNamed(name, memberLine(level, name)));
         continue;
       }
-      const read = { ...npmV1Entry(name, entry), line: lineOf(name) };
-      versioned.push(read);
-      out.push(read);
-      stack.push(dependenciesOf(entry).reverse());
+      if (typeof entry.version === "string") {
+        const read = { ...npmV1Entry(name, entry), line: lineOf(name) };
+        versioned.push(read);
+        out.push(read);
+      } else out.push(unreadableNamed(name, lineOf(name)));
+      stack.push({ entries: dependenciesOf(entry).reverse(), parent: level, name, object: undefined });
     }
     found(versioned, dependenciesOf(json).length);
     return out;

@@ -522,21 +522,29 @@ test("package-lock.json version 3: a version that is not semver is never kept; w
   assert.ok(!JSON.stringify(read).includes("SECRET"));
 });
 
-test("package-lock.json: an installed entry with no version, or that is no object, is one it could not read, never left out; a packages or dependencies section that is no object is a layout it cannot read", () => {
+test("package-lock.json: an installed entry with no version, or that is no object (a string too), is one it could not read at its line, never left out, its own dependencies still read; a packages or dependencies section that is no object is a layout it cannot read", () => {
   const lock = (packages) => JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/a": { version: "1.0.0", resolved: "https://registry.npmjs.org/a/-/a-1.0.0.tgz" }, ...packages } }, null, 2);
-  const v3 = readPackages([{ path: "package-lock.json", text: lock({ "node_modules/b": { resolved: "https://SECRET.example/b.tgz" }, "node_modules/c": ["x"], "node_modules/d": { version: 1 } }) }]);
+  const v3 = readPackages([{ path: "package-lock.json", text: lock({ "node_modules/b": { resolved: "https://SECRET.example/b.tgz" }, "node_modules/c": ["x"], "node_modules/d": { version: 1 }, "node_modules/e": "link" }) }]);
   assert.deepEqual(v3, {
     ...EMPTY,
     packages: [npm("a", "1.0.0", "package-lock.json", 5)],
     couldNotRead: [{ file: "package-lock.json", reason: UNREADABLE_SOURCE }],
-    sourced: [sourced("b", null, "package-lock.json", 9, "unreadable", null), sourced("c", null, "package-lock.json", 12, "unreadable", null), sourced("d", null, "package-lock.json", 15, "unreadable", null)],
+    sourced: [sourced("b", null, "package-lock.json", 9, "unreadable", null), sourced("c", null, "package-lock.json", 12, "unreadable", null), sourced("d", null, "package-lock.json", 15, "unreadable", null), sourced("e", null, "package-lock.json", 18, "unreadable", null)],
   });
   const v1 = JSON.stringify({ lockfileVersion: 1, dependencies: { a: { version: "1.0.0" }, b: { resolved: "https://SECRET.example/b.tgz", dependencies: { c: { version: "1.0.0" } } }, d: "1.0.0" } }, null, 2);
   assert.deepEqual(readPackages([{ path: "package-lock.json", text: v1 }]), {
     ...EMPTY,
-    packages: [npm("a", "1.0.0", "package-lock.json", 4)],
+    packages: [npm("a", "1.0.0", "package-lock.json", 4), npm("c", "1.0.0", "package-lock.json", 10)],
     couldNotRead: [{ file: "package-lock.json", reason: UNREADABLE_SOURCE }],
-    sourced: [sourced("b", null, "package-lock.json", 7, "unreadable", null), sourced("d", null, "package-lock.json", null, "unreadable", null)],
+    sourced: [sourced("b", null, "package-lock.json", 7, "unreadable", null), sourced("d", null, "package-lock.json", 15, "unreadable", null)],
+  });
+  // A string entry is placed by its own member, so the same name nested further down keeps its line.
+  const repeated = JSON.stringify({ lockfileVersion: 1, dependencies: { d: "1.0.0", e: { version: "1.0.0", dependencies: { d: { version: "1.0.0" } } } } }, null, 2);
+  assert.deepEqual(readPackages([{ path: "package-lock.json", text: repeated }]), {
+    ...EMPTY,
+    packages: [npm("e", "1.0.0", "package-lock.json", 5), npm("d", "1.0.0", "package-lock.json", 8)],
+    couldNotRead: [{ file: "package-lock.json", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("d", null, "package-lock.json", 4, "unreadable", null)],
   });
   const layout = [{ file: "package-lock.json", reason: "not laid out as npm writes it" }];
   for (const text of [
