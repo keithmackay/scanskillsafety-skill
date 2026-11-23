@@ -3,7 +3,7 @@
 "use strict";
 
 const { OBJECT_ID } = require("../util");
-const { classifySource, UNREADABLE } = require("../packageSources");
+const { classifySource, ALLOWS_HTTP, FIND_LINKS: FIND_LINKS_ROLE, UNREADABLE } = require("../packageSources");
 const { found, isPackageArchive, linesOf, OUTSIDE_PROJECT, pathFrom, Unreadable, UNREADABLE_ENTRY, withoutBom } = require("./shared");
 const { pythonAddress } = require("./python");
 
@@ -65,7 +65,8 @@ const LONG_OPTIONS = new Map([
 ]);
 const SHORT_OPTIONS = new Map([["-i", "--index-url"], ["-f", "--find-links"], ["-r", "--requirement"], ["-c", "--constraint"], ["-e", "--editable"], ["-C", "--config-settings"]]);
 
-const lineEntry = (line, verdict) => ({ line, from: "requirements", classified: verdict });
+// A line naming where packages come from, with what it names (`role`) where its kind alone does not say.
+const lineEntry = (line, verdict, role) => ({ line, from: "requirements", classified: verdict, ...(role === undefined ? {} : { role }) });
 const unreadableRequirement = (name, line) => ({ name, version: null, line, ...UNREADABLE_ENTRY });
 // A line it cannot read, naming no package it can tell.
 const unreadableLine = (line) => unreadableRequirement(null, line);
@@ -274,10 +275,11 @@ function requirementEntries(text, line, folder) {
 // is PyPI's index or a folder inside the project; a find-links page is reported on any host. One set from an environment variable
 // is reported as such.
 function indexEntries(value, line, folder, role) {
-  if (value.includes("${")) return [lineEntry(line, ENV_INDEX)];
-  const verdict = pythonAddress(value, folder, { pathField: role === "find-links", role });
+  const named = role === FIND_LINKS_ROLE ? role : undefined;
+  if (value.includes("${")) return [lineEntry(line, ENV_INDEX, named)];
+  const verdict = pythonAddress(value, folder, { pathField: role === FIND_LINKS_ROLE, role });
   if (verdict.unreadable) return [unreadableLine(line)];
-  return verdict.expected || verdict.kind === "local" ? [] : [lineEntry(line, verdict)];
+  return verdict.expected || verdict.kind === "local" ? [] : [lineEntry(line, verdict, named)];
 }
 
 // A `--trusted-host` value: a host name with a letter in it, or an IPv4 address of four parts, with an optional port; any other is
@@ -286,14 +288,14 @@ function trustedHostEntries(value, line) {
   const host = TRUSTED_HOST.exec(value)?.[1];
   const known = host !== undefined && (/[A-Za-z]/.test(host) || IPV4.test(host));
   const verdict = known ? classifySource("PyPI", `http://${value}`) : UNREADABLE;
-  return verdict.unreadable ? [unreadableLine(line)] : [lineEntry(line, verdict)];
+  return verdict.unreadable ? [unreadableLine(line)] : [lineEntry(line, verdict, ALLOWS_HTTP)];
 }
 
 // What an option on a line of options gives. A `-r` or `-c` file inside the repository is a file to read in turn (`requires`, its
 // path in the repository); one outside it is reported; one at a URL is one it cannot read.
 function optionEntries({ kind, value }, line, folder) {
   if (kind === INDEX) return indexEntries(value, line, folder, "index");
-  if (kind === FIND_LINKS) return indexEntries(value, line, folder, "find-links");
+  if (kind === FIND_LINKS) return indexEntries(value, line, folder, FIND_LINKS_ROLE);
   if (kind === TRUSTED) return trustedHostEntries(value, line);
   if (kind !== OTHER_FILE) return [];
   const verdict = pythonAddress(value, folder, { pathField: true });

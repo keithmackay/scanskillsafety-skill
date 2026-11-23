@@ -6,7 +6,7 @@
 const { formatText, pushFinding } = require("../scanTarget");
 const { printable, printableCut, printableLines } = require("../printable");
 const { n } = require("./util");
-const { packageSource, lineText } = require("./sourceText");
+const { packageSource, lineText, fieldText } = require("./sourceText");
 
 const COMMAND_MAX = 300;
 const SITE_TEXT_MAX = 300;
@@ -54,13 +54,13 @@ function packageLines(packages, findings) {
 const count = (x, one, many) => `${n(x)} ${x === 1 ? one : many}`;
 
 // A package as listed under its source: its name (or that it has none), its version when known, and its line.
-const listedPackage = (p) => `${p.name ?? "a package"}${p.version === null ? "" : ` ${p.version}`} (line ${p.line})`;
+const listedPackage = (p) => `${p.name === null ? "a package" : fieldText(p.name)}${p.version === null ? "" : ` ${fieldText(p.version)}`} (line ${p.line})`;
 
 // One source's lines. A mirror, a plain-http host or a source it could not read is said once for all the packages of its file
 // from there, a mirror's or http host's first five listed below it; a git, url or bundled source names its one package; a setting
 // or index line says what it does.
 function sourceEntryLines(entry) {
-  const file = printable(entry.file);
+  const file = fieldText(printable(entry.file));
   if (entry.from) return [`  ${file}:${entry.line} ${lineText(entry)}`];
   const several = entry.total !== 1;
   const who = `${count(entry.total, "package", "packages")} in ${file}`;
@@ -72,7 +72,7 @@ function sourceEntryLines(entry) {
   }
   const [only] = entry.packages;
   const where = `${file}:${entry.line}`;
-  return [`  ${only.name === null ? where : `${only.name} in ${where}`} comes from ${packageSource(entry)}`];
+  return [`  ${only.name === null ? where : `${fieldText(only.name)} in ${where}`} comes from ${packageSource(entry)}`];
 }
 
 // The packages and settings from outside the registry (each also a finding), those past the entries kept counted, and each
@@ -87,7 +87,7 @@ function sourceLines(packages) {
   const lines = ["Packages from outside the registry (also in the findings above):", ...offRegistry.flatMap(sourceEntryLines)];
   if (more.length > 0) lines.push(`  and ${more.join(" and ")} from other sources`);
   for (const note of notRecorded) {
-    lines.push(`  ${printable(note.file)} does not record where its packages come from; no config in the target names a registry, so they come from whatever registry the installing machine uses`);
+    lines.push(`  ${fieldText(printable(note.file))} does not record where its packages come from; no config in the target names a registry, so they come from whatever registry the installing machine uses`);
   }
   return lines;
 }

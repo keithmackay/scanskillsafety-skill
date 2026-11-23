@@ -669,6 +669,28 @@ test("each kind of source has its own warning text, built from the classified fi
   ]);
 });
 
+test("a registry or index at a plain http address is named as one; only a setting that permits http says it allows it; a find-links page is named as one", async () => {
+  const root = makeTree({
+    "SKILL.md": "Formats tables.",
+    ".npmrc": "registry=http://npm.example.com/\n",
+    ".yarnrc.yml": "unsafeHttpWhitelist:\n  - yarn.example.com\n",
+    "requirements.txt": "-i http://pypi.example.com/simple\n--trusted-host pypi.example.com\n-f https://links.example/wheels/\n-f http://plain.example/wheels/\nx==1.0\n",
+    "pyproject.toml": '[project]\nname = "t"\n\n[[tool.uv.index]]\nurl = "http://uv.example.com/simple"\n',
+  });
+  const result = await runDeep(root, ALL_OFF, { fetchImpl: fakeFetch({}) });
+  const expected = [
+    ".npmrc:1 names the npm registry http://npm.example.com for installs in this folder",
+    ".yarnrc.yml:2 allows plain http from http://yarn.example.com",
+    "pyproject.toml:5 names the PyPI registry http://uv.example.com for installs in this folder",
+    "requirements.txt:1 names the package index http://pypi.example.com",
+    "requirements.txt:2 allows plain http from http://pypi.example.com",
+    "requirements.txt:3 names a find-links page https://links.example",
+    "requirements.txt:4 names a find-links page http://plain.example",
+  ];
+  assert.deepEqual(sourceFindings(result).map((f) => `${f.file}:${f.line} ${f.detail}`), expected);
+  assert.deepEqual(sourcesSection(formatDeep(result)), [SOURCES_HEADING, ...expected.map((line) => `  ${line}`)]);
+});
+
 test("OSV out of reach: the check did not run, said with the reason, and the rating comes from the files alone", async () => {
   const root = makeTree({ "SKILL.md": "Formats tables.", "package-lock.json": LOCK, "Cargo.lock": "version = 3\n" });
   const result = await runDeep(root, { ...ALL_OFF, osv: true }, { fetchImpl: fakeFetch({ [OSV_BATCH]: { status: 503, body: "down" } }) });
@@ -851,10 +873,10 @@ test("the text output lists settings and index lines: a registry, with its scope
     setting({ kind: "host", address: "https://npm.example.com", file: ".npmrc", line: 2, from: "config", scope: "@myco" }),
     setting({ kind: "host", address: null, text: "strict-ssl=false turns off certificate checks", file: ".npmrc", line: 3, from: "config" }),
     setting({ kind: "unreadable", address: null, file: ".npmrc", line: 4, from: "config" }),
-    setting({ kind: "http", address: "http://npm.example.com", file: ".yarnrc.yml", line: 2, from: "config" }),
+    setting({ kind: "http", address: "http://npm.example.com", file: ".yarnrc.yml", line: 2, from: "config", role: "allows-http" }),
     setting({ ecosystem: "PyPI", kind: "host", address: "https://pypi.example.com", file: "requirements.txt", line: 1, from: "requirements" }),
     setting({ ecosystem: "PyPI", kind: "host", address: null, text: "an index set from an environment variable", file: "requirements.txt", line: 2, from: "requirements" }),
-    setting({ ecosystem: "PyPI", kind: "http", address: "http://pypi.example.com", file: "requirements.txt", line: 3, from: "requirements" }),
+    setting({ ecosystem: "PyPI", kind: "http", address: "http://pypi.example.com", file: "requirements.txt", line: 3, from: "requirements", role: "allows-http" }),
   ];
   const out = formatDeep(withPackages({ ...OSV_DONE, ...NO_SOURCES, offRegistry }));
   assert.deepEqual(sourcesSection(out), [
@@ -920,6 +942,35 @@ test("a deep run on a lockfile with packages from outside the registry prints th
     "    lodash 4.17.21 (line 40)",
     "  package-lock.json does not record where its packages come from; no config in the target names a registry, so they come from whatever registry the installing machine uses",
   ]);
+});
+
+test("a file, name, version, address or scope longer than 300 characters is cut there with … in the section on packages from outside the registry", () => {
+  const long = (start) => `${start}${"a".repeat(400)}`;
+  const cut = (start) => `${long(start).slice(0, 300)}…`;
+  const offRegistry = [
+    group({ kind: "host", address: long("https://m.example/"), file: long("f/") }, [pkg(long("n"), long("v"), 4)]),
+    group({ kind: "url", address: long("https://u.example/"), file: long("g/") }, [pkg(long("n"), null, 5)]),
+    setting({ kind: "host", address: "https://npm.example.com", file: ".npmrc", line: 2, from: "config", scope: long("@s") }),
+  ];
+  const notRecorded = [{ file: long("h/"), ecosystem: "npm" }];
+  const out = formatDeep(withPackages({ ...OSV_DONE, ...NO_SOURCES, offRegistry, notRecorded }));
+  assert.deepEqual(sourcesSection(out), [
+    SOURCES_HEADING,
+    `  1 package in ${cut("f/")} comes from ${cut("https://m.example/")} (not checked against OSV):`,
+    `    ${cut("n")} ${cut("v")} (line 4)`,
+    `  ${cut("n")} in ${cut("g/")}:5 comes from ${cut("https://u.example/")}`,
+    `  .npmrc:2 names the npm registry https://npm.example.com for ${cut("@s")} installs in this folder`,
+    `  ${cut("h/")} does not record where its packages come from; no config in the target names a registry, so they come from whatever registry the installing machine uses`,
+  ]);
+});
+
+test("a long address is cut the same way in the warning and in the text output", async () => {
+  const address = `https://pkgs.example/${"d".repeat(400)}.tgz`;
+  const root = makeTree({ "SKILL.md": "Formats tables.", "package.json": JSON.stringify({ dependencies: { c: address } }, null, 2) });
+  const result = await runDeep(root, ALL_OFF, { fetchImpl: fakeFetch({}) });
+  const shown = `${`https://pkgs.example/${"d".repeat(404)}`.slice(0, 300)}…`;
+  assert.deepEqual(sourceFindings(result), [sourceFinding("package.json", 3, `c comes from ${shown}`)]);
+  assert.deepEqual(sourcesSection(formatDeep(result)), [SOURCES_HEADING, `  c in package.json:3 comes from ${shown}`]);
 });
 
 test("terminal escapes in a package name, an address or a file are made printable in the section on packages from outside the registry", () => {

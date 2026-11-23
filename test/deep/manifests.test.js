@@ -17,7 +17,7 @@ const lines = (...rows) => rows.join("\n");
 const named = (ecosystem, file) => (name) => ({ ecosystem, name, version: null, file, line: null });
 const item = (ecosystem, file) => (name, line, kind, address, extra = {}) => ({ ecosystem, file, line, name, version: null, kind, address, ...extra });
 const unreadable = (ecosystem, file) => (name, line) => ({ ecosystem, file, line, name, version: null, kind: "unreadable", address: null });
-const config = (ecosystem, file) => (line, kind, address) => ({ ecosystem, file, line, from: "config", kind, address });
+const config = (ecosystem, file) => (line, kind, address, extra = {}) => ({ ecosystem, file, line, from: "config", kind, address, ...extra });
 const quickly = (fn, ms = 5000) => {
   const start = Date.now();
   const value = fn();
@@ -590,7 +590,7 @@ test("pyproject.toml: an index named in [tool.uv.sources] whose [[tool.uv.index]
   assert.deepEqual(read.packages, [named("PyPI", "pyproject.toml")("torch")]);
   assert.deepEqual(read.sourced, [
     item("PyPI", "pyproject.toml")("local-wheels", 5, "host", "https://pypi.org"),
-    config("PyPI", "pyproject.toml")(11, "host", "https://pypi.org"),
+    config("PyPI", "pyproject.toml")(11, "host", "https://pypi.org", { role: "find-links" }),
   ]);
 });
 

@@ -3,7 +3,7 @@
 // ABOUTME: whole warning text, a subject followed by what it comes from or what the line names.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { packageSource, lineText, sourceDetail } = require("../../src/deep/sourceText");
+const { packageSource, lineText, sourceDetail, fieldText } = require("../../src/deep/sourceText");
 
 const SHA1 = "3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a";
 const group = (kind, address, packages, extra = {}) => ({
@@ -38,8 +38,15 @@ test("setting and index lines: each kind in one wording, a verb phrase after the
     [line("requirements", "host", null, { text: "an index set from an environment variable" }), "names an index set from an environment variable"],
     [line("config", "host", null, { text: "an index set from an environment variable" }), "names an index set from an environment variable"],
     [line("requirements", "url", null, { text: "a path outside the project" }), "names a path outside the project"],
-    [line("config", "http", "http://m.example"), "allows plain http from http://m.example"],
-    [line("requirements", "http", "http://pypi.example.com"), "allows plain http from http://pypi.example.com"],
+    [line("config", "http", "http://m.example"), "names the npm registry http://m.example for installs in this folder"],
+    [line("config", "http", "http://uv.example.com", { ecosystem: "PyPI" }), "names the PyPI registry http://uv.example.com for installs in this folder"],
+    [line("requirements", "http", "http://pypi.example.com"), "names the package index http://pypi.example.com"],
+    [line("config", "http", "http://m.example", { role: "allows-http" }), "allows plain http from http://m.example"],
+    [line("requirements", "http", "http://pypi.example.com", { role: "allows-http" }), "allows plain http from http://pypi.example.com"],
+    [line("requirements", "host", "https://links.example", { role: "find-links" }), "names a find-links page https://links.example"],
+    [line("requirements", "http", "http://links.example", { role: "find-links" }), "names a find-links page http://links.example"],
+    [line("config", "host", "https://links.example", { ecosystem: "PyPI", role: "find-links" }), "names a find-links page https://links.example"],
+    [line("requirements", "bundled", "wheels", { role: "find-links", text: "a bundled package file the scan cannot read" }), "names wheels, a bundled package file the scan cannot read"],
     [line("config", "http", null, { text: "strict-ssl=false turns off certificate checks" }), "strict-ssl=false turns off certificate checks"],
     [line("config", "http", null, { text: "cafile replaces the trusted certificates" }), "cafile replaces the trusted certificates"],
     [line("config", "host", null, { text: "hides the registry from package-lock.json" }), "hides the registry from package-lock.json"],
@@ -51,4 +58,17 @@ test("setting and index lines: each kind in one wording, a verb phrase after the
     assert.equal(lineText(entry), expected, JSON.stringify(entry));
     assert.equal(sourceDetail(entry), expected, JSON.stringify(entry));
   }
+});
+
+test("a field longer than 300 characters is cut there and marked with …, in a package's source and in a line's text", () => {
+  const long = `https://m.example/${"a".repeat(400)}`;
+  const cut = `${long.slice(0, 300)}…`;
+  assert.equal(fieldText(long), cut);
+  assert.equal(fieldText("x".repeat(300)), "x".repeat(300));
+  assert.equal(packageSource(group("url", long, ["a"])), cut);
+  assert.equal(packageSource(group("git", long, ["a"], { commit: SHA1 })), `git ${cut} (commit ${SHA1})`);
+  assert.equal(sourceDetail(group("host", long, ["a"])), `a comes from ${cut}`);
+  assert.equal(lineText(line("config", "host", long)), `names the npm registry ${cut} for installs in this folder`);
+  assert.equal(lineText(line("config", "host", "https://m.example", { scope: `@${"s".repeat(400)}` })), `names the npm registry https://m.example for @${"s".repeat(299)}… installs in this folder`);
+  assert.equal(lineText(line("requirements", "bundled", long, { text: "a bundled package file the scan cannot read" })), `names ${cut}, a bundled package file the scan cannot read`);
 });

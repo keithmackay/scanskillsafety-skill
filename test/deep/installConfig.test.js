@@ -14,6 +14,9 @@ const read = (files, leftOut) => readPackages(files.map(([path, text]) => ({ pat
 const config = (ecosystem, file, line, kind, address, extra = {}) => ({ ecosystem, file, line, from: "config", kind, address, ...extra });
 const npmConfig = (file) => (line, kind, address, extra) => config("npm", file, line, kind, address, extra);
 const pypiConfig = (file) => (line, kind, address, extra) => config("PyPI", file, line, kind, address, extra);
+// What a line names where its kind alone does not say: a setting permitting plain http, or a find-links page.
+const ALLOWS_HTTP = { role: "allows-http" };
+const FIND_LINKS = { role: "find-links" };
 const hidden = (result, ...secrets) => {
   const json = JSON.stringify(result);
   for (const secret of secrets) assert.ok(!json.includes(secret), secret);
@@ -181,8 +184,8 @@ test(".yarnrc.yml: npmRegistryServer, a scope's server, npmRegistries keys and u
       at(5, "host", "https://myco.example", { scope: "@myco" }),
       at(8, "host", "https://reg.example.com"),
       at(11, "host", "https://other.example.com"),
-      at(14, "http", "http://*.example.org"),
-      at(15, "http", "http://localhost"),
+      at(14, "http", "http://*.example.org", ALLOWS_HTTP),
+      at(15, "http", "http://localhost", ALLOWS_HTTP),
     ],
   });
   hidden(result, "SECRET");
@@ -195,7 +198,7 @@ test(".yarnrc.yml: other ways YAML writes the same keys read the same", () => {
     ['"npmRegistryServer": "https://x.example" # mirror', [at(1, "host", "https://x.example")]],
     ["npmRegistryServer : https://x.example", [at(1, "host", "https://x.example")]],
     ["---\nnpmRegistryServer: https://x.example\r\n", [at(2, "host", "https://x.example")]],
-    ["unsafeHttpWhitelist:\n- localhost\nnodeLinker: pnp", [at(2, "http", "http://localhost")]],
+    ["unsafeHttpWhitelist:\n- localhost\nnodeLinker: pnp", [at(2, "http", "http://localhost", ALLOWS_HTTP)]],
     ["npmScopes: {}\nunsafeHttpWhitelist: []\nnpmRegistries: {}", []],
     ["npmScopes:\n    myco:\n        npmRegistryServer: https://x.example\n    other:\n        npmPublishRegistry: https://p.example", [at(3, "host", "https://x.example", { scope: "@myco" })]],
   ];
@@ -280,10 +283,10 @@ test("uv.toml: index-url, extra-index-url, find-links and [[index]] urls; PyPI's
     sourced: [
       at(1, "host", "https://uv.example.com"),
       at(2, "host", "https://extra.example.com"),
-      at(4, "bundled", "svc/wheels", { text: "a bundled package file the scan cannot read" }),
-      at(5, "host", "https://pypi.org"),
+      at(4, "bundled", "svc/wheels", { ...BUNDLED, ...FIND_LINKS }),
+      at(5, "host", "https://pypi.org", FIND_LINKS),
       at(10, "host", "https://download.pytorch.org"),
-      at(14, "host", "https://flat.example.com"),
+      at(14, "host", "https://flat.example.com", FIND_LINKS),
     ],
   });
   hidden(result, "SECRET");
@@ -358,10 +361,10 @@ test("pyproject.toml: [tool.uv], [[tool.uv.index]], [[tool.poetry.source]] and [
     packages: [{ ecosystem: "PyPI", name: "httpx", version: "0.27.0", file: "uv.lock", line: 4 }],
     sourced: [
       at(6, "host", "https://uv.example.com"),
-      at(7, "bundled", "wheels", { text: "a bundled package file the scan cannot read" }),
+      at(7, "bundled", "wheels", { ...BUNDLED, ...FIND_LINKS }),
       at(11, "host", "https://download.pytorch.org"),
       at(19, "host", "https://poetry.example.com"),
-      at(24, "bundled", "dist", { text: "a bundled package file the scan cannot read" }),
+      at(24, "bundled", "dist", { ...BUNDLED, ...FIND_LINKS }),
       at(29, "host", "https://pdm.example.com"),
     ],
   });
@@ -736,7 +739,7 @@ test("uv's [pip] settings in uv.toml and [tool.uv.pip] in pyproject.toml are rea
   assert.deepEqual(read([["uv.toml", uv]]).sourced, [
     at(2, "host", "https://pip.example.com"),
     at(3, "host", "https://e.example.com"),
-    at(4, "bundled", "w", BUNDLED),
+    at(4, "bundled", "w", { ...BUNDLED, ...FIND_LINKS }),
   ]);
   const pyproject = '[tool.uv.pip]\nindex-url = "https://pip.example.com/simple"\n';
   assert.deepEqual(read([["pyproject.toml", pyproject]]).sourced, [pypiConfig("pyproject.toml")(2, "host", "https://pip.example.com")]);
@@ -772,7 +775,7 @@ test("pdm.toml's [pypi] and [pypi.<name>] urls, and pyproject.toml's [[tool.rye.
   );
   assert.deepEqual(read([["pyproject.toml", rye]]).sourced, [
     pypiConfig("pyproject.toml")(3, "host", "https://rye.example.com"),
-    pypiConfig("pyproject.toml")(6, "host", "https://links.example.com"),
+    pypiConfig("pyproject.toml")(6, "host", "https://links.example.com", FIND_LINKS),
   ]);
   assertUnreadableAt("PyPI", "pyproject.toml", '[[tool.rye.sources]]\nname = "x"', 2);
   assertUnreadableAt("PyPI", "pyproject.toml", '[[tool.rye.sources]]\nurl = "https://x.example"\ntype = "other"', 2);
@@ -882,7 +885,7 @@ test("catalog entries from the registry go to OSV by name, but for those a lockf
 
 test("pdm.toml: a named index of type find_links is a find-links page", () => {
   const pdm = '[pypi.links]\nurl = "https://pypi.org/simple/x/"\ntype = "find_links"\n[pypi.idx]\nurl = "https://pypi.org/simple"\ntype = "index"\n';
-  assert.deepEqual(read([["pdm.toml", pdm]]).sourced, [pypiConfig("pdm.toml")(2, "host", "https://pypi.org")]);
+  assert.deepEqual(read([["pdm.toml", pdm]]).sourced, [pypiConfig("pdm.toml")(2, "host", "https://pypi.org", FIND_LINKS)]);
   assertUnreadableAt("PyPI", "pdm.toml", '[pypi.x]\nurl = "https://x.example/simple"\ntype = "other"', 2);
 });
 

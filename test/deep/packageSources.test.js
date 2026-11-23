@@ -223,6 +223,16 @@ test("a direct archive's address marks a cut path with …; one at the top of it
   assert.deepEqual(classifySource("PyPI", "https://files.example.com/x-1.0.whl", { direct: true }), offRegistry("url", "https://files.example.com/x-1.0.whl"));
 });
 
+test("a direct address ending in a slash is shown by its last named segment, with the slash; one with no named segment by its host", () => {
+  const url = (text) => classifySource("npm", text, { direct: true });
+  assert.deepEqual(url("https://h.example/a/b/"), offRegistry("url", "https://h.example/…/b/"));
+  assert.deepEqual(url("https://h.example/a/b//"), offRegistry("url", "https://h.example/…/b/"));
+  assert.deepEqual(url("https://h.example/b/"), offRegistry("url", "https://h.example/b/"));
+  assert.deepEqual(url("https://h.example/"), offRegistry("url", "https://h.example"));
+  assert.deepEqual(url("https://h.example//"), offRegistry("url", "https://h.example"));
+  assert.deepEqual(url("https://h.example"), offRegistry("url", "https://h.example"));
+});
+
 test("package.json: an https tarball is a url, an http one http", () => {
   assert.deepEqual(classifyManifestValue("npm", "https://x.example/p.tgz"), offRegistry("url", "https://x.example/p.tgz"));
   assert.deepEqual(classifyManifestValue("npm", "http://x.example/p.tgz"), offRegistry("http", "http://x.example"));

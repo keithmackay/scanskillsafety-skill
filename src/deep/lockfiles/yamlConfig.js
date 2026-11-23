@@ -2,7 +2,7 @@
 // ABOUTME: certificate checks and authorities, package extensions, and pnpm's catalogs, overrides and workspace folders.
 "use strict";
 
-const { classifySource } = require("../packageSources");
+const { classifySource, ALLOWS_HTTP } = require("../packageSources");
 const { manifestEntries, unnamedEntry, workspaceEntries } = require("./shared");
 const {
   certificateChecksOff,
@@ -73,7 +73,7 @@ function unsafeHttpEntries(root) {
   return collectionChildren(root, "item").map((item) => {
     const host = scalarText(item);
     if (!HTTP_HOST.test(host)) throw new Unmodelled(item.line);
-    return configEntry(item.line, classifySource("npm", `http://${host}`));
+    return configEntry(item.line, classifySource("npm", `http://${host}`), { role: ALLOWS_HTTP });
   });
 }
 

@@ -2,7 +2,7 @@
 // ABOUTME: [tool.uv]), Poetry's, PDM's and Rye's sources, pdm.toml, and the settings that turn off certificate checks.
 "use strict";
 
-const { UNREADABLE } = require("../packageSources");
+const { FIND_LINKS, UNREADABLE } = require("../packageSources");
 const { append, manifestEntries, normalisePyPI, unnamedEntry, withoutBom } = require("./shared");
 const { certificateChecksOff, configEntry } = require("./configEntries");
 const { after, arrayTables, stringOf, tomlValues } = require("./toml");
@@ -15,9 +15,10 @@ const { projectRelative, requirementListEntries } = require("./requirementLists"
 // nothing.
 function configAddressEntries(address, line, folder, role) {
   const relative = projectRelative(address);
-  if (relative.includes("${")) return [configEntry(line, ENV_INDEX)];
+  const named = role === FIND_LINKS ? { role } : {};
+  if (relative.includes("${")) return [configEntry(line, ENV_INDEX, named)];
   const verdict = pythonAddress(relative, folder, { pathField: true, role });
-  return verdict.expected ? [] : [configEntry(line, verdict)];
+  return verdict.expected ? [] : [configEntry(line, verdict, named)];
 }
 
 // uv's allow-insecure-host, whatever hosts it names.

@@ -126,13 +126,15 @@ function sourcedPackage(ecosystem, file, entry, verdict) {
 }
 
 // A line that names where packages come from rather than one package (a requirements file's index option, a config setting), as
-// the reader read it, with the scope a setting names; one it could not read has no address.
-function sourcedLine(ecosystem, file, { line, from, classified, scope }) {
+// the reader read it, with the scope a setting names and what the line names where its kind alone does not say; one it could not
+// read has no address.
+function sourcedLine(ecosystem, file, { line, from, classified, scope, role }) {
   const item = { ecosystem, file, line, from };
   if (classified.unreadable) return { ...item, kind: "unreadable", address: null };
   Object.assign(item, { kind: classified.kind, address: classified.address });
   if (classified.text) item.text = classified.text;
   if (scope !== undefined) item.scope = scope;
+  if (role !== undefined) item.role = role;
   return item;
 }
 

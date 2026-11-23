@@ -1534,6 +1534,10 @@ test("a uv.lock or poetry.lock with no [[package]] block at all could not be rea
 const requirementsLine = (line, kind, address, extra = {}) => ({ ecosystem: "PyPI", file: "requirements.txt", line, from: "requirements", kind, address, ...extra });
 const ENV_INDEX = { text: "an index set from an environment variable" };
 const OUTSIDE_TEXT = { text: "a path outside the project" };
+const BUNDLED_TEXT = { text: "a bundled package file the scan cannot read" };
+// What a line names where its kind alone does not say: a setting permitting plain http, or a find-links page.
+const ALLOWS_HTTP = { role: "allows-http" };
+const FIND_LINKS = { role: "find-links" };
 
 test("requirements*.txt: index options in every form, --trusted-host, VCS lines, name @ url and bare archive URLs are reported; == pins under an index option are still checked", () => {
   const file = "requirements.txt";
@@ -1549,9 +1553,9 @@ test("requirements*.txt: index options in every form, --trusted-host, VCS lines,
       requirementsLine(2, "host", "https://mirror.example.com"),
       requirementsLine(3, "host", "https://extra.example.com"),
       requirementsLine(5, "host", "https://other.example.com"),
-      requirementsLine(6, "bundled", "wheels", { text: "a bundled package file the scan cannot read" }),
-      requirementsLine(7, "url", null, OUTSIDE_TEXT),
-      requirementsLine(8, "http", "http://mirror.example.com"),
+      requirementsLine(6, "bundled", "wheels", { ...BUNDLED_TEXT, ...FIND_LINKS }),
+      requirementsLine(7, "url", null, { ...OUTSIDE_TEXT, ...FIND_LINKS }),
+      requirementsLine(8, "http", "http://mirror.example.com", ALLOWS_HTTP),
       requirementsLine(9, "host", null, ENV_INDEX),
       pypiSourced("left-pad", null, file, 13, "git", "https://github.com/someone/left-pad.git", { commit: SHA1 }),
       pypiSourced("tool", null, file, 14, "git", "ssh://github.com/someone/tool.git"),
@@ -1579,7 +1583,7 @@ test("requirements*.txt: a file with only name @ url lines and no == pin is read
 test("requirements*.txt: a path is local inside the repository and outside the project when it leaves it, measured from the repository root", () => {
   const read = (file, text) => readPackages([{ path: file, text: `${text}\nidna==3.10\n` }, { path: "requirements-base.txt", text: "" }]).sourced;
   assert.deepEqual(read("api/requirements.txt", "-e ../packages/x\n-r ../requirements-base.txt"), []);
-  assert.deepEqual(read("api/requirements.txt", "-f ../wheels"), [{ ...requirementsLine(1, "bundled", "wheels", { text: "a bundled package file the scan cannot read" }), file: "api/requirements.txt" }]);
+  assert.deepEqual(read("api/requirements.txt", "-f ../wheels"), [{ ...requirementsLine(1, "bundled", "wheels", { ...BUNDLED_TEXT, ...FIND_LINKS }), file: "api/requirements.txt" }]);
   const outside = ["-f ../../wheels", "-e ../../x", "../../x", "-f file:///opt/wheels", "-e /opt/x", "-r ../../base.txt", "y @ file:./y"];
   for (const line of outside) {
     const file = "api/requirements.txt";
@@ -1606,12 +1610,12 @@ test("requirements*.txt: shapes pip accepts that hold no source, or a pin, read 
     ["--extra-index-url https://files.pythonhosted.org/simple\n-i https://pypi.org/simple/requests/\n-f https://pypi.org/simple\n-f https://files.pythonhosted.org/packages/\nx @ https://pypi.org/packages/x-1.0.whl", [], [
       requirementsLine(1, "host", "https://files.pythonhosted.org"),
       requirementsLine(2, "host", "https://pypi.org"),
-      requirementsLine(3, "host", "https://pypi.org"),
-      requirementsLine(4, "host", "https://files.pythonhosted.org"),
+      requirementsLine(3, "host", "https://pypi.org", FIND_LINKS),
+      requirementsLine(4, "host", "https://files.pythonhosted.org", FIND_LINKS),
       pypiSourced("x", null, "requirements.txt", 5, "url", "https://pypi.org/…/x-1.0.whl"),
     ]],
     ["--pre\n--no-index\n--prefer-binary\n--require-hashes\n--only-binary :all:\n--no-binary=:none:\n--use-feature=truststore\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 8)], []],
-    ["-f wheels\n-e .[dev]\n-e.\n--editable=./x\n-c constraints.txt\n-rrequirements-dev.txt\n.\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 8)], [requirementsLine(1, "bundled", "wheels", { text: "a bundled package file the scan cannot read" })]],
+    ["-f wheels\n-e .[dev]\n-e.\n--editable=./x\n-c constraints.txt\n-rrequirements-dev.txt\n.\nidna==3.10", [pypi("idna", "3.10", "requirements.txt", 8)], [requirementsLine(1, "bundled", "wheels", { ...BUNDLED_TEXT, ...FIND_LINKS })]],
     ["https://files.example.com/x-1.0.whl#egg=xpkg", [], [pypiSourced("xpkg", null, "requirements.txt", 1, "url", "https://files.example.com/x-1.0.whl")]],
     ["https://user:SECRET@files.example.com/TOKEN/x-1.0.whl", [], [pypiSourced(null, null, "requirements.txt", 1, "url", "https://files.example.com/…/x-1.0.whl")]],
     ["x @ https://files.pythonhosted.org/packages/x-1.0.whl", [pypi("x", null, "requirements.txt", 1)], []],
@@ -1622,14 +1626,14 @@ test("requirements*.txt: shapes pip accepts that hold no source, or a pin, read 
     ["https://files.pythonhosted.org/packages/ab/cd/pkg-1.0.tar.lzma", [pypi("pkg", "1.0", "requirements.txt", 1)], []],
     ["git+https://github.com/u/r@feature/x#egg=r", [], [pypiSourced("r", null, "requirements.txt", 1, "git", "https://github.com/u/r")]],
     ["svn+https://svn.example.com/repo/trunk#egg=s", [], [pypiSourced("s", null, "requirements.txt", 1, "git", "svn+https://svn.example.com/repo/trunk")]],
-    ["--trusted-host host.example:8080", [], [requirementsLine(1, "http", "http://host.example:8080")]],
+    ["--trusted-host host.example:8080", [], [requirementsLine(1, "http", "http://host.example:8080", ALLOWS_HTTP)]],
     ["--no-require-hashes\n--all-releases :all:\n--only-final=:none:\nrequests==2.0 -C a=b\nidna==3.10", [pypi("requests", "2.0", "requirements.txt", 4), pypi("idna", "3.10", "requirements.txt", 5)], []],
     ["--pypi-url https://mirror.example.com/simple", [], [requirementsLine(1, "host", "https://mirror.example.com")]],
-    ["--trusted-host 10.0.0.1", [], [requirementsLine(1, "http", "http://10.0.0.1")]],
-    ["-f https://download.pytorch.org/whl/cpu", [], [requirementsLine(1, "host", "https://download.pytorch.org")]],
+    ["--trusted-host 10.0.0.1", [], [requirementsLine(1, "http", "http://10.0.0.1", ALLOWS_HTTP)]],
+    ["-f https://download.pytorch.org/whl/cpu", [], [requirementsLine(1, "host", "https://download.pytorch.org", FIND_LINKS)]],
     ["-i http://mirror.example.com/simple", [], [requirementsLine(1, "http", "http://mirror.example.com")]],
     ["-i https://${USER}:${TOKEN}@mirror.example.com/simple", [], [requirementsLine(1, "host", null, ENV_INDEX)]],
-    ["-f ${WHEELS}", [], [requirementsLine(1, "host", null, ENV_INDEX)]],
+    ["-f ${WHEELS}", [], [requirementsLine(1, "host", null, { ...ENV_INDEX, ...FIND_LINKS })]],
     ["requests==2.0 \\\n  --hash=sha256:abc\n-i https://mirror.example.com/simple", [pypi("requests", "2.0", "requirements.txt", 1)], [requirementsLine(3, "host", "https://mirror.example.com")]],
   ];
   for (const [text, packages, sourced] of cases) {
@@ -1853,13 +1857,13 @@ test("bundled archives: a Python package from an archive, or a folder used as an
   ].join("\n") }]);
   const line = (n, address) => ({ ecosystem: "PyPI", file: "api/requirements.txt", line: n, from: "requirements", kind: "bundled", address, text: BUNDLED });
   assert.deepEqual(requirements.sourced, [
-    line(1, "api/wheels"),
+    { ...line(1, "api/wheels"), ...FIND_LINKS },
     line(2, "simple"),
     bundledItem("PyPI", null, null, "api/requirements.txt", 3, "api/x-1.0.tar.gz"),
     bundledItem("PyPI", "y", null, "api/requirements.txt", 4, "api/y-1.0-py3-none-any.whl"),
     bundledItem("PyPI", null, null, "api/requirements.txt", 5, "api/dist/z-1.0.tar.xz"),
     bundledItem("PyPI", null, null, "api/requirements.txt", 6, "api/w-1.0.zip"),
-    line(9, "wheels"),
+    { ...line(9, "wheels"), ...FIND_LINKS },
   ]);
   assert.deepEqual(requirements.packages.map((p) => p.name), ["idna"]);
 });

@@ -59,6 +59,11 @@ const PATCH_DEPTH = 2;
 // real source is unknown.
 const UNREAD_SOURCE = Object.freeze({ expected: false, kind: "url", address: null, text: "a source it could not read" });
 
+// What a setting or index line names, kept on the line where its kind alone does not say: a setting that lets installs use plain
+// http from a host (rather than a registry or index at a plain http address), or a find-links page (rather than an index).
+const ALLOWS_HTTP = "allows-http";
+const FIND_LINKS = "find-links";
+
 const EXPECTED = Object.freeze({ expected: true });
 const LOCAL = Object.freeze({ expected: false, kind: "local" });
 const UNREADABLE = Object.freeze({ unreadable: true });
@@ -129,8 +134,7 @@ function isOfficial(ecosystem, text, url, role) {
   return url.hostname === PYPI_FILE_HOST;
 }
 
-// An http(s) address: the official registry, a mirror (host), plain http, or one archive on another host (url), shown by its host
-// and file name, with `…/` between them when the path held more.
+// An http(s) address: the official registry, a mirror (host), plain http, or one archive on another host (url).
 function webUrl(ecosystem, text, direct, role) {
   if (!prefixOf(text, ["https:", "http:"])) return null;
   const url = parseUrl(text);
@@ -139,8 +143,18 @@ function webUrl(ecosystem, text, direct, role) {
   if (url.protocol === "http:") return { expected: false, kind: "http", address: origin };
   if (isOfficial(ecosystem, text, url, role)) return EXPECTED;
   if (!direct) return { expected: false, kind: "host", address: origin };
-  const fileStart = url.pathname.lastIndexOf("/") + 1;
-  return { expected: false, kind: "url", address: `${origin}/${fileStart > 1 ? "…/" : ""}${url.pathname.slice(fileStart)}` };
+  return { expected: false, kind: "url", address: shownArchive(origin, url.pathname) };
+}
+
+// A direct address as shown: the host and the path's last named segment (a slash after it kept), with `…/` between them when the
+// path held more before it; the host alone when the path names nothing.
+function shownArchive(origin, pathname) {
+  let end = pathname.length;
+  while (end > 0 && pathname[end - 1] === "/") end--;
+  if (end === 0) return origin;
+  const start = pathname.lastIndexOf("/", end - 1) + 1;
+  const slash = end < pathname.length ? "/" : "";
+  return `${origin}/${start > 1 ? "…/" : ""}${pathname.slice(start, end)}${slash}`;
 }
 
 // scp-form git, `user@host:path`, split by hand at the first `@` and the first `:` after it; shown as `git@host:path`, with any
@@ -288,7 +302,7 @@ const byFileThenLine = (a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : (
 // An entry as its first item gives it: where it comes from, and the fields that say more about that source.
 function startEntry(item) {
   const entry = { ecosystem: item.ecosystem, kind: item.kind, address: item.address, file: item.file, line: item.line };
-  for (const field of ["commit", "from", "text", "scope"]) if (item[field] !== undefined) entry[field] = item[field];
+  for (const field of ["commit", "from", "text", "scope", "role"]) if (item[field] !== undefined) entry[field] = item[field];
   return Object.assign(entry, { packages: [], total: 0 });
 }
 
@@ -321,5 +335,5 @@ function groupSources(sourced) {
 }
 
 module.exports = {
-  classifySource, classifyManifestValue, commitFrom, groupSources, EXPECTED, LOCAL, MAX_SOURCE_ENTRIES, OFFICIAL_HOSTS, NAME_SEGMENT, UNREADABLE,
+  classifySource, classifyManifestValue, commitFrom, groupSources, ALLOWS_HTTP, EXPECTED, FIND_LINKS, LOCAL, MAX_SOURCE_ENTRIES, OFFICIAL_HOSTS, NAME_SEGMENT, UNREADABLE,
 };
