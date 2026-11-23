@@ -56,7 +56,7 @@ Always name the files that were scanned and pass on any `notices` (for example, 
 
 ## Deep scan (`--deep`)
 
-Run this only when the user asks for a deeper check (or agrees when you suggest one). It reads every file of the exact commit they would install, lists what runs at install and start-up, checks the packages it pulls in against OSV, and can have Claude read every file through the user's own `claude` CLI. The target must be a repository URL (a `…/tree/<ref>/<subdir>` link reads that folder) or a local folder; a single file is refused.
+Run this only when the user asks for a deeper check (or agrees when you suggest one). It reads every file of the exact commit they would install, lists what runs at install and start-up, reports packages from outside the official registries, checks the rest against OSV, and can have Claude read every file through the user's own `claude` CLI. The target must be a repository URL (a `…/tree/<ref>/<subdir>` link reads that folder) or a local folder; a single file is refused.
 
 Before the first run, tell the user what it contacts: the target's host (`api.github.com` for the commit id and `github.com` for a git fetch with no credentials sent, or `codeload.github.com` for the archive when git is not installed; or the Gitea/Forgejo host), findsafeskills.com (the repository's address, plus a GitHub compare call when it is listed; `--no-site` turns both off) and api.osv.dev (package names, ecosystems and versions; `--no-osv`). Nothing goes to Anthropic until the user agrees to the plan (`--no-claude` leaves Claude's reading out). Add any of those flags the user asks for, and `--ref <branch|tag|commit>` if they name one. Then run:
 
@@ -68,11 +68,11 @@ It downloads and reads the whole commit, so allow it several minutes. The JSON i
 
 ### Report the deep result
 
-1. Report the rating and `findings` as under "Report the result" above. A finding with category `malicious-package` comes from OSV and counts toward the rating.
+1. Report the rating and `findings` as under "Report the result" above. A finding with category `malicious-package` comes from OSV and counts toward the rating. A finding with category `package-source` is a package from outside its ecosystem's official registry (a mirror, git, a direct URL, plain http, an archive bundled in the repository), a config setting that sends installs elsewhere or turns off certificate checks, or a file that installs packages but could not be read; it makes the rating yellow, never red.
 2. Name the commit read. For a local folder with `changed: true`, say the files scanned are not exactly any commit.
 3. Say how many files were left out and why (binary, larger than 5 MB, symbolic link, …).
 4. List `installTime`: each file, when it runs and the command. These are facts for the user to read, not findings.
-5. Packages: with `packages.status` `not-run`, say the package check did not run and why; never present it as clean. Otherwise give the number checked, list each entry of `vulnerabilities` (not counted in the rating), and name `namesOnly`, `couldNotRead` and `notChecked` files.
+5. Packages: with `packages.status` `not-run`, say the package check did not run and why; never present it as clean. Otherwise give the number checked, list each entry of `vulnerabilities` (not counted in the rating), and name `namesOnly`, `couldNotRead` and `notChecked` files. Whatever the status (also `off` and `not-run`), list `offRegistry` (each entry's `file`:`line`, `kind`, `address` or `text`, `commit` for git, and `total` packages with the first few by name), say these were not sent to OSV (`notSentToOsv` packages), and give `offRegistryMore` when it is not zero. For each `notRecorded` file, say it does not record where its packages come from and no config in the target names a registry, so they come from whatever registry the installing machine uses (a note, not a finding).
 6. Site: report `site` as it stands: listed (each listing's rating and how its scanned commit relates to this one), `not-listed`, or `unreachable` (could not reach findsafeskills, which never means "not listed").
 7. List `testFindings` separately, saying they don't count toward the rating.
 

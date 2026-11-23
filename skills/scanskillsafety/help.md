@@ -66,12 +66,20 @@ DEEP SCAN
   Reads every file of the exact commit you would install (fetched with git
   from the repository's own host, with no credentials sent, or downloaded
   as one archive when git is not installed), lists what runs at install
-  and start-up, checks the packages it pulls in against OSV, compares the
-  commit with what findsafeskills scanned, and, once you agree to its
-  plan, has Claude read every file through your own claude CLI. Before
-  any request it names each service it will contact and what each gets.
+  and start-up, reports packages from anywhere but the official
+  registries, checks the rest against OSV, compares the commit with what
+  findsafeskills scanned, and, once you agree to its plan, has Claude
+  read every file through your own claude CLI. Before any request it
+  names each service it will contact and what each gets.
   Claude's findings are shown apart, are not checked by a person, and
   never change the rating; a file written to mislead a reviewer can pass.
+
+  Packages from outside registry.npmjs.org, registry.yarnpkg.com,
+  pypi.org/simple and files.pythonhosted.org (mirrors, git, direct URLs,
+  plain http, archives bundled in the repository), config files that send
+  installs elsewhere, settings that turn off certificate checks, and files
+  that install packages but could not be read are warnings (yellow), and
+  those packages are not sent to OSV. This part runs with --no-osv too.
 
   In a terminal it asks "Run Claude's reading? [y/N]". Run by an agent
   (no terminal, or --json) it prints the plan and its id and stops; the

@@ -106,7 +106,8 @@ function readNpmLock(text, folder = "") {
     const versioned = [];
     // The line of an entry whose value is not an object, which the key lines do not hold: its member in its level's dependencies
     // object, found by walking down from the root through the entries above it, each level's object found once and only when a
-    // line is needed.
+    // line is needed. A level's `object` is undefined while its dependencies object has not been looked up yet, and null once it
+    // was looked up and is not there (the entry has no dependencies object), so it is never looked up twice.
     let members = null;
     const objectOf = (level) => {
       members ??= jsonMembers(text);
