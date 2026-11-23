@@ -34,6 +34,8 @@ const lockfileKind = (p) => LOCKFILES.get(baseName(p)) ?? (/^requirements.*\.txt
 // A lockfile proper, read here for OSV or one it has no support for. A requirements file is not one: besides its pins it can name
 // package indexes and git sources, which OSV never sees.
 const isLockfile = (p) => LOCKFILES.has(baseName(p)) || NOT_CHECKED.has(baseName(p));
+// A lockfile in a format the package check has no reader for.
+const isUnreadLockfile = (p) => NOT_CHECKED.has(baseName(p));
 
 // Manifests, always read for where their packages come from; their registry packages go to OSV only when no lockfile covers them.
 const MANIFESTS = new Map([
@@ -442,4 +444,4 @@ function readPackages(files, leftOut = []) {
   return result;
 }
 
-module.exports = { readPackages, isLockfile, NO_PINS_REASON, UNREADABLE_SOURCE_REASON };
+module.exports = { readPackages, isLockfile, isUnreadLockfile, NO_PINS_REASON, UNREADABLE_SOURCE_REASON };

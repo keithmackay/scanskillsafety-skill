@@ -11,7 +11,7 @@ const { emptyClaudeUsage, addClaudeReply } = require("../../lib/deep/claudeUsage
 const { readCliReply } = require("../../lib/deep/cliReply");
 const { scriptCapabilities, isRisky } = require("../../lib/scriptCapabilities");
 const { redactSecrets } = require("../../lib/secretPatterns");
-const { isLockfile } = require("./lockfiles");
+const { isLockfile, isUnreadLockfile } = require("./lockfiles");
 const { VENDORED_FOLDERS, compare } = require("./util");
 const { runClaude, CLAUDE_TIMEOUT_MS } = require("./runClaude");
 const { printable, cut } = require("../printable");
@@ -24,6 +24,7 @@ const ERROR_MAX = 200;
 
 const VENDORED = "vendored or build output";
 const LOCKFILE = "lockfile, checked against OSV instead";
+const UNREAD_LOCKFILE = "lockfile in a format the package check does not read";
 const GENERATED = "looks minified or generated";
 const EMPTY = "empty, nothing to read";
 
@@ -43,6 +44,7 @@ const NOT_REACHED = "not reached: the reading stopped";
 
 function leftOutReason(file) {
   if (file.path.split("/").slice(0, -1).some((segment) => LEFT_OUT_FOLDERS.has(segment))) return VENDORED;
+  if (isUnreadLockfile(file.path)) return UNREAD_LOCKFILE;
   if (isLockfile(file.path)) return LOCKFILE;
   const lines = file.text.split(/\r?\n/);
   if (lines.slice(0, 50).some((line) => line.length > MINIFIED_LINE) || GENERATED_MARKER.test(lines.slice(0, 5).join("\n"))) return GENERATED;
