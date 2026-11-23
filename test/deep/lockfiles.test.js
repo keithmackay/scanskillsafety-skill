@@ -1252,6 +1252,34 @@ test("a long run of digits as a Python version is checked quickly", () => {
   assert.equal(read.sourced.length, 1);
 });
 
+test("a version longer than 256 characters is no version, however well formed: never kept, sent or shown", () => {
+  const longest = `1.0.0-${"a".repeat(250)}`;
+  const tooLong = `1.0.0-${"b".repeat(251)}`;
+  const lock = JSON.stringify({
+    lockfileVersion: 3,
+    packages: {
+      "node_modules/a": { version: longest, resolved: "https://registry.npmjs.org/a/-/a.tgz" },
+      "node_modules/b": { version: tooLong, resolved: "https://registry.npmjs.org/b/-/b.tgz" },
+      "node_modules/c": { version: tooLong, resolved: "https://registry.npmmirror.com/c/-/c.tgz" },
+    },
+  });
+  assert.deepEqual(readPackages([{ path: "package-lock.json", text: lock }]), {
+    ...EMPTY,
+    packages: [npm("a", longest, "package-lock.json", 1), npm("b", null, "package-lock.json", 1)],
+    sourced: [sourced("c", null, "package-lock.json", 1, "host", "https://registry.npmmirror.com")],
+  });
+  const local = `1.0+${"x".repeat(253)}`;
+  const uv = uvLock('source = { registry = "https://pypi.org/simple" }').replace('version = "1.0.0"', `version = "${local}"`);
+  assert.deepEqual(readPackages([{ path: "uv.lock", text: uv }]).packages, [pypi("a", null, "uv.lock", 5)]);
+  const requirements = readPackages([{ path: "requirements.txt", text: `x==${local}\nidna==3.10\n` }]);
+  assert.deepEqual(requirements, {
+    ...EMPTY,
+    packages: [pypi("idna", "3.10", "requirements.txt", 2)],
+    couldNotRead: [{ file: "requirements.txt", reason: UNREADABLE_SOURCE }],
+    sourced: [pypiSourced("x", null, "requirements.txt", 1, "unreadable", null)],
+  });
+});
+
 test("Python lockfiles: a block whose name cannot be found is a source it could not read with no name, never left out", () => {
   const uv = readPackages([{ path: "uv.lock", text: uvLock('source = { registry = "https://evil.example/SECRET" }').replace('name = "a"', '"name" = "a"') }]);
   const poetry = readPackages([{ path: "poetry.lock", text: '[[package]]\nversion = "1.0.0"\n\n[package.source]\ntype = "legacy"\nurl = "https://evil.example/SECRET"\n' }]);

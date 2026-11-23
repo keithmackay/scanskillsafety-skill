@@ -100,11 +100,13 @@ function verdictOf(ecosystem, entry, folder) {
 
 // What a version is in each ecosystem: semver for npm, PEP 440 for PyPI.
 const IS_VERSION = { npm: (version) => SEMVER.test(version), PyPI: isPep440 };
+// The longest version kept: no real release is near it, and a longer one, however well formed, is never sent to OSV or shown.
+const MAX_VERSION_LENGTH = 256;
 
-// An entry whose version is not one in its ecosystem: the text is never kept or sent to OSV, and an entry with no source of its
-// own is one it could not read.
+// An entry whose version is not one in its ecosystem, or is longer than any kept: the text is never kept or sent to OSV, and an
+// entry with no source of its own is one it could not read.
 function withCheckedVersion(ecosystem, entry) {
-  if (entry.version === null || IS_VERSION[ecosystem](entry.version)) return entry;
+  if (entry.version === null || (entry.version.length <= MAX_VERSION_LENGTH && IS_VERSION[ecosystem](entry.version))) return entry;
   const ownSource = entry.source !== undefined || entry.classified !== undefined;
   return { ...entry, version: null, ...(ownSource ? {} : UNREADABLE_ENTRY) };
 }
