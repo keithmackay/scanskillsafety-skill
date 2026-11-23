@@ -637,6 +637,21 @@ test("package sources and unreadable install files in test files nothing launche
   assert.match(text, /Findings in test files nothing launches \(not counted in the rating\):\n(?:.*\n)*.*tests\/fixtures\/requirements\.txt:1 \[warning\] package-source: names the package index https:\/\/mirror\.example\.com/);
 });
 
+test("a requirements file in a test folder counts in the rating when an install-time command names it, from the repository root or its own folder", async () => {
+  const root = makeTree({
+    "SKILL.md": "Formats tables.",
+    "package.json": JSON.stringify({ scripts: { postinstall: "pip install -r tests/requirements.txt" } }),
+    "tests/requirements.txt": "--index-url https://mirror.example.com/simple\nrequests==2.31.0\n",
+    "tests/requirements-other.txt": "--index-url https://other.example.com/simple\nrequests==2.31.0\n",
+    "app/package.json": JSON.stringify({ scripts: { preinstall: "pip install -r ./tests/fixtures/requirements-ci.txt" } }),
+    "app/tests/fixtures/requirements-ci.txt": "--index-url https://third.example.com/simple\nrequests==2.31.0\n",
+  });
+  const result = await runDeep(root, ALL_OFF, { fetchImpl: fakeFetch({}) });
+  assert.equal(result.rating, "yellow");
+  assert.deepEqual(sourceFindings(result).map((f) => f.file), ["app/tests/fixtures/requirements-ci.txt", "tests/requirements.txt"]);
+  assert.deepEqual(result.deep.testFindings.filter((f) => f.category === "package-source").map((f) => f.file), ["tests/requirements-other.txt"]);
+});
+
 test("wording: a bundled folder is named as a folder and an archive as a file; hg, svn and bzr sources are not called git; an unreadable file is not named twice", async () => {
   const root = makeTree({
     "SKILL.md": "Formats tables.",

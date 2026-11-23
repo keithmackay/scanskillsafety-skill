@@ -23,7 +23,7 @@ const { findClaude } = require("./runClaude");
 const { chooseForReading, planReading, readEveryFile, quoteLine } = require("./reading");
 const { printable, cut } = require("../printable");
 const { isDiscoverable } = require("../discover");
-const { OBJECT_ID, COMMIT_LIMITS } = require("./util");
+const { OBJECT_ID, COMMIT_LIMITS, folderOf } = require("./util");
 const { formatClaudeUsage } = require("../../lib/deep/claudeUsage");
 
 const isRepository = (target) => (target.kind === "github" || target.kind === "git-host") && !target.isFile;
@@ -196,6 +196,33 @@ async function claudeStage({ plan, calls }, files, options, claudePath, deps) {
   };
 }
 
+// Characters that may stand before a path named in a command (the start, a space, a quote, `=`, or the `./` of a relative path)
+// and after it (the end, a space, a quote, or a shell separator).
+const BEFORE_PATH = new Set([" ", "\t", '"', "'", "=", "/"]);
+const AFTER_PATH = new Set([" ", "\t", '"', "'", ";", "&", "|", ")"]);
+
+// Whether a command names `path` as a whole word, read by index so a long command costs its length.
+function commandNames(command, path) {
+  for (let at = command.indexOf(path); at >= 0; at = command.indexOf(path, at + 1)) {
+    const before = at === 0 ? undefined : command[at - 1];
+    const after = command[at + path.length];
+    const startsHere = before === undefined || (BEFORE_PATH.has(before) && (before !== "/" || command.slice(at - 2, at) === "./"));
+    if (startsHere && (after === undefined || AFTER_PATH.has(after))) return true;
+  }
+  return false;
+}
+
+// The files among `paths` that an install-time command names, by their repository path or by their path from the folder of the
+// file that holds the command: something runs them at install, so their findings count wherever they are.
+function namedAtInstall(paths, entries) {
+  return paths.filter((path) =>
+    entries.some((entry) => {
+      const folder = folderOf(entry.file);
+      const fromFolder = folder !== "" && path.startsWith(`${folder}/`) ? path.slice(folder.length + 1) : null;
+      return commandNames(entry.command, path) || (fromFolder !== null && commandNames(entry.command, fromFolder));
+    }));
+}
+
 // The warning an entry of packages or settings from outside the registry adds.
 const sourceFinding = (entry) =>
   ({ severity: "warning", category: "package-source", source: "deep", file: entry.file, line: entry.line, detail: sourceDetail(entry) });
@@ -309,9 +336,11 @@ async function runDeep(input, options, deps = {}) {
   }
   const { findings: fileFindings, testFindings: fileTestFindings, launched } = scanEveryFile(files);
   const { findings: packageFindings, packages } = await packageCheck(files, leftOut, options, deps.fetchImpl ?? fetch);
-  // A package source or unreadable install file in a test file nothing launches is kept apart as the other findings there are; a
-  // package OSV calls malicious counts wherever its lockfile is.
-  const sourceSplit = splitTestFindings(packageFindings.filter((f) => f.source === "deep"), new Set(launched));
+  // A package source or unreadable install file in a test file nothing launches is kept apart as the other findings there are,
+  // unless an install-time command names that file; a package OSV calls malicious counts wherever its lockfile is.
+  const sourceFindings = packageFindings.filter((f) => f.source === "deep");
+  const installed = namedAtInstall([...new Set(sourceFindings.map((f) => f.file))], entries);
+  const sourceSplit = splitTestFindings(sourceFindings, new Set([...launched, ...installed]));
   const site = options.site ? await compareWithSite(target, opened.commit, deps.fetchImpl ?? fetch) : { status: "off" };
   const findings = [...fileFindings, ...packageFindings.filter((f) => f.source !== "deep"), ...sourceSplit.findings];
   const testFindings = [...fileTestFindings, ...sourceSplit.testFindings];
