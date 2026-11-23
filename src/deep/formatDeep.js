@@ -90,7 +90,7 @@ function sourceLines(packages) {
     ...(offRegistryMore.lines > 0 ? [count(offRegistryMore.lines, "more setting", "more settings")] : []),
   ];
   if (offRegistry.length === 0 && more.length === 0) return [];
-  const lines = ["Packages from outside the registry (also in the findings above):", ...offRegistry.flatMap(sourceEntryLines)];
+  const lines = ["Packages from outside the registry (each also a finding, above or under test files):", ...offRegistry.flatMap(sourceEntryLines)];
   if (more.length > 0) lines.push(`  and ${more.join(" and ")} from other sources (not listed in the findings)`);
   return lines;
 }

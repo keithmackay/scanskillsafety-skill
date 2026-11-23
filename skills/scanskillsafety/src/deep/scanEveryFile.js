@@ -1,5 +1,6 @@
 // ABOUTME: Runs the static rules on every file of a deep scan: scripts, configs and package.json with the script rules, the rest
-// ABOUTME: as prose. Findings in test files nothing launches are kept apart, so test fixtures do not set the rating.
+// ABOUTME: as prose. Findings in test files nothing launches, these and any other stage's, are kept apart, so test fixtures do not
+// ABOUTME: set the rating.
 "use strict";
 
 const { scanText } = require("../../lib/scanText");
@@ -37,16 +38,22 @@ function launchedTestFiles(files) {
   }
 }
 
-function scanEveryFile(files) {
-  const launched = launchedTestFiles(files);
-  const counted = new Set(launched);
+// Whether a file is in a test folder and nothing launches it (`launched`: the set of test files something runs), so its findings
+// are kept apart and do not set the rating.
+const isUncountedTestFile = (path, launched) => isInTestFolder(path) && !launched.has(path);
+
+// Findings split by their file: those in test files nothing launches apart from the rest.
+function splitTestFindings(found, launched) {
   const findings = [];
   const testFindings = [];
-  for (const f of files) {
-    const found = scanOne(f);
-    (isInTestFolder(f.path) && !counted.has(f.path) ? testFindings : findings).push(...found);
-  }
+  for (const finding of found) (isUncountedTestFile(finding.file, launched) ? testFindings : findings).push(finding);
+  return { findings, testFindings };
+}
+
+function scanEveryFile(files) {
+  const launched = launchedTestFiles(files);
+  const { findings, testFindings } = splitTestFindings(files.flatMap(scanOne), new Set(launched));
   return { findings, testFindings, launched };
 }
 
-module.exports = { scanEveryFile };
+module.exports = { scanEveryFile, splitTestFindings };

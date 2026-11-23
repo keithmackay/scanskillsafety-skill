@@ -605,6 +605,26 @@ test("a lockfile it could not read makes the rating yellow on its own, with OSV 
   }
 });
 
+test("package sources and unreadable install files in test files nothing launches are test findings, listed but not counted in the rating", async () => {
+  const root = makeTree({
+    "SKILL.md": "Formats tables. Run `bash tests/run.sh` to check.",
+    "tests/run.sh": "echo ok",
+    "tests/fixtures/requirements.txt": "--index-url https://mirror.example.com/simple\nrequests==2.31.0\n",
+    "tests/fixtures/broken/pnpm-lock.yaml": "lockfileVersion: '4.0'\n",
+  });
+  const result = await runDeep(root, ALL_OFF, { fetchImpl: fakeFetch({}) });
+  assert.equal(result.rating, "green");
+  assert.deepEqual(sourceFindings(result), []);
+  const reason = result.deep.packages.couldNotRead.find((c) => c.file === "tests/fixtures/broken/pnpm-lock.yaml").reason;
+  assert.deepEqual(result.deep.testFindings.filter((f) => f.category === "package-source"), [
+    sourceFinding("tests/fixtures/requirements.txt", 1, "names the package index https://mirror.example.com"),
+    sourceFinding("tests/fixtures/broken/pnpm-lock.yaml", null, `tests/fixtures/broken/pnpm-lock.yaml could not be read: ${reason}`),
+  ]);
+  assert.deepEqual(result.deep.packages.offRegistry.map((e) => e.file), ["tests/fixtures/requirements.txt"]);
+  const text = formatDeep(result);
+  assert.match(text, /Findings in test files nothing launches \(not counted in the rating\):\n(?:.*\n)*.*tests\/fixtures\/requirements\.txt:1 \[warning\] package-source: names the package index https:\/\/mirror\.example\.com/);
+});
+
 test("a requirements file with ranges only installs from PyPI, so it is listed as holding no pins but adds no warning", async () => {
   const root = makeTree({ "SKILL.md": "Formats tables.", "requirements.txt": "requests>=2\n" });
   const result = await runDeep(root, ALL_OFF, { fetchImpl: fakeFetch({}) });
@@ -811,7 +831,7 @@ function withPackages(packages, findings = []) {
 }
 const NO_SOURCES = { offRegistry: [], offRegistryMore: { packages: 0, lines: 0 }, notRecorded: [], notSentToOsv: 0 };
 const OSV_DONE = { status: "done", checked: 2, namesOnly: [], couldNotRead: [], notChecked: [], vulnerabilities: [], detailsLeft: 0, reason: null };
-const SOURCES_HEADING = "Packages from outside the registry (also in the findings above):";
+const SOURCES_HEADING = "Packages from outside the registry (each also a finding, above or under test files):";
 const pkg = (name, version, line) => ({ name, version, line });
 const group = (fields, packages, total = packages.length) => ({ ecosystem: "npm", line: packages[0]?.line ?? 1, ...fields, packages, total });
 const setting = (fields) => ({ ecosystem: "npm", ...fields, packages: [], total: 0 });

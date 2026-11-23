@@ -12,7 +12,7 @@ const { fetchCommit, resolveRef } = require("./archive");
 const { readCommitWithGit, findGit, gitUrl } = require("./gitCommit");
 const { localCommit } = require("./localCommit");
 const { listEveryFile } = require("./everyFile");
-const { scanEveryFile } = require("./scanEveryFile");
+const { scanEveryFile, splitTestFindings } = require("./scanEveryFile");
 const { installTimeEntries } = require("./installTime");
 const { readPackages, NO_PINS_REASON, UNREADABLE_SOURCE_REASON } = require("./lockfiles");
 const { checkPackages, osvUrl } = require("./osv");
@@ -299,10 +299,14 @@ async function runDeep(input, options, deps = {}) {
     result.errors.push(`the target or model changed since the plan (plan id ${options.claudeOk}, now ${reading.plan.id}); run --deep again without --claude-ok`);
     return result;
   }
-  const { findings: fileFindings, testFindings, launched } = scanEveryFile(files);
+  const { findings: fileFindings, testFindings: fileTestFindings, launched } = scanEveryFile(files);
   const { findings: packageFindings, packages } = await packageCheck(files, leftOut, options, deps.fetchImpl ?? fetch);
+  // A package source or unreadable install file in a test file nothing launches is kept apart as the other findings there are; a
+  // package OSV calls malicious counts wherever its lockfile is.
+  const sourceSplit = splitTestFindings(packageFindings.filter((f) => f.source === "deep"), new Set(launched));
   const site = options.site ? await compareWithSite(target, opened.commit, deps.fetchImpl ?? fetch) : { status: "off" };
-  const findings = [...fileFindings, ...packageFindings];
+  const findings = [...fileFindings, ...packageFindings.filter((f) => f.source !== "deep"), ...sourceSplit.findings];
+  const testFindings = [...fileTestFindings, ...sourceSplit.testFindings];
   Object.assign(result, {
     rating: files.length > 0 ? ratingFromFindings(findings) : null,
     scannedFiles: files.map((f) => f.path),
