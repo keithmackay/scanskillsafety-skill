@@ -522,6 +522,33 @@ test("package-lock.json version 3: a version that is not semver is never kept; w
   assert.ok(!JSON.stringify(read).includes("SECRET"));
 });
 
+test("package-lock.json: an installed entry with no version, or that is no object, is one it could not read, never left out; a packages or dependencies section that is no object is a layout it cannot read", () => {
+  const lock = (packages) => JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/a": { version: "1.0.0", resolved: "https://registry.npmjs.org/a/-/a-1.0.0.tgz" }, ...packages } }, null, 2);
+  const v3 = readPackages([{ path: "package-lock.json", text: lock({ "node_modules/b": { resolved: "https://SECRET.example/b.tgz" }, "node_modules/c": ["x"], "node_modules/d": { version: 1 } }) }]);
+  assert.deepEqual(v3, {
+    ...EMPTY,
+    packages: [npm("a", "1.0.0", "package-lock.json", 5)],
+    couldNotRead: [{ file: "package-lock.json", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("b", null, "package-lock.json", 9, "unreadable", null), sourced("c", null, "package-lock.json", 12, "unreadable", null), sourced("d", null, "package-lock.json", 15, "unreadable", null)],
+  });
+  const v1 = JSON.stringify({ lockfileVersion: 1, dependencies: { a: { version: "1.0.0" }, b: { resolved: "https://SECRET.example/b.tgz", dependencies: { c: { version: "1.0.0" } } }, d: "1.0.0" } }, null, 2);
+  assert.deepEqual(readPackages([{ path: "package-lock.json", text: v1 }]), {
+    ...EMPTY,
+    packages: [npm("a", "1.0.0", "package-lock.json", 4)],
+    couldNotRead: [{ file: "package-lock.json", reason: UNREADABLE_SOURCE }],
+    sourced: [sourced("b", null, "package-lock.json", 7, "unreadable", null), sourced("d", null, "package-lock.json", null, "unreadable", null)],
+  });
+  const layout = [{ file: "package-lock.json", reason: "not laid out as npm writes it" }];
+  for (const text of [
+    { lockfileVersion: 3, packages: [{ resolved: "https://SECRET.example/x.tgz" }] },
+    { lockfileVersion: 2, packages: "https://SECRET.example/x.tgz" },
+    { lockfileVersion: 1, dependencies: [{ version: "https://SECRET.example/x.tgz" }] },
+    { lockfileVersion: 1, dependencies: { a: { version: "1.0.0", dependencies: ["https://SECRET.example/x.tgz"] } } },
+  ].map((json) => JSON.stringify(json))) {
+    assert.deepEqual(readPackages([{ path: "package-lock.json", text }]), { ...EMPTY, couldNotRead: layout }, text);
+  }
+});
+
 test("yarn.lock, classic: a version that is not semver is never kept; with no source of its own the entry is unreadable", () => {
   const text = [
     "# yarn lockfile v1", "",

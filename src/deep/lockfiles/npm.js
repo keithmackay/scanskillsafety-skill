@@ -13,7 +13,9 @@ const {
   ROOT_OBJECT,
   SEMVER,
   staysInside,
+  Unreadable,
   UNREADABLE_ENTRY,
+  unreadableNamed,
   unsupportedVersion,
 } = require("./shared");
 
@@ -41,7 +43,15 @@ function npmV1Entry(name, entry) {
 
 const NODE_MODULES = "node_modules/";
 const packageName = (key, entry) =>
-  typeof entry.name === "string" ? entry.name : key.slice(key.lastIndexOf(NODE_MODULES) + NODE_MODULES.length);
+  isObject(entry) && typeof entry.name === "string" ? entry.name : key.slice(key.lastIndexOf(NODE_MODULES) + NODE_MODULES.length);
+
+// A packages or dependencies section that is there but is no object holds what npm would install from in a shape it cannot read.
+const NPM_LAYOUT = "not laid out as npm writes it";
+function section(value) {
+  if (value === undefined) return {};
+  if (!isObject(value)) throw new Unreadable(NPM_LAYOUT);
+  return value;
+}
 
 // text: the lockfile; folder: its folder in the repository, which a linked folder's path is read from.
 function readNpmLock(text, folder = "") {
@@ -62,7 +72,7 @@ function readNpmLock(text, folder = "") {
       members ??= jsonMembers(text);
       return members(members(ROOT_OBJECT, "packages")?.object, key)?.line ?? null;
     };
-    for (const [key, entry] of Object.entries(isObject(json.packages) ? json.packages : {})) {
+    for (const [key, entry] of Object.entries(section(json.packages))) {
       if (!key.includes("node_modules/")) {
         if (key !== "" && staysInside(folder, key)) out.push({ workspace: pathFrom(folder, key) });
         else if (key !== "") {
@@ -78,20 +88,22 @@ function readNpmLock(text, folder = "") {
         if (linked === null) out.push({ ...link, line: lineOf(key), ...UNREADABLE_ENTRY });
         else if (!linked) out.push({ ...link, line: lineOf(key), classified: OUTSIDE_PROJECT });
       } else {
+        // An installed entry with no version, or that is no object, may still be fetched from wherever it names: one it cannot read.
         installed.push(key);
-        if (entry && typeof entry.version === "string") {
+        if (isObject(entry) && typeof entry.version === "string") {
           const pkg = { name: packageName(key, entry), version: entry.version, line: lineOf(key), ...npmSource(entry) };
           packages.push(pkg);
           out.push(pkg);
-        }
+        } else out.push(unreadableNamed(packageName(key, entry), isObject(entry) ? lineOf(key) : memberLine(key)));
       }
     }
     found(packages, installed.length);
     return out;
   }
   if (version === 1) {
-    const dependenciesOf = (entry) => Object.entries(isObject(entry.dependencies) ? entry.dependencies : {});
+    const dependenciesOf = (entry) => Object.entries(section(entry.dependencies));
     const out = [];
+    const versioned = [];
     // Depth first in document order, with a stack of the entries still to visit at each level, so nesting cannot run out of
     // stack.
     const stack = [dependenciesOf(json).reverse()];
@@ -101,11 +113,17 @@ function readNpmLock(text, folder = "") {
         stack.pop();
         continue;
       }
-      if (!isObject(entry) || typeof entry.version !== "string") continue;
-      out.push({ ...npmV1Entry(name, entry), line: lineOf(name) });
+      if (!isObject(entry) || typeof entry.version !== "string") {
+        out.push(unreadableNamed(name, lineOf(name)));
+        continue;
+      }
+      const read = { ...npmV1Entry(name, entry), line: lineOf(name) };
+      versioned.push(read);
+      out.push(read);
       stack.push(dependenciesOf(entry).reverse());
     }
-    return found(out, dependenciesOf(json).length);
+    found(versioned, dependenciesOf(json).length);
+    return out;
   }
   throw unsupportedVersion();
 }
